@@ -68,6 +68,22 @@ describe('recoveredText — delivery retry is bound to the Work that produced th
     expect(recovered).not.toContain('risposta di un altro work');
   });
 
+  it('can preserve an empty terminal answer after an earlier reply from the same Work', () => {
+    const h = fixture();
+    for (const content of ['earlier progress', '']) {
+      h.sessions.append(h.ref, {
+        role: 'assistant',
+        content,
+        surface: 'telegram',
+        createdAt: '2026-08-25T03:00:00Z',
+        traceId: 'turn-a',
+        tier: 0,
+      });
+    }
+    const work = record('turn-a', h.ref.id);
+    expect(recoveredText(h.sessions, work, { preserveEmptyAnswer: true })).toBe('');
+  });
+
   it('recovers the trace-bound terminal provider error reply for an error outcome', () => {
     const h = fixture();
     h.sessions.append(h.ref, {

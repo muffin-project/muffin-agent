@@ -1,12 +1,21 @@
 import { statSync } from 'node:fs';
-import { DELIVERED, fileModeFor, notDelivered, type DeliveryOutcome, type FileSpec, type Surface } from '../../core/surface/types.js';
-import { isDirectChat, negoziazioneTelegram, stanzaDi, TELEGRAM_PLACES } from './negoziazione.js';
+import {
+  DELIVERED,
+  type DeliveryOutcome,
+  type DeliveryTurn,
+  type FileSpec,
+  fileModeFor,
+  notDelivered,
+  type Surface,
+} from '../../core/surface/types.js';
+import { type IngressPort, makeIngressPort } from '../shared/ingress/types.js';
 import type { TelegramApiLike } from './api.js';
+import type { TelegramDeliveryOutcome } from './delivery.js';
 import { MAX_DOWNLOAD_BYTES, sendDocument } from './media.js';
-import { escapeHtml, TELEGRAM_MAX } from './render.js';
+import { isDirectChat, negoziazioneTelegram, stanzaDi, TELEGRAM_PLACES } from './negoziazione.js';
 import { present, presentationOf, presentationOfHtml } from './present.js';
+import { escapeHtml, TELEGRAM_MAX } from './render.js';
 import { RICH_MAX_CHARS } from './rich.js';
-import { makeIngressPort, type IngressPort } from '../shared/ingress/types.js';
 
 /**
  * Telegram as a delivery target, separate from Telegram as a listener.
@@ -66,7 +75,15 @@ function indirizzoPer(
  */
 export const TELEGRAM_ID = 'telegram';
 
-export function telegramSurface(api: TelegramApiLike, ownerChatId: number | undefined): Surface {
+export function telegramSurface(
+  api: TelegramApiLike,
+  ownerChatId: number | undefined,
+  deliverTurn?: (
+    turn: DeliveryTurn,
+    address: { chatId: number; threadId?: number },
+    text: string,
+  ) => Promise<TelegramDeliveryOutcome>,
+): Surface {
   // N1 (judge, PR #42): `deliverFile`'s size check used to hand-write
   // `50 * 1024 * 1024` again instead of reading the number it had already
   // declared here — two literals that agreed today and had no reason to keep
@@ -109,12 +126,24 @@ export function telegramSurface(api: TelegramApiLike, ownerChatId: number | unde
 
     handles: (channel) => indirizzoPer(channel, ownerChatId) !== null,
 
-    deliver: async (channel, text): Promise<DeliveryOutcome> => {
+    deliver: async (channel, text, turn): Promise<DeliveryOutcome> => {
       const indirizzo = indirizzoPer(channel, ownerChatId);
       if (indirizzo === null) {
         // Reachable only if a caller skipped `handles`. Refusing is right: the
         // alternative is inventing a destination for a message.
         return notDelivered(`"${channel}" non è un canale telegram indirizzabile`);
+      }
+      if (turn !== undefined) {
+        if (text.trim() === '') return notDelivered('niente da consegnare: il testo è vuoto');
+        if (deliverTurn === undefined)
+          return notDelivered('registro di consegna Telegram non disponibile');
+        const status = await deliverTurn(turn, indirizzo, text);
+        if (status === 'sent') return DELIVERED;
+        const why =
+          status === 'possibly_sent'
+            ? 'Telegram potrebbe aver ricevuto il messaggio'
+            : 'consegna Telegram già in corso';
+        return { delivered: false, status, why };
       }
       // Convert first, split second. The limit is on the rendered HTML, and
       // splitting the markdown at 4000 then expanding it produced messages over
@@ -167,7 +196,8 @@ export function telegramSurface(api: TelegramApiLike, ownerChatId: number | unde
      */
     deliverFile: async (channel, file: FileSpec): Promise<DeliveryOutcome> => {
       const indirizzo = indirizzoPer(channel, ownerChatId);
-      if (indirizzo === null) return notDelivered(`"${channel}" non è un canale telegram indirizzabile`);
+      if (indirizzo === null)
+        return notDelivered(`"${channel}" non è un canale telegram indirizzabile`);
       // Il thread vale per tutte e due le uscite di questa funzione — il
       // documento vero e la notifica «è troppo grande»: un file prodotto in un
       // topic che finisse in *General*, in un modo o nell'altro, sarebbe la
@@ -179,7 +209,9 @@ export function telegramSurface(api: TelegramApiLike, ownerChatId: number | unde
       try {
         bytes = statSync(file.absolutePath).size;
       } catch (error) {
-        return notDelivered(`${file.absolutePath} non è leggibile: ${error instanceof Error ? error.message : String(error)}`);
+        return notDelivered(
+          `${file.absolutePath} non è leggibile: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
       // Checked here, before a multipart upload is even built: failing fast on
       // a file the Bot API would reject anyway is cheaper than discovering it
@@ -187,7 +219,11 @@ export function telegramSurface(api: TelegramApiLike, ownerChatId: number | unde
       // La catena `files` decide, e per un file troppo grande la stanza
       // risponde `'say'`: prima del 06/09/2026 la risposta era
       // `{delivered:false}`, cioè «non te lo do» senza dire dove sta.
-      const modo = fileModeFor(negoziazioneTelegram(stanzaDi({ isPrivate: isDirectChat(chatId) })), limits, bytes);
+      const modo = fileModeFor(
+        negoziazioneTelegram(stanzaDi({ isPrivate: isDirectChat(chatId) })),
+        limits,
+        bytes,
+      );
       if (modo !== 'native') {
         const dove =
           `${file.filename} è pronto ma pesa ${(bytes / 1e6).toFixed(1)}MB, oltre il limite di ` +
@@ -196,7 +232,9 @@ export function telegramSurface(api: TelegramApiLike, ownerChatId: number | unde
           await present(api, { chatId, ...topic }, presentationOfHtml(escapeHtml(dove)));
           return DELIVERED;
         } catch (error) {
-          return notDelivered(`telegram ha rifiutato anche il messaggio con il percorso: ${error instanceof Error ? error.message : String(error)}`);
+          return notDelivered(
+            `telegram ha rifiutato anche il messaggio con il percorso: ${error instanceof Error ? error.message : String(error)}`,
+          );
         }
       }
 
@@ -208,7 +246,9 @@ export function telegramSurface(api: TelegramApiLike, ownerChatId: number | unde
         });
         return DELIVERED;
       } catch (error) {
-        return notDelivered(`telegram ha rifiutato l'allegato: ${error instanceof Error ? error.message : String(error)}`);
+        return notDelivered(
+          `telegram ha rifiutato l'allegato: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     },
   };

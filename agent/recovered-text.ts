@@ -1,7 +1,7 @@
 import type { SessionStore } from '../core/session/store.js';
 import type { TurnRecord } from '../core/turns/store.js';
-import { providerErrorReplyFromMessages } from './loop/provider-error-reply.js';
 import { providerMessages } from './loop/provider-checkpoint.js';
+import { providerErrorReplyFromMessages } from './loop/provider-error-reply.js';
 
 /**
  * Recover the text a completed Work would have delivered after a crash.
@@ -19,19 +19,21 @@ import { providerMessages } from './loop/provider-checkpoint.js';
  * Typed provider failures are the exception: their fixed, sanitized terminal
  * reply is marked in the durable turn messages and can be recovered exactly.
  */
-export function recoveredText(sessions: SessionStore, record: TurnRecord): string {
+export function recoveredText(
+  sessions: SessionStore,
+  record: TurnRecord,
+  options?: { preserveEmptyAnswer: true },
+): string {
   if (record.outcome === 'answered') {
-    const messages = sessions.read(sessions.open(record.sessionId));
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const message = messages[i]!;
-      if (
-        message.role === 'assistant' &&
-        message.traceId === record.id &&
-        message.content.trim() !== ''
-      ) {
-        return message.content;
-      }
-    }
+    const answer = sessions
+      .read(sessions.open(record.sessionId))
+      .findLast(
+        (message) =>
+          message.role === 'assistant' &&
+          message.traceId === record.id &&
+          (options?.preserveEmptyAnswer || message.content.trim() !== ''),
+      )?.content;
+    if (answer !== undefined) return answer;
   }
   if (record.outcome === 'error') {
     const providerFailure = providerErrorReplyFromMessages(providerMessages(record));

@@ -125,6 +125,8 @@ export type FakeTelegram = {
    * exactly like a transient rejection would.
    */
   guasta(method: string, status: number, description: string): void;
+  /** Accept one message and leave its HTTP response unreadable until the client exits. */
+  withholdNextSendResponse(): void;
   close(): Promise<void>;
 };
 
@@ -232,6 +234,7 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
   const bytesByPath = new Map<string, Buffer>();
   // B10-errori: one planned rejection per method, consumed in call order.
   const guasti = new Map<string, Array<{ status: number; description: string }>>();
+  let withholdSendResponse = false;
 
   const server: Server = createServer((req, res) => {
     // The file **download** route is not `<base>/bot<token>/METHOD` — it is
@@ -276,7 +279,8 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
         if (Object.keys(parsed.files).length > 0) files = parsed.files;
       } else {
         try {
-          payload = raw.length > 0 ? (JSON.parse(raw.toString('utf8')) as Record<string, unknown>) : {};
+          payload =
+            raw.length > 0 ? (JSON.parse(raw.toString('utf8')) as Record<string, unknown>) : {};
         } catch {
           payload = {};
         }
@@ -312,7 +316,8 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
       };
 
       if (method === 'getMe') {
-        const rispondi = (): void => ok({ id: 42, is_bot: true, first_name: 'Muffin', username: 'muffin_test_bot' });
+        const rispondi = (): void =>
+          ok({ id: 42, is_bot: true, first_name: 'Muffin', username: 'muffin_test_bot' });
         if (ritardoGetMe > 0) setTimeout(rispondi, ritardoGetMe);
         else rispondi();
         return;
@@ -328,10 +333,20 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
         const planted = filesById.get(fileId);
         if (!planted) {
           res.writeHead(400, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, description: `Bad Request: file not found (fake, file_id=${fileId})` }));
+          res.end(
+            JSON.stringify({
+              ok: false,
+              description: `Bad Request: file not found (fake, file_id=${fileId})`,
+            }),
+          );
           return;
         }
-        ok({ file_id: fileId, file_unique_id: `u_${fileId}`, file_size: planted.bytes.length, file_path: planted.filePath });
+        ok({
+          file_id: fileId,
+          file_unique_id: `u_${fileId}`,
+          file_size: planted.bytes.length,
+          file_path: planted.filePath,
+        });
         return;
       }
 
@@ -349,7 +364,9 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
         const start = Date.now();
         const drain = (): void => {
           if (queue.length > 0) {
-            const batch = queue.splice(0, queue.length).map((u) => ({ update_id: nextUpdateId++, ...u }));
+            const batch = queue
+              .splice(0, queue.length)
+              .map((u) => ({ update_id: nextUpdateId++, ...u }));
             ok(batch);
             return;
           }
@@ -384,12 +401,23 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
       // caller already names it as `message_id` in the request payload
       // (`connectors/telegram/api.ts`), so it needs no manufacturing here; a
       // scenario reads it straight off `sent()[i].payload['message_id']`.
-      const createdId = method === 'sendMessage' || method === 'sendMessageDraft' || method === 'sendRichMessage' || method === 'sendRichMessageDraft' ? nextMessageId++ : undefined;
+      const createdId =
+        method === 'sendMessage' ||
+        method === 'sendMessageDraft' ||
+        method === 'sendRichMessage' ||
+        method === 'sendRichMessageDraft'
+          ? nextMessageId++
+          : undefined;
 
       // Everything else is an outbound effect, and it is recorded before it is
       // answered: a scenario asserting "Muffin never sent this" needs the
       // record to exist even when the reply is uninteresting.
-      calls.push({ method: recordedMethod, payload, ...(files ? { files } : {}), ...(createdId !== undefined ? { messageId: createdId } : {}) });
+      calls.push({
+        method: recordedMethod,
+        payload,
+        ...(files ? { files } : {}),
+        ...(createdId !== undefined ? { messageId: createdId } : {}),
+      });
 
       // B10-errori: a planned rejection wins over every effect branch below
       // (`sendMessage`, `editMessageText`, …). Placed after `calls.push`, on
@@ -401,15 +429,28 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
         res.end(JSON.stringify({ ok: false, description: guastoInCoda.description }));
         return;
       }
+      if (recordedMethod === 'sendMessage' && withholdSendResponse) {
+        withholdSendResponse = false;
+        return;
+      }
 
-      if (method === 'sendMessage' || method === 'editMessageText' || method === 'sendMessageDraft' || method === 'sendRichMessage' || method === 'sendRichMessageDraft' || method === 'editMessageRichText') {
+      if (
+        method === 'sendMessage' ||
+        method === 'editMessageText' ||
+        method === 'sendMessageDraft' ||
+        method === 'sendRichMessage' ||
+        method === 'sendRichMessageDraft' ||
+        method === 'editMessageRichText'
+      ) {
         ok({
           // An edit echoes the id it was given; a create hands out the fresh one.
           message_id: createdId ?? Number(payload['message_id'] ?? 0),
           date: Math.floor(Date.now() / 1000),
           chat: { id: Number(payload['chat_id'] ?? 0), type: 'private' },
           text: String(payload['text'] ?? ''),
-          ...(payload['rich_message'] !== undefined ? { rich_message: payload['rich_message'] } : {}),
+          ...(payload['rich_message'] !== undefined
+            ? { rich_message: payload['rich_message'] }
+            : {}),
         });
         return;
       }
@@ -443,8 +484,13 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
           chatId: Number(c.payload['chat_id'] ?? 0),
           text: String(
             c.payload['text'] ??
-              (c.payload['rich_message'] as { html?: string } | undefined)?.html?.replace(/<br>/g, '\n') ??
-              testoDaBlocchi((c.payload['rich_message'] as { blocks?: unknown[] } | undefined)?.blocks) ??
+              (c.payload['rich_message'] as { html?: string } | undefined)?.html?.replace(
+                /<br>/g,
+                '\n',
+              ) ??
+              testoDaBlocchi(
+                (c.payload['rich_message'] as { blocks?: unknown[] } | undefined)?.blocks,
+              ) ??
               '',
           ),
         })),
@@ -455,7 +501,9 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
           chatId: Number(c.payload['chat_id'] ?? 0),
           filename: c.files?.['document']?.filename ?? '',
           bytes: c.files?.['document']?.size ?? 0,
-          ...(typeof c.payload['caption'] === 'string' ? { caption: c.payload['caption'] as string } : {}),
+          ...(typeof c.payload['caption'] === 'string'
+            ? { caption: c.payload['caption'] as string }
+            : {}),
         })),
     setChatMember: (chatId, userId, status) => {
       chatMembers.set(`${chatId}:${userId}`, status);
@@ -469,6 +517,9 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
       const coda = guasti.get(method) ?? [];
       coda.push({ status, description });
       guasti.set(method, coda);
+    },
+    withholdNextSendResponse: () => {
+      withholdSendResponse = true;
     },
     close: () =>
       new Promise<void>((resolve) => {
@@ -510,7 +561,13 @@ export function photoMessage(
       chat: { id: from.id, type: 'private' },
       ...(options.caption === undefined ? {} : { caption: options.caption }),
       photo: [
-        { file_id: fileId, file_unique_id: `u_${fileId}`, width: 1280, height: 960, file_size: options.bytes ?? 45_000 },
+        {
+          file_id: fileId,
+          file_unique_id: `u_${fileId}`,
+          width: 1280,
+          height: 960,
+          file_size: options.bytes ?? 45_000,
+        },
       ],
     },
   };
@@ -598,7 +655,11 @@ export function replyMessage(
         message_id: repliedTo.messageId,
         date: Math.floor(Date.now() / 1000),
         chat: { id: from.id, type: 'private' },
-        from: { id: repliedTo.fromId, is_bot: false, first_name: repliedTo.fromName ?? `u${repliedTo.fromId}` },
+        from: {
+          id: repliedTo.fromId,
+          is_bot: false,
+          first_name: repliedTo.fromName ?? `u${repliedTo.fromId}`,
+        },
         text: repliedTo.text,
       },
     },
@@ -624,7 +685,9 @@ export function replyMessage(
 export function callbackQuery(
   from: { id: number; name?: string },
   data: string,
-  message: { messageId: number; chatId: number; text: string } | { messageId: number; chatId: number; richBlocks: unknown[] },
+  message:
+    | { messageId: number; chatId: number; text: string }
+    | { messageId: number; chatId: number; richBlocks: unknown[] },
 ): FakeUpdate {
   return {
     callback_query: {
@@ -636,7 +699,9 @@ export function callbackQuery(
         message_id: message.messageId,
         date: Math.floor(Date.now() / 1000),
         chat: { id: message.chatId, type: 'private' },
-        ...('text' in message ? { text: message.text } : { rich_message: { blocks: message.richBlocks } }),
+        ...('text' in message
+          ? { text: message.text }
+          : { rich_message: { blocks: message.richBlocks } }),
       },
     },
   };

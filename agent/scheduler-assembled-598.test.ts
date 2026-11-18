@@ -355,6 +355,7 @@ describe('#598 assembled · arm-once yolo silent → fire → kill boundary → 
       'S2/S3 link: the resumed turn answered (resume granted AND yolo consumed)',
     ).toBe('answered');
     expect(done.leaseIndex, 'S2 link: exactly one autonomous lease was granted').toBe(1);
+    expect(done.delivery, 'a new scheduled lease retains its pending reply').toBe('pending');
 
     // No duplicate settled effects: still the fire-lease read (replayed, never
     // re-ran) plus the resumed-lease yolo act — each handler ran once.

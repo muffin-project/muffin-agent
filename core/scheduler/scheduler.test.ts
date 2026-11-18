@@ -1,16 +1,16 @@
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
-import { JobStore, type Job } from './jobs.js';
+import { DELIVERED, notDelivered } from '../surface/types.js';
+import { ModelLane } from '../turns/model-lane.js';
+import { type Job, JobStore } from './jobs.js';
 import {
-  Scheduler,
   type FireDeferred,
   type FireSettleOnly,
   type ForegroundGate,
   type JobOutcome,
+  Scheduler,
   type SchedulerEvent,
 } from './scheduler.js';
-import { ModelLane } from '../turns/model-lane.js';
-import { DELIVERED, notDelivered } from '../surface/types.js';
 
 const SPEC = { cron: '0 8 * * *', timezone: 'Europe/Rome', goal: 'brief', channel: 'cli' };
 const flush = () => new Promise((r) => setImmediate(r));
@@ -26,7 +26,12 @@ const BEFORE_ADD = new Date('2026-06-15T05:00:00Z');
  * `() => new Date()`; the test advances a single mutable one so `due` and the
  * next-fire computed by `markRan` agree.
  */
-function storeWith(start = BEFORE_ADD): { store: JobStore; job: Job; clock: () => Date; set: (d: Date) => void } {
+function storeWith(start = BEFORE_ADD): {
+  store: JobStore;
+  job: Job;
+  clock: () => Date;
+  set: (d: Date) => void;
+} {
   let current = start;
   const clock = () => current;
   const db = new DatabaseCtor(':memory:');
@@ -40,15 +45,31 @@ describe('Scheduler.tick', () => {
     const { store, job, clock, set } = storeWith();
     set(AFTER_FIRE);
     const deliver = vi.fn(async () => DELIVERED);
-    const runJob = vi.fn(async (j: Job): Promise<JobOutcome> => ({ stopped: 'answered', text: `ecco il brief per ${j.id}`, turnId: TURN }));
-    const sched = new Scheduler(store, runJob, deliver, undefined, () => {}, clock, undefined, undefined, new ModelLane());
+    const runJob = vi.fn(
+      async (j: Job): Promise<JobOutcome> => ({
+        stopped: 'answered',
+        text: `ecco il brief per ${j.id}`,
+        turnId: TURN,
+      }),
+    );
+    const sched = new Scheduler(
+      store,
+      runJob,
+      deliver,
+      undefined,
+      () => {},
+      clock,
+      undefined,
+      undefined,
+      new ModelLane(),
+    );
 
     sched.tick();
     await flush();
 
     expect(runJob).toHaveBeenCalledOnce();
     expect(runJob.mock.calls[0]![0].id).toBe(job.id);
-    expect(deliver).toHaveBeenCalledWith('cli', `ecco il brief per ${job.id}`);
+    expect(deliver).toHaveBeenCalledWith('cli', `ecco il brief per ${job.id}`, { id: TURN });
     // markRan advanced the fire past today's 08:00 → tomorrow.
     expect(store.get(job.id)!.nextFireAt.toISOString()).toBe('2026-06-16T06:00:00.000Z');
     expect(store.get(job.id)!.lastRunAt).not.toBeNull();
@@ -57,8 +78,20 @@ describe('Scheduler.tick', () => {
   it('does nothing when no job is due', async () => {
     const { store, clock, set } = storeWith();
     set(new Date('2026-06-15T05:59:00Z'));
-    const runJob = vi.fn(async (): Promise<JobOutcome> => ({ stopped: 'answered', text: 'x', turnId: TURN }));
-    const sched = new Scheduler(store, runJob, async () => DELIVERED, undefined, () => {}, clock, undefined, undefined, new ModelLane());
+    const runJob = vi.fn(
+      async (): Promise<JobOutcome> => ({ stopped: 'answered', text: 'x', turnId: TURN }),
+    );
+    const sched = new Scheduler(
+      store,
+      runJob,
+      async () => DELIVERED,
+      undefined,
+      () => {},
+      clock,
+      undefined,
+      undefined,
+      new ModelLane(),
+    );
     sched.tick();
     await flush();
     expect(runJob).not.toHaveBeenCalled();
@@ -74,7 +107,17 @@ describe('Scheduler.tick', () => {
       return { stopped: 'answered', text: 'done', turnId: TURN };
     });
     const events: SchedulerEvent[] = [];
-    const sched = new Scheduler(store, runJob, async () => DELIVERED, undefined, (e) => events.push(e), clock, undefined, undefined, new ModelLane());
+    const sched = new Scheduler(
+      store,
+      runJob,
+      async () => DELIVERED,
+      undefined,
+      (e) => events.push(e),
+      clock,
+      undefined,
+      undefined,
+      new ModelLane(),
+    );
 
     sched.tick(); // launches the run, stays in flight
     await flush();
@@ -91,10 +134,22 @@ describe('Scheduler.tick', () => {
   it('defers to foreground: no job starts while the owner holds the lane', async () => {
     const { store, clock, set } = storeWith();
     set(AFTER_FIRE);
-    const runJob = vi.fn(async (): Promise<JobOutcome> => ({ stopped: 'answered', text: 'x', turnId: TURN }));
+    const runJob = vi.fn(
+      async (): Promise<JobOutcome> => ({ stopped: 'answered', text: 'x', turnId: TURN }),
+    );
     const events: SchedulerEvent[] = [];
     const busy: ForegroundGate = { isActive: () => true, signal: () => undefined };
-    const sched = new Scheduler(store, runJob, async () => DELIVERED, busy, (e) => events.push(e), clock, undefined, undefined, new ModelLane());
+    const sched = new Scheduler(
+      store,
+      runJob,
+      async () => DELIVERED,
+      busy,
+      (e) => events.push(e),
+      clock,
+      undefined,
+      undefined,
+      new ModelLane(),
+    );
 
     sched.tick();
     await flush();
@@ -108,10 +163,19 @@ describe('Scheduler.tick', () => {
     it('does not start a due job when the claim is already gone — the tick-start check', async () => {
       const { store, clock, set } = storeWith();
       set(AFTER_FIRE);
-      const runJob = vi.fn(async (): Promise<JobOutcome> => ({ stopped: 'answered', text: 'x', turnId: TURN }));
+      const runJob = vi.fn(
+        async (): Promise<JobOutcome> => ({ stopped: 'answered', text: 'x', turnId: TURN }),
+      );
       const events: SchedulerEvent[] = [];
       const sched = new Scheduler(
-        store, runJob, async () => DELIVERED, undefined, (e) => events.push(e), clock, undefined, undefined,
+        store,
+        runJob,
+        async () => DELIVERED,
+        undefined,
+        (e) => events.push(e),
+        clock,
+        undefined,
+        undefined,
         new ModelLane(),
         () => false, // a second gateway already holds the real claim
       );
@@ -140,7 +204,14 @@ describe('Scheduler.tick', () => {
       const deliver = vi.fn(async () => DELIVERED);
       const events: SchedulerEvent[] = [];
       const sched = new Scheduler(
-        store, runJob, deliver, undefined, (e) => events.push(e), clock, undefined, undefined,
+        store,
+        runJob,
+        deliver,
+        undefined,
+        (e) => events.push(e),
+        clock,
+        undefined,
+        undefined,
         new ModelLane(),
         () => stillOwn,
       );
@@ -177,8 +248,14 @@ describe('Scheduler.tick', () => {
       const events: SchedulerEvent[] = [];
       const commitments = { tick: vi.fn() };
       const sched = new Scheduler(
-        store, async () => ({ stopped: 'answered', text: 'x', turnId: TURN }), async () => DELIVERED, undefined,
-        (e) => events.push(e), () => new Date(), undefined, undefined,
+        store,
+        async () => ({ stopped: 'answered', text: 'x', turnId: TURN }),
+        async () => DELIVERED,
+        undefined,
+        (e) => events.push(e),
+        () => new Date(),
+        undefined,
+        undefined,
         new ModelLane(),
         () => false, // the claim is already someone else's
         undefined,
@@ -198,8 +275,14 @@ describe('Scheduler.tick', () => {
       const store = new JobStore(db);
       const commitments = { tick: vi.fn() };
       const sched = new Scheduler(
-        store, async () => ({ stopped: 'answered', text: 'x', turnId: TURN }), async () => DELIVERED, undefined,
-        () => {}, () => new Date(), undefined, undefined,
+        store,
+        async () => ({ stopped: 'answered', text: 'x', turnId: TURN }),
+        async () => DELIVERED,
+        undefined,
+        () => {},
+        () => new Date(),
+        undefined,
+        undefined,
         new ModelLane(),
         () => true,
         undefined,
@@ -218,9 +301,21 @@ describe('Scheduler.tick', () => {
     const { store, job, clock, set } = storeWith();
     set(AFTER_FIRE);
     const deliver = vi.fn(async () => DELIVERED);
-    const runJob = vi.fn(async (): Promise<JobOutcome> => ({ stopped: 'aborted', text: '', turnId: TURN }));
+    const runJob = vi.fn(
+      async (): Promise<JobOutcome> => ({ stopped: 'aborted', text: '', turnId: TURN }),
+    );
     const before = store.get(job.id)!.nextFireAt.toISOString();
-    const sched = new Scheduler(store, runJob, deliver, undefined, () => {}, clock, undefined, undefined, new ModelLane());
+    const sched = new Scheduler(
+      store,
+      runJob,
+      deliver,
+      undefined,
+      () => {},
+      clock,
+      undefined,
+      undefined,
+      new ModelLane(),
+    );
 
     sched.tick();
     await flush();
@@ -233,12 +328,28 @@ describe('Scheduler.tick', () => {
     const { store, job, clock, set } = storeWith();
     set(AFTER_FIRE);
     const deliver = vi.fn(async () => DELIVERED);
-    const runJob = vi.fn(async (): Promise<JobOutcome> => ({ stopped: 'ask', text: 'serve la tua conferma per X', turnId: TURN }));
-    const sched = new Scheduler(store, runJob, deliver, undefined, () => {}, clock, undefined, undefined, new ModelLane());
+    const runJob = vi.fn(
+      async (): Promise<JobOutcome> => ({
+        stopped: 'ask',
+        text: 'serve la tua conferma per X',
+        turnId: TURN,
+      }),
+    );
+    const sched = new Scheduler(
+      store,
+      runJob,
+      deliver,
+      undefined,
+      () => {},
+      clock,
+      undefined,
+      undefined,
+      new ModelLane(),
+    );
 
     sched.tick();
     await flush();
-    expect(deliver).toHaveBeenCalledWith('cli', 'serve la tua conferma per X');
+    expect(deliver).toHaveBeenCalledWith('cli', 'serve la tua conferma per X', { id: TURN });
     expect(store.get(job.id)!.lastRunAt).not.toBeNull();
   });
 
@@ -246,9 +357,21 @@ describe('Scheduler.tick', () => {
     const { store, job, clock, set } = storeWith();
     set(AFTER_FIRE);
     const deliver = vi.fn(async () => notDelivered('canale giù'));
-    const runJob = vi.fn(async (): Promise<JobOutcome> => ({ stopped: 'answered', text: 'x', turnId: TURN }));
+    const runJob = vi.fn(
+      async (): Promise<JobOutcome> => ({ stopped: 'answered', text: 'x', turnId: TURN }),
+    );
     const events: SchedulerEvent[] = [];
-    const sched = new Scheduler(store, runJob, deliver, undefined, (e) => events.push(e), clock, undefined, undefined, new ModelLane());
+    const sched = new Scheduler(
+      store,
+      runJob,
+      deliver,
+      undefined,
+      (e) => events.push(e),
+      clock,
+      undefined,
+      undefined,
+      new ModelLane(),
+    );
 
     sched.tick();
     await flush();
@@ -458,7 +581,12 @@ describe('Scheduler.tick — B7 sentinels', () => {
     set(AFTER_FIRE);
     const deliver = vi.fn(async () => DELIVERED);
     const runJob = vi.fn(
-      async (): Promise<FireSettleOnly> => ({ settleOnly: true, turnId: TURN, outcome: 'answered', delivered: true }),
+      async (): Promise<FireSettleOnly> => ({
+        settleOnly: true,
+        turnId: TURN,
+        outcome: 'answered',
+        delivered: true,
+      }),
     );
     const events: SchedulerEvent[] = [];
     const settled: string[] = [];
@@ -493,7 +621,12 @@ describe('Scheduler.tick — B7 sentinels', () => {
     const { store, clock, set } = storeWith();
     set(AFTER_FIRE);
     const runJob = vi.fn(
-      async (): Promise<FireSettleOnly> => ({ settleOnly: true, turnId: TURN, outcome: 'answered', delivered: false }),
+      async (): Promise<FireSettleOnly> => ({
+        settleOnly: true,
+        turnId: TURN,
+        outcome: 'answered',
+        delivered: false,
+      }),
     );
     const events: SchedulerEvent[] = [];
     const sched = new Scheduler(
@@ -572,7 +705,11 @@ describe('Scheduler.tick — B7 sentinels', () => {
     });
     const sched = new Scheduler(
       store,
-      async (): Promise<JobOutcome> => ({ stopped: 'suspended', text: 'aspetto un evento', turnId: TURN }),
+      async (): Promise<JobOutcome> => ({
+        stopped: 'suspended',
+        text: 'aspetto un evento',
+        turnId: TURN,
+      }),
       async () => DELIVERED,
       undefined,
       () => {},
