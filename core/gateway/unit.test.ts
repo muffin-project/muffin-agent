@@ -4,9 +4,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DRAIN_BUDGET_MS, EXIT_STOPPED } from './service.js';
-import { EXIT_PERMANENT, planUnit, resolveLauncher, SERVICE_NAME, WATCHDOG_SEC,
-  resolveInterpreterDir,
+import {
+  EXIT_PERMANENT,
   type InterpreterProbes,
+  planUnit,
+  resolveInterpreterDir,
+  resolveLauncher,
+  SERVICE_NAME,
+  systemdDiagnosticsForUnit,
+  WATCHDOG_SEC,
 } from './unit.js';
 
 /**
@@ -68,7 +74,9 @@ function systemdRestartsAfter(text: string, code: number): boolean {
  * chiesto uno stop.
  */
 function launchdRestartsAfter(text: string, code: number, stopped = false): boolean {
-  const keepAlive = /<key>KeepAlive<\/key>\s*(<true\/>|<false\/>|<dict>[\s\S]*?<\/dict>)/.exec(text)?.[1];
+  const keepAlive = /<key>KeepAlive<\/key>\s*(<true\/>|<false\/>|<dict>[\s\S]*?<\/dict>)/.exec(
+    text,
+  )?.[1];
   if (keepAlive === undefined || keepAlive === '<false/>') return false;
   if (keepAlive === '<true/>') return true;
   const successful = /<key>SuccessfulExit<\/key>\s*<(true|false)\/>/.exec(keepAlive)?.[1];
@@ -77,7 +85,9 @@ function launchdRestartsAfter(text: string, code: number, stopped = false): bool
   // `PathState` con `<false/>`: vivo finché quel file NON esiste
   // (launchd.plist(5)). È l'unico modo di dire a launchd «questo stop è voluto»
   // che launchd sappia leggere.
-  const pathState = /<key>PathState<\/key>\s*<dict>\s*<key>([^<]*)<\/key>\s*<(true|false)\/>/.exec(keepAlive);
+  const pathState = /<key>PathState<\/key>\s*<dict>\s*<key>([^<]*)<\/key>\s*<(true|false)\/>/.exec(
+    keepAlive,
+  );
   if (pathState) {
     const vivoSeEsiste = pathState[2] === 'true';
     return vivoSeEsiste ? stopped : !stopped;
@@ -329,16 +339,43 @@ describe('la unit systemd passa il parser di systemd', () => {
     writeFileSync(file, plan({ home: dir, exec: [launcher, 'gateway', 'run'] }).text);
 
     const verify = spawnSync('systemd-analyze', ['verify', file], { encoding: 'utf8' });
-    // L'output intero nel messaggio: un fallimento qui deve dire *quale*
-    // direttiva, non solo che il file non va bene.
-    expect(`${verify.stdout ?? ''}${verify.stderr ?? ''}`.trim()).toBe('');
-    expect(verify.status).toBe(0);
+    // Host units that systemd walks are not this file. Ubuntu 26.04's image
+    // warns that CPUAccounting= was removed from xfs_scrub and the guest
+    // agent; those lines do not say the muffin unit was rejected.
+    const relevant = systemdDiagnosticsForUnit(
+      file,
+      `${verify.stdout ?? ''}${verify.stderr ?? ''}`,
+    );
+    expect(relevant).toBe('');
+  });
+});
+
+describe('systemd-analyze diagnostics', () => {
+  it('ignores host-unit warnings and keeps a complaint about the unit under test', () => {
+    const unit = '/tmp/muffin-unit-test/muffin-gateway.service';
+    const host = [
+      '/usr/lib/systemd/system/xfs_scrub_all.service:26: Support for option CPUAccounting= has been removed and it is ignored',
+      '/usr/lib/systemd/system/system-xfs_scrub.slice:15: Support for option CPUAccounting= has been removed and it is ignored',
+      '/usr/lib/systemd/system/walinuxagent.service:21: Support for option CPUAccounting= has been removed and it is ignored',
+    ].join('\n');
+    expect(systemdDiagnosticsForUnit(unit, host)).toBe('');
+    expect(
+      systemdDiagnosticsForUnit(
+        unit,
+        `${host}\n${unit}:12: Unknown key name 'Nope' in section Service`,
+      ),
+    ).toBe(`${unit}:12: Unknown key name 'Nope' in section Service`);
+    expect(systemdDiagnosticsForUnit(unit, 'Failed to parse unit.')).toBe('Failed to parse unit.');
   });
 });
 
 describe('the launchd agent', () => {
   const mac = () =>
-    planUnit({ platform: 'darwin', home: '/Users/g/.muffin', exec: ['/usr/local/bin/muffin', 'gateway', 'run'] });
+    planUnit({
+      platform: 'darwin',
+      home: '/Users/g/.muffin',
+      exec: ['/usr/local/bin/muffin', 'gateway', 'run'],
+    });
 
   it('is a user LaunchAgent anchored to the data home', () => {
     const p = mac();
@@ -366,7 +403,11 @@ describe('the launchd agent', () => {
   it('escapes a home that would otherwise break the XML', () => {
     // Paths with `&` are legal on macOS and would produce a plist launchd
     // refuses to parse — which presents as "the agent silently never runs".
-    const p = planUnit({ platform: 'darwin', home: '/Users/a&b/.muffin', exec: ['/bin/muffin', 'gateway', 'run'] });
+    const p = planUnit({
+      platform: 'darwin',
+      home: '/Users/a&b/.muffin',
+      exec: ['/bin/muffin', 'gateway', 'run'],
+    });
     expect(p.text).toContain('/Users/a&amp;b/.muffin');
     expect(p.text).not.toContain('/Users/a&b/.muffin');
   });
@@ -393,7 +434,8 @@ describe('resolveLauncher — what ExecStart is allowed to point at', () => {
       buildRoot: '/home/g/dev/muffin-agent',
       entry: '/home/g/dev/muffin-agent/dist/cli/main.js',
       candidates: ['/home/g/.local/bin/muffin'],
-      realpath: (p) => (p === '/home/g/.local/bin/muffin' ? '/home/g/dev/muffin-agent/dist/cli/main.js' : null),
+      realpath: (p) =>
+        p === '/home/g/.local/bin/muffin' ? '/home/g/dev/muffin-agent/dist/cli/main.js' : null,
     });
     expect(found.argv).toEqual(['/home/g/.local/bin/muffin', 'gateway', 'run']);
     expect(found.warning).toBeNull();
@@ -556,7 +598,10 @@ describe("l'interprete della unit non deve scadere", () => {
   const HOMEBREW_REAL = '/opt/homebrew/Cellar/node@22/22.22.2_2/bin/node';
 
   /** `resolves`: dove porta ogni percorso. Assente = non risolve (non esiste). */
-  const probes = (spec: { path: string[]; resolves?: Record<string, string> }): InterpreterProbes => ({
+  const probes = (spec: {
+    path: string[];
+    resolves?: Record<string, string>;
+  }): InterpreterProbes => ({
     pathEntries: () => spec.path,
     realpath: (p) => (spec.resolves ?? {})[p] ?? null,
   });
@@ -575,7 +620,10 @@ describe("l'interprete della unit non deve scadere", () => {
   it('su una distro dove `node` è un file vero non cambia niente', () => {
     // Nessun link da preferire: `/usr/bin` è già stabile di suo, e inventare
     // un altro percorso sarebbe una supposizione, non una riparazione.
-    const dir = resolveInterpreterDir('/usr/bin/node', probes({ path: ['/usr/local/bin', '/usr/bin', '/bin'] }));
+    const dir = resolveInterpreterDir(
+      '/usr/bin/node',
+      probes({ path: ['/usr/local/bin', '/usr/bin', '/bin'] }),
+    );
     expect(dir).toBe('/usr/bin');
   });
 
@@ -618,7 +666,10 @@ describe("l'interprete della unit non deve scadere", () => {
     // La cucitura: risolvere bene e poi non scriverlo sarebbe lo stesso guasto.
     const stable = resolveInterpreterDir(
       HOMEBREW_REAL,
-      probes({ path: ['/opt/homebrew/bin'], resolves: { '/opt/homebrew/bin/node': HOMEBREW_REAL } }),
+      probes({
+        path: ['/opt/homebrew/bin'],
+        resolves: { '/opt/homebrew/bin/node': HOMEBREW_REAL },
+      }),
     );
     for (const platform of ['linux', 'darwin'] as const) {
       const plan = planUnit({
@@ -644,7 +695,11 @@ describe("l'interprete della unit non deve scadere", () => {
  * accanto perché non possano divergere.
  */
 describe('activation — la forma eseguibile, accanto a quella da leggere', () => {
-  const base = { home: '/home/o/.muffin', exec: ['/home/o/.local/bin/muffin', 'gateway', 'run'], homeDir: '/home/o' };
+  const base = {
+    home: '/home/o/.muffin',
+    exec: ['/home/o/.local/bin/muffin', 'gateway', 'run'],
+    homeDir: '/home/o',
+  };
 
   it('senza sapere chi installa non indovina: la lista resta da leggere', () => {
     // `gui/$(id -u)` va benissimo stampato. Qui no: sbagliare uid vuol dire
@@ -667,8 +722,13 @@ describe('activation — la forma eseguibile, accanto a quella da leggere', () =
     for (const s of plan.activation) for (const a of s.argv) expect(a).not.toMatch(/[$#"]/);
   });
 
-  it("launchd: solo il bootstrap — `print` è per gli occhi e `bootout` spegnerebbe", () => {
-    const plan = planUnit({ ...base, platform: 'darwin', homeDir: '/Users/o', identity: { user: 'o', uid: 501 } });
+  it('launchd: solo il bootstrap — `print` è per gli occhi e `bootout` spegnerebbe', () => {
+    const plan = planUnit({
+      ...base,
+      platform: 'darwin',
+      homeDir: '/Users/o',
+      identity: { user: 'o', uid: 501 },
+    });
     expect(plan.activation).toHaveLength(1);
     expect(plan.activation[0]?.argv.slice(0, 3)).toEqual(['launchctl', 'bootstrap', 'gui/501']);
     expect(plan.activation[0]?.argv[3]).toBe(plan.path);
