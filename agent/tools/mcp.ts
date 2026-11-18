@@ -1,12 +1,12 @@
-import type { CapabilityDecl } from '../../core/policy/types.js';
-import { fence } from '../../core/memory/spotlight.js';
 import { connectServer, type McpConnection } from '../../core/mcp/connect.js';
 import {
-  reversibleFromAnnotations,
-  verifyTools,
   type McpRegistry,
   type McpToolDef,
+  reversibleFromAnnotations,
+  verifyTools,
 } from '../../core/mcp/registry.js';
+import { fence } from '../../core/memory/spotlight.js';
+import type { CapabilityDecl } from '../../core/policy/types.js';
 import type { RegisteredTool } from '../loop.js';
 
 /**
@@ -96,7 +96,10 @@ export type McpDeps = {
   connectFn?: typeof connectServer;
 };
 
-export async function buildMcpTools(registry: McpRegistry, deps: McpDeps = {}): Promise<McpAttachment> {
+export async function buildMcpTools(
+  registry: McpRegistry,
+  deps: McpDeps = {},
+): Promise<McpAttachment> {
   const connectFn = deps.connectFn ?? connectServer;
   const tools: RegisteredTool[] = [];
   const capabilities: CapabilityDecl[] = [];
@@ -107,7 +110,7 @@ export async function buildMcpTools(registry: McpRegistry, deps: McpDeps = {}): 
   for (const [server, entry] of Object.entries(registry.servers)) {
     let connection: McpConnection;
     try {
-      connection = await connectFn(server, entry);
+      connection = await connectFn(entry);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       report.push(`mcp:${server} — connessione fallita: ${detail}`);

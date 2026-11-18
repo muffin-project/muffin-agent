@@ -690,7 +690,11 @@ Three properties of this split are load-bearing:
   runs (`doctor`, which verifies, prints the reason). The gateway control
   socket and pointer file (#638) remain deny-listed as defence in depth and
   because the deny is what covers macOS, where Seatbelt blocks Unix sockets
-  by default. The gateway socket path and long-home fallback path (hashed
+  by default. ADR-0106 does not add a second socket or a second authority.
+  When an ephemeral `muffin run` holds the same claim, it binds this same
+  path under the same filesystem ACL; `mode` is not a capability, and the
+  deny-list does not grow a path for it. That holder is not implemented yet.
+  The gateway socket path and long-home fallback path (hashed
   socket under Node's configured temp root plus `gateway.sock.path`) are
   deny-listed. The
   fallback resolves that root and fails closed unless each ancestor is owned

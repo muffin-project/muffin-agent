@@ -62,7 +62,8 @@ export const COMMANDS: readonly CommandSpec[] = [
   },
   {
     name: 'run',
-    summary: 'esegue un obiettivo senza aprire il terminale interattivo',
+    summary:
+      'esegue un obiettivo senza aprire il terminale; sessione nuova, --session ID per continuare',
     audience: 'owner',
     primary: true,
   },
@@ -135,7 +136,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     name: 'gateway',
     summary: 'supervisore e lifecycle del processo',
     audience: 'operator',
-    subcommands: ['status', 'turn', 'stop', 'start', 'restart', 'install', 'run'],
+    subcommands: ['status', 'turn', 'stop', 'start', 'restart', 'install', 'run', 'unlock'],
   },
   { name: 'observe', summary: 'ispezione della proattività', audience: 'inspection' },
   {

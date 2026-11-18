@@ -197,10 +197,13 @@ jobs:
       - if: steps.scope.outputs.run != 'false'
         run: npm ci
 
-      # `tsconfig.json` include `.claude/hooks/**/*.ts` e `**/*.test.ts`: senza
-      # questo step un errore di tipo qui passerebbe invisibile e verrebbe
-      # fuori solo alla prossima PR di sorgenti, attribuito a quella.
-      - if: steps.scope.outputs.run != 'false'
+      # Sulle PR questo step è ridondante: `verifica` gira su ogni PR e il suo
+      # `tsc --noEmit` include già `.claude/hooks/**/*.ts` e `**/*.test.ts`
+      # via `tsconfig.json`. Resta sul push a main, dove `ci.yml` ignora
+      # `.claude/**` e questo workflow è l'unico replay per un push di soli
+      # strumenti: senza, un errore di tipo qui tornerebbe invisibile fino
+      # alla prossima PR di sorgenti, attribuito a quella.
+      - if: steps.scope.outputs.run != 'false' && github.event_name != 'pull_request'
         name: typecheck
         run: npx tsc --noEmit
 
