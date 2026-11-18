@@ -1,6 +1,6 @@
 import { pidAlive } from '../lock/durable.js';
 import { ALWAYS_IDLE, type ForegroundGate, type StandDown } from '../scheduler/scheduler.js';
-import { LANE_TURNS, ModelLane } from './model-lane.js';
+import { LANE_TURNS, type ModelLane } from './model-lane.js';
 import type { TurnStopped, TurnStore } from './store.js';
 import { decodeWaitFor, satisfied } from './wait.js';
 
@@ -215,7 +215,10 @@ export class TurnLane {
     for (const row of this.deps.turns.armed()) {
       const barrier = decodeWaitFor(row.waitFor);
       const risposto = this.deps.approvals?.answered.bind(this.deps.approvals);
-      if (barrier === null || !satisfied(barrier, { alive: this.alive, ...(risposto ? { answered: risposto } : {}) }))
+      if (
+        barrier === null ||
+        !satisfied(barrier, { alive: this.alive, ...(risposto ? { answered: risposto } : {}) })
+      )
         continue;
       // Guarded on `waiting` inside the store, so an event arriving twice — or
       // arriving for a row the deadline already woke — moves nothing.
@@ -239,7 +242,11 @@ export class TurnLane {
       if ('refused' in outcome) this.onEvent({ kind: 'refused', turnId, why: outcome.refused });
       else this.onEvent({ kind: 'ran', turnId, stopped: outcome.stopped });
     } catch (error) {
-      this.onEvent({ kind: 'failed', turnId, error: error instanceof Error ? error.message : String(error) });
+      this.onEvent({
+        kind: 'failed',
+        turnId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

@@ -214,7 +214,9 @@ describe('#598 S4 · il ramo di consegna (stub runJob, store veri)', () => {
     sched.tick();
     await flush();
 
-    expect(deliver).toHaveBeenCalledWith('cli', 'In coda per te: "probe.act" — conferma?', { id: 'turn-s4-ask' });
+    expect(deliver).toHaveBeenCalledWith('cli', 'In coda per te: "probe.act" — conferma?', {
+      id: 'turn-s4-ask',
+    });
     expect(must(w.store.get(job.id)).lastRunAt).not.toBeNull();
     // La domanda non è un successo ordinario: nessuna ricevuta silenziosa.
     expect(must(w.fires.get(job.id, job.nextFireAt.toISOString())).silent).toBe(false);

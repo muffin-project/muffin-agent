@@ -1,7 +1,7 @@
 import type { SessionStore } from '../core/session/store.js';
 import type { TurnRecord } from '../core/turns/store.js';
-import { providerErrorReplyFromMessages } from './loop/provider-error-reply.js';
 import { providerMessages } from './loop/provider-checkpoint.js';
+import { providerErrorReplyFromMessages } from './loop/provider-error-reply.js';
 
 /**
  * Recover the text a completed Work would have delivered after a crash.
@@ -25,12 +25,14 @@ export function recoveredText(
   options?: { preserveEmptyAnswer: true },
 ): string {
   if (record.outcome === 'answered') {
-    const answer = sessions.read(sessions.open(record.sessionId)).findLast(
-      (message) =>
-        message.role === 'assistant' &&
-        message.traceId === record.id &&
-        (options?.preserveEmptyAnswer || message.content.trim() !== ''),
-    )?.content;
+    const answer = sessions
+      .read(sessions.open(record.sessionId))
+      .findLast(
+        (message) =>
+          message.role === 'assistant' &&
+          message.traceId === record.id &&
+          (options?.preserveEmptyAnswer || message.content.trim() !== ''),
+      )?.content;
     if (answer !== undefined) return answer;
   }
   if (record.outcome === 'error') {

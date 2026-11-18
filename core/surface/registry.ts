@@ -1,5 +1,11 @@
 import { redactText } from '../tracing/redact.js';
-import { notDelivered, type DeliveryOutcome, type DeliveryTurn, type FileSpec, type Surface } from './types.js';
+import {
+  type DeliveryOutcome,
+  type DeliveryTurn,
+  type FileSpec,
+  notDelivered,
+  type Surface,
+} from './types.js';
 
 /**
  * The one place that knows which surfaces exist, and the only caller of
@@ -71,7 +77,11 @@ export class SurfaceRegistry {
    * is the exact shape that took the gateway down once already
    * (`core/scheduler/scheduler.ts`, the `markRan` catch).
    */
-  deliver = async (channel: string, text: string, turn?: DeliveryTurn): Promise<DeliveryOutcome> => {
+  deliver = async (
+    channel: string,
+    text: string,
+    turn?: DeliveryTurn,
+  ): Promise<DeliveryOutcome> => {
     const surface = this.find(channel);
     if (surface === null) return this.noSurface(channel);
     // Il sink della risposta è `s6` del corpus avversariale: la scena in cui
@@ -128,7 +138,8 @@ export class SurfaceRegistry {
       );
     }
     return notDelivered(
-      `nessuna superficie serve "${channel}"` + (known === '' ? ' — nessuna superficie è connessa' : ` — connesse: ${known}`),
+      `nessuna superficie serve "${channel}"` +
+        (known === '' ? ' — nessuna superficie è connessa' : ` — connesse: ${known}`),
     );
   }
 
@@ -140,11 +151,16 @@ export class SurfaceRegistry {
    * is the exact shape that took the gateway down once already
    * (`core/scheduler/scheduler.ts`, the `markRan` catch).
    */
-  private async caught(surfaceId: string, attempt: () => Promise<DeliveryOutcome>): Promise<DeliveryOutcome> {
+  private async caught(
+    surfaceId: string,
+    attempt: () => Promise<DeliveryOutcome>,
+  ): Promise<DeliveryOutcome> {
     try {
       return await attempt();
     } catch (error) {
-      return notDelivered(`${surfaceId} ha lanciato invece di riportare l'esito: ${error instanceof Error ? error.message : String(error)}`);
+      return notDelivered(
+        `${surfaceId} ha lanciato invece di riportare l'esito: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 }
