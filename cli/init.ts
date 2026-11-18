@@ -128,10 +128,10 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   const skills = installTree('skills', join(p.home, 'skills'), options.force ?? false);
   step('skills', skills.length > 0 ? `installed ${skills.length} files` : 'already present');
 
-  // The character is the sealed identity (`rot/`, copied with the tree above)
-  // plus the on-demand `voce` skill (copied with the skills tree). persona.md
-  // and voice.md are no longer prompt sources; a home that still has them is
-  // left alone and not read.
+  // The character a new home receives is the sealed identity (`rot/`, copied
+  // with the tree above) plus the on-demand `voce` skill. persona.md and
+  // voice.md already on disk are left in place and are still read: ADR-0107
+  // has not been accepted, and init must not delete them or reseal identity.
 
   // Only the files this run actually wrote — never the ones found already
   // present, which may already carry the owner's own edits (see

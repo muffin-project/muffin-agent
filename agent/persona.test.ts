@@ -141,6 +141,36 @@ describe('persona in the system prompt', () => {
     expect(prompt).toContain('## Chi sei per me');
   });
 
+  it('keeps persona, the sealed identity and voice on a home that still has them, and does not rewrite the seal', () => {
+    const home = bootHome();
+    const identityPath = join(paths(home).rot, 'identity.md');
+    const before = readFileSync(identityPath);
+    writeFileSync(paths(home).persona, 'MARCATORE-PERSONA-INSTALLATA\n');
+    writeFileSync(paths(home).voice, 'MARCATORE-VOCE-INSTALLATA\n');
+    const runtime = buildRuntime(home, workspace);
+    try {
+      expect(runtime.promptBlocks.owner.map((block) => block.name)).toEqual([
+        'persona',
+        'identity',
+        'voice',
+        'skills',
+        'work-rules',
+        'safe-mode',
+      ]);
+      const prompt = runtime.deps.systemPrompts.owner;
+      const personaAt = prompt.indexOf('MARCATORE-PERSONA-INSTALLATA');
+      const identityAt = prompt.indexOf('Il registro segue il momento');
+      const voiceAt = prompt.indexOf('MARCATORE-VOCE-INSTALLATA');
+      expect(personaAt).toBeGreaterThan(-1);
+      expect(identityAt).toBeGreaterThan(personaAt);
+      expect(voiceAt).toBeGreaterThan(identityAt);
+      expect(runtime.deps.systemPrompts.group).not.toContain('MARCATORE-PERSONA-INSTALLATA');
+      expect(readFileSync(identityPath)).toEqual(before);
+    } finally {
+      runtime.close();
+    }
+  });
+
   it('survives a home that has no persona.md and no voice.md', () => {
     const home = bootHome();
     expect(existsSync(paths(home).voice)).toBe(false);

@@ -642,9 +642,10 @@ export async function runDoctor(
   // before this told the owner their copy had fallen behind. Measured on the
   // owner's own machine (docs/evidence/deriva-defaults-2026-08-26.md):
   // shipped files sat at their `init`-day content for weeks and nothing said
-  // so. persona.md and voice.md are no longer prompt sources (ADR-0107); the
-  // sealed identity and the skills still are. See defaultsDriftCheck below for the two
-  // opposite verdicts this can reach and why they must never be confused.
+  // so. While ADR-0107 is unaccepted, persona.md and voice.md stay prompt
+  // sources, as do the sealed identity and the skills. See defaultsDriftCheck
+  // below for the two opposite verdicts this can reach and why they must
+  // never be confused.
   const moduleDir = dirname(fileURLToPath(import.meta.url));
   const checkoutRoot =
     options.checkoutRoot !== undefined ? options.checkoutRoot : findCheckoutRoot(moduleDir);
@@ -671,15 +672,14 @@ export async function runDoctor(
     if (sealedAdoptable.length >= 2) sealedDriftGroupCheck(warn, sealedAdoptable);
   }
 
-  const leftoverPrompt = [
+  const installedCharacter = [
     existsSync(p.persona) ? 'persona.md' : null,
     existsSync(p.voice) ? 'voice.md' : null,
   ].filter((name): name is string => name !== null);
-  if (leftoverPrompt.length > 0) {
-    warn(
+  if (installedCharacter.length > 0) {
+    ok(
       'prompt sources',
-      `${leftoverPrompt.join(' e ')} ${leftoverPrompt.length === 1 ? 'è ancora nella home' : 'sono ancora nella home'} ma non ${leftoverPrompt.length === 1 ? 'è più una sorgente' : 'sono più sorgenti'} del prompt. Il carattere è rot/identity.md.`,
-      'per adottare il patto spedito, `muffin rot reseal` su rot/identity.md. Questi file si possono lasciare: non vengono letti e non vengono cancellati.',
+      `${installedCharacter.join(' e ')} ${installedCharacter.length === 1 ? 'è nel prompt owner' : 'sono nel prompt owner'}, insieme a rot/identity.md. Assemblare il prompt non riscrive il sigillo.`,
     );
   }
 
