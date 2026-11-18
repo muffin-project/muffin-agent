@@ -477,10 +477,11 @@ export type SystemPromptBlocks = Readonly<Record<TenantClass, readonly PromptBlo
  * turn, and a per-turn rebuild would read three files off disk on every
  * message for a string that cannot have changed.
  *
- * `version` picks which character and which operational block the two classes
- * are built from — `v1` is the default and reads exactly the files it always
- * read, so an installation that says nothing keeps the prompt it has, byte for
- * byte (pinned by sha256 below in `assemble.test.ts`). See `promptSources`.
+ * `version` picks the operational block (`promptSources`). It does not
+ * pick the character. ADR-0107, which would drop `persona.md` and `voice.md`,
+ * is still waiting on the owner, so an installation that still has those
+ * files keeps them in the owner prompt. A missing file adds no block.
+ * Assembly never writes `rot/identity.md`.
  */
 export function buildSystemPromptBlocks(
   home: string,
@@ -491,18 +492,13 @@ export function buildSystemPromptBlocks(
   const p = paths(home);
   const src = promptSources(version);
 
-  // One sealed file, not three registers of the same character.
-  //
-  // `rot/identity.md` is the pact: invariants, including that the register
-  // follows the moment. It lives under the seal, so changing it is an owner
-  // act, never a side effect of `prompt.version`. Examples of how to write
-  // (emoji thresholds, banned-phrase lists, length samples) are the `voce`
-  // skill: a catalogue line here, the body only when `skill_read` opens it.
-  //
-  // The order is deliberate and tested. There is no precedence mechanism —
-  // only string order. Identity comes first because that is the constitution;
-  // the operational block comes after because it is about this turn's tools.
+  // The installed owner contract, until ADR-0107 is accepted: persona, then
+  // the sealed pact, then voice. There is no precedence mechanism, only
+  // string order. The seal is read, never written. Examples can also live in
+  // the `voce` skill; that does not remove a voice file the home already has.
+  const personaText = authored(p.persona);
   const identity = authored(join(p.rot, 'identity.md'));
+  const voiceText = authored(p.voice);
   const safeModeBlock = safeMode ? SAFE_MODE_NOTE : '';
   const workRules: PromptBlock = {
     name: 'work-rules',
@@ -515,16 +511,35 @@ export function buildSystemPromptBlocks(
     text: safeModeBlock,
   };
 
-  // Owner: the pact, the skill catalogue, the operating rules.
-  // Pinned by sha256 in `assemble.test.ts`: a one-byte change cold-starts
-  // every warm prefix.
+  // Pinned by sha256 in `assemble.test.ts` for a fresh home, which has no
+  // persona or voice file: a one-byte change cold-starts every warm prefix.
   const owner: PromptBlock[] = [
+    ...(personaText.length > 0
+      ? [
+          {
+            name: 'persona',
+            source: 'persona.md',
+            text: personaText,
+            file: p.persona,
+          },
+        ]
+      : []),
     {
       name: 'identity',
       source: 'rot/identity.md',
       text: identity,
       file: join(p.rot, 'identity.md'),
     },
+    ...(voiceText.length > 0
+      ? [
+          {
+            name: 'voice',
+            source: 'voice.md',
+            text: voiceText,
+            file: p.voice,
+          },
+        ]
+      : []),
     { name: 'skills', source: 'core/skills (catalogo generato)', text: skillsSection },
     workRules,
     safe,
