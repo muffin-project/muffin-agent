@@ -216,6 +216,17 @@ describe('Muffin Event Intelligence host conformance', () => {
             return [...deliveries];
           },
 
+          async readWakeReceipt(wakeId: string) {
+            // The v3 contract reads EI's durable store after reopening it;
+            // the in-process delivery observer is not evidence of persistence.
+            const current = embedded;
+            if (!current) throw new Error('Event Intelligence conformance host is closed');
+            const stored = await current.host.store.getWakeDelivery(wakeId);
+            return stored
+              ? { status: stored.status, runtimeReceiptId: stored.runtimeReceiptId ?? null }
+              : null;
+          },
+
           async restart() {
             await embedded?.close();
             embedded = null;
@@ -295,6 +306,10 @@ describe('Muffin Event Intelligence host conformance', () => {
 
     const report = await runHostConformance(adapter, { profile: 'management' });
     expect(report.passed, JSON.stringify(report, null, 2)).toBe(true);
+    expect(report.schema).toBe('event-intelligence.host-conformance.v3');
+    expect(report.results).toContainEqual(
+      expect.objectContaining({ id: 'core.restart-after-delivery-replay', status: 'pass' }),
+    );
     expect(report.adapter).toBe('muffin-agent');
     expect(report.profile).toBe('management');
     expect(report.summary.failed).toBe(0);
