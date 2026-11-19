@@ -14,7 +14,7 @@ function requiredTurnId(input: TurnInput): string {
 }
 
 describe('Muffin Event Intelligence host conformance', () => {
-  it('passes the public EI v0.11 management host contract through Muffin tools', async () => {
+  it('passes the public EI v1.0 management host contract through Muffin tools', async () => {
     const adapter = {
       name: 'muffin-agent',
 
@@ -90,7 +90,8 @@ describe('Muffin Event Intelligence host conformance', () => {
             id: sessionId,
             file: join(home, `${sessionId.replaceAll(':', '_')}.jsonl`),
           }),
-          enqueue: (input) => {
+          enqueue: (input, wakeId) => {
+            if (!wakeId) throw new Error('EI conformance delivery missing canonical wake ID');
             const runtimeReceiptId = requiredTurnId(input);
             persistedReceipts.add(runtimeReceiptId);
             const replyTo = input.replyTo;
@@ -104,7 +105,8 @@ describe('Muffin Event Intelligence host conformance', () => {
             }
             deliveries.push({
               triggerId: replyTo.conformanceTriggerId,
-              wakeId: runtimeReceiptId,
+              // EI's durable wake ID differs from Muffin's persisted Turn/receipt ID.
+              wakeId,
               runtimeReceiptId,
             });
             return runtimeReceiptId;

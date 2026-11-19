@@ -91,7 +91,8 @@ export type EventWakePort = {
   source(turnId: string): EventWakeSource | null;
   has(workId: string): boolean;
   openSession(sessionId: string): SessionRef;
-  enqueue(input: TurnInput): string;
+  // Optional host-visible EI wake identity; do not confuse it with the Turn receipt ID.
+  enqueue(input: TurnInput, wakeId?: string): string;
 };
 
 function renderWakeText(activation: EventActivation): string {
@@ -201,7 +202,7 @@ function activationDelivery(port: EventWakePort, wakeOwners: WakeOwnerBindings) 
             contentTaint: EXTERNAL,
             inputOrigin: 'external',
             ...(target.replyTo === null ? {} : { replyTo: target.replyTo }),
-          });
+          }, activation.wake.wakeId);
           // Preserve only explanatory read scope for the wake. Mutations below
           // still require the real owner principal.
           wakeOwners.remember(runtimeReceiptId, triggerOwner(target.principal, target.tenant));
