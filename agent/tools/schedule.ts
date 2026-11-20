@@ -109,7 +109,7 @@ const scheduleSpec: ToolSpec = {
     'one durable job on the same store as `muffin jobs add` — the job survives restarts and fires on schedule. ' +
     "`timezone` is an IANA zone and defaults to the owner's own zone; never guess one from the process environment. " +
     "Delivery goes to this conversation's surface. " +
-    'Use `schedule_once` for an independent one-shot objective, `todo` + `due` for a dated reminder, and `wait` to resume this turn. ' +
+    'Not for independent one-shot objectives, dated reminders, or resuming this turn. Use `schedule_once`, `todo` + `due`, or `wait`, respectively. ' +
     'Never emulate this with a shell command: there is no shell path to the scheduler.',
   inputSchema: {
     type: 'object',
@@ -142,8 +142,8 @@ const onceSpec: ToolSpec = {
   name: 'schedule_once',
   description:
     'Arm an independent background objective once, due on the next gateway tick ("fallo in background una sola volta"). ' +
-    'Use only for an explicit request to delegate work once. The job survives restart and reports back to this conversation. ' +
-    'Use todo for a dated reminder and wait to resume the current turn.',
+    'Use it when the owner explicitly asks to delegate one run. The job survives restart and reports back to this conversation. ' +
+    'Not for a dated reminder or resuming the current turn. Use `todo` + `due` or `wait`, respectively.',
   inputSchema: {
     type: 'object',
     properties: {
