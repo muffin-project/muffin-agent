@@ -15,9 +15,9 @@ import { TurnStore } from '../../core/turns/store.js';
 import { TodoStore } from '../../core/turns/todo.js';
 import { visibleTools } from '../context/assemble.js';
 import { toolContext } from '../fixtures/tool-context.js';
-import type { LoopDeps, RegisteredTool, ToolContext, TurnInput } from '../loop.js';
-import { runTool } from '../loop/tool-call.js';
 import { makeSnapshot } from '../loop/permissions.js';
+import { runTool } from '../loop/tool-call.js';
+import type { LoopDeps, RegisteredTool, ToolContext, TurnInput } from '../loop.js';
 import { CONSERVATIVE } from '../profiles/profile.js';
 import type { ChatCall, ChatResult, Provider } from '../providers/types.js';
 import { buildRuntime } from '../runtime.js';
@@ -357,14 +357,19 @@ it('one-shot arming rejects model-supplied routing, authority and budget fields'
   const db = new DatabaseCtor(':memory:');
   try {
     const jobs = new JobStore(db);
-    const tool = makeScheduleTool({ jobs, defaultTimezone: 'Europe/Rome', defaultChannel: 'cli' }, 'once');
+    const tool = makeScheduleTool(
+      { jobs, defaultTimezone: 'Europe/Rome', defaultChannel: 'cli' },
+      'once',
+    );
     const ctx = toolContext({ replyChannel: 'telegram:123' });
     for (const field of [
       { channel: 'telegram:999' },
       { delegation: 'yolo' },
       { perJobUsd: 1000 },
     ]) {
-      expect(await tool.handler({ goal: 'Inspect the file', ...field }, ctx)).toMatchObject({ isError: true });
+      expect(await tool.handler({ goal: 'Inspect the file', ...field }, ctx)).toMatchObject({
+        isError: true,
+      });
     }
     expect(jobs.list()).toHaveLength(0);
   } finally {
@@ -405,7 +410,11 @@ describe('un principal autonomo non arma ricorrenze (S1)', () => {
           args: {},
           taint,
         }),
-      ).toEqual({ effect: 'deny', code: 'principal_forbidden', detail: 'not available to autonomous principals' });
+      ).toEqual({
+        effect: 'deny',
+        code: 'principal_forbidden',
+        detail: 'not available to autonomous principals',
+      });
     }
   });
 
@@ -444,7 +453,11 @@ describe('one accepted effect → one Job (effect identity)', () => {
     const db = new DatabaseCtor(':memory:');
     const turns = new TurnStore(db);
     const jobs = new JobStore(db);
-    const tool: RegisteredTool = makeScheduleTool({ jobs, defaultTimezone: 'Europe/Rome', defaultChannel: 'cli' });
+    const tool: RegisteredTool = makeScheduleTool({
+      jobs,
+      defaultTimezone: 'Europe/Rome',
+      defaultChannel: 'cli',
+    });
     const caps = new Map([[scheduleCapability.id, scheduleCapability]] as const);
     const deps: LoopDeps = {
       provider: undefined as never,
@@ -452,7 +465,12 @@ describe('one accepted effect → one Job (effect identity)', () => {
       model: 'test',
       tools: [tool],
       capabilities: new Map(caps),
-      decide: createDecide({ matrix: POLICY_FLOOR, capabilities: new Map(caps), budgetExhausted: () => false, hardened: true }),
+      decide: createDecide({
+        matrix: POLICY_FLOOR,
+        capabilities: new Map(caps),
+        budgetExhausted: () => false,
+        hardened: true,
+      }),
       tracer: new SimpleTracer(new JsonlExporter(home)),
       sessions: new SessionStore(home),
       turns,
@@ -482,13 +500,19 @@ describe('one accepted effect → one Job (effect identity)', () => {
       },
       replyChannel: 'cli',
     };
-    const call = { id: 'c1', name: 'schedule_recurring', args: { cron: '0 9 * * *', goal: 'bere acqua' } };
+    const call = {
+      id: 'c1',
+      name: 'schedule_recurring',
+      args: { cron: '0 9 * * *', goal: 'bere acqua' },
+    };
 
     const first = await runTool(deps, snapshot, parent, call, input, [tool], ctx);
-    if (first.type !== 'tool_result') throw new Error(`atteso un tool_result, ricevuto ${first.type}`);
+    if (first.type !== 'tool_result')
+      throw new Error(`atteso un tool_result, ricevuto ${first.type}`);
     expect(first.isError).not.toBe(true);
     const second = await runTool(deps, snapshot, parent, call, input, [tool], ctx);
-    if (second.type !== 'tool_result') throw new Error(`atteso un tool_result, ricevuto ${second.type}`);
+    if (second.type !== 'tool_result')
+      throw new Error(`atteso un tool_result, ricevuto ${second.type}`);
     // Stesso contenuto rigiocato — nessuna seconda esecuzione.
     expect(second.content).toBe(first.content);
     expect(second.isError).toBe(first.isError);
@@ -500,7 +524,11 @@ describe('one accepted effect → one Job (effect identity)', () => {
     const db = new DatabaseCtor(':memory:');
     try {
       const jobs = new JobStore(db);
-      const tool = makeScheduleTool({ jobs, defaultTimezone: 'Europe/Rome', defaultChannel: 'cli' });
+      const tool = makeScheduleTool({
+        jobs,
+        defaultTimezone: 'Europe/Rome',
+        defaultChannel: 'cli',
+      });
       const ctx = toolContext({ sessionId: 'owner' });
       const args = { cron: '0 9 * * *', goal: 'acqua' };
       await tool.handler(args, ctx);

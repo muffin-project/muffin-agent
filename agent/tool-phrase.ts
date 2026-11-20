@@ -133,10 +133,15 @@ function flattenSubject(name: string, args: unknown): string {
   const campo = TOOL_SUBJECT[name];
   if (campo === undefined || args === null || typeof args !== 'object') return '';
   const campi = typeof campo === 'string' ? [campo] : campo;
-  const grezzo = campi.map((c) => (args as Record<string, unknown>)[c]).find((v) => typeof v === 'string' && v !== '');
+  const grezzo = campi
+    .map((c) => (args as Record<string, unknown>)[c])
+    .find((v) => typeof v === 'string' && v !== '');
   if (typeof grezzo !== 'string' || grezzo === '') return '';
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: il modello ha scritto grezzo, i caratteri di controllo vanno tolti prima del terminale
-  const piatto = grezzo.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const piatto = grezzo
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: il modello ha scritto grezzo, i caratteri di controllo vanno tolti prima del terminale
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   if (piatto === '') return '';
   return redactText(piatto);
 }

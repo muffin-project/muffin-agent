@@ -147,7 +147,10 @@ const onceSpec: ToolSpec = {
   inputSchema: {
     type: 'object',
     properties: {
-      goal: { type: 'string', description: "The owner's objective, in their words (max 500 chars)" },
+      goal: {
+        type: 'string',
+        description: "The owner's objective, in their words (max 500 chars)",
+      },
     },
     required: ['goal'],
     additionalProperties: false,
@@ -160,21 +163,24 @@ const onceArgs = z.strictObject({ goal: scheduleArgs.shape.goal }).transform(({ 
   timezone: undefined,
 }));
 
-export function makeScheduleTool(deps: {
-  jobs: JobStore;
-  /** La zona dell'owner dal RoT sigillato — mai quella del processo. */
-  defaultTimezone: string;
-  /**
-   * Dove recapitare quando il turno non ha un canale vivo (CLI in-band).
-   *
-   * Una funzione e non un valore, per la stessa ragione di `CommitmentLaneDeps.channel`:
-   * `surfaces.default` si gira con `muffin surface default` da un altro
-   * processo mentre il gateway resta acceso — un valore letto al boot
-   * obbedirebbe per sempre a un ieri. `config.json` è fuori dal sigillo, una
-   * rilettura non attraversa nessun confine di fiducia.
-   */
-  defaultChannel: string | (() => string);
-}, mode: 'recurring' | 'once' = 'recurring'): RegisteredTool {
+export function makeScheduleTool(
+  deps: {
+    jobs: JobStore;
+    /** La zona dell'owner dal RoT sigillato — mai quella del processo. */
+    defaultTimezone: string;
+    /**
+     * Dove recapitare quando il turno non ha un canale vivo (CLI in-band).
+     *
+     * Una funzione e non un valore, per la stessa ragione di `CommitmentLaneDeps.channel`:
+     * `surfaces.default` si gira con `muffin surface default` da un altro
+     * processo mentre il gateway resta acceso — un valore letto al boot
+     * obbedirebbe per sempre a un ieri. `config.json` è fuori dal sigillo, una
+     * rilettura non attraversa nessun confine di fiducia.
+     */
+    defaultChannel: string | (() => string);
+  },
+  mode: 'recurring' | 'once' = 'recurring',
+): RegisteredTool {
   const once = mode === 'once';
   return {
     capability: scheduleCapability.id,
@@ -236,7 +242,8 @@ export function makeScheduleTool(deps: {
       };
       let job: Job;
       try {
-        job = cron === undefined ? deps.jobs.addOnce(jobInput) : deps.jobs.add({ ...jobInput, cron });
+        job =
+          cron === undefined ? deps.jobs.addOnce(jobInput) : deps.jobs.add({ ...jobInput, cron });
       } catch (error) {
         if (error instanceof JobError) {
           return { content: `promemoria non creato: ${error.message}`, isError: true, tier: CLEAN };
