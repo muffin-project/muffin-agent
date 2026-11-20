@@ -654,7 +654,13 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
           out(`${model.slug} — ${model.displayName}`);
         return 0;
       } catch (error) {
-        out(error instanceof Error ? error.message : 'ChatGPT model catalog unavailable.');
+        const message =
+          error instanceof Error ? error.message : 'ChatGPT model catalog unavailable.';
+        out(
+          message.includes('muffin chatgpt login')
+            ? message
+            : `${message} Run \`muffin chatgpt login\` to reconnect.`,
+        );
         return 1;
       }
     }

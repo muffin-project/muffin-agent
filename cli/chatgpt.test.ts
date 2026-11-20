@@ -35,6 +35,23 @@ const working = (): VerificationResult => ({
 });
 
 describe('ChatGPT account and fixed model command', () => {
+  it('status reports an expired saved session and names login', async () => {
+    const f = fixture();
+    vi.spyOn(f.connection, 'session').mockReturnValue({
+      profileId: 'p',
+      connected: true,
+      usable: false,
+      accessExpired: true,
+      needsLogin: false,
+      scopes: ['offline_access'],
+      expiresAt: 1,
+    });
+    vi.spyOn(f.connection, 'profiles').mockReturnValue([]);
+    expect(await cmdChatGPT(f.home, ['status'], { out: f.sink, connection: f.connection })).toBe(1);
+    const text = f.out.join('\n');
+    expect(text).toContain('expired');
+    expect(text).toContain('muffin chatgpt login');
+  });
   it('requires the public route and dedicated connection reference, rejects router settings', () => {
     const f = fixture();
     const config = loadConfig(f.home);
@@ -128,6 +145,9 @@ describe('ChatGPT account and fixed model command', () => {
     vi.spyOn(f.connection, 'signIn').mockResolvedValue({
       profileId: 'test',
       connected: true,
+      usable: true,
+      accessExpired: false,
+      needsLogin: false,
       scopes: ['chatgpt.tokens.use.direct'],
     });
     expect(
@@ -144,6 +164,9 @@ describe('ChatGPT account and fixed model command', () => {
     const signin = vi.spyOn(f.connection, 'signIn').mockResolvedValue({
       profileId: 'saved',
       connected: true,
+      usable: true,
+      accessExpired: false,
+      needsLogin: false,
       scopes: ['chatgpt.tokens.use.direct'],
     });
     expect(

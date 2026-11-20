@@ -373,7 +373,35 @@ describe('ChatGPT plan OAuth credentials', () => {
       expect(error).toMatchObject({ name: 'Error', message: 'ChatGPT connection failed' });
     }
     expect(String(error)).not.toContain('private OAuth payload');
-    expect(readFileSync(storePath, 'utf8')).toBe(saved);
+    const after = JSON.parse(readFileSync(storePath, 'utf8')) as {
+      profiles: Array<{ tokens: unknown; lastRefresh?: { outcome: string } }>;
+    };
+    const before = JSON.parse(saved) as { profiles: Array<{ tokens: unknown }> };
+    expect(after.profiles[0]?.tokens).toEqual(before.profiles[0]?.tokens);
+    expect(JSON.stringify(after)).not.toContain('private OAuth payload');
+    if (reauthenticate) {
+      expect(after.profiles[0]?.lastRefresh?.outcome).toBe('reauth');
+      expect(connection.session()).toMatchObject({
+        connected: true,
+        usable: false,
+        needsLogin: true,
+      });
+    }
+  });
+
+  it('an expired access token is saved but not usable', async () => {
+    const path = home();
+    const connection = new ChatGPTConnection(path, { fetch: fakeFetch().fetchImpl });
+    await signIn(connection);
+    const storePath = join(path, 'secrets', 'chatgpt');
+    const saved = JSON.parse(readFileSync(storePath, 'utf8')) as {
+      profiles: Array<{ tokens: { expiresAt: number } }>;
+    };
+    saved.profiles[0]!.tokens.expiresAt = Date.now() - 60_000;
+    writeFileSync(storePath, `${JSON.stringify(saved)}\n`, { mode: 0o600 });
+    const session = connection.session();
+    expect(session).toMatchObject({ connected: true, usable: false, accessExpired: true });
+    // Removing the expiry comparison in safeSession leaves usable true and this fails.
   });
 
   it('serializes independent refresh callers and checkpoints the rotating token set', async () => {

@@ -57,6 +57,55 @@ import { runInit } from './init.js';
  * default install, and the owner has no other way to learn which one answered.
  */
 
+it('ChatGPT doctor does not call an expired saved token connected', async () => {
+  const dir = home();
+  const config = loadConfig(dir);
+  saveConfig(
+    {
+      ...config,
+      provider: {
+        kind: 'openai-chatgpt',
+        baseUrl: 'https://api.openai.com/v1',
+        apiKeyRef: 'secret://chatgpt',
+      },
+    },
+    dir,
+  );
+  const file = join(dir, 'secrets', 'chatgpt');
+  writeFileSync(
+    file,
+    `${JSON.stringify({
+      version: 1,
+      hostId: 'urn:uuid:00000000-0000-4000-8000-000000000001',
+      activeProfileId: 'p1',
+      profiles: [
+        {
+          id: 'p1',
+          clientId: 'client',
+          subject: 'subject-1',
+          tokens: {
+            accessToken: 'access',
+            refreshToken: 'refresh',
+            idToken: 'id',
+            tokenType: 'Bearer',
+            scopes: ['chatgpt.tokens.use.direct', 'offline_access', 'resource.invoke'],
+            receivedAt: 1,
+            idTokenReceivedAt: 1,
+            expiresAt: 1,
+            pendingIdentity: false,
+          },
+        },
+      ],
+    })}\n`,
+    { mode: 0o600 },
+  );
+  const c = await check(dir, 'ChatGPT');
+  expect(c?.level).toBe('fail');
+  expect(c?.detail).toContain('expired');
+  expect(c?.remedy).toBe('muffin chatgpt login');
+  rmSync(dir, { recursive: true, force: true });
+});
+
 function home(): string {
   const dir = mkdtempSync(join(tmpdir(), 'muffin-doctor-'));
   // The persistent secret store defaults to the *real* `~/.config`, so without

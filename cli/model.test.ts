@@ -528,6 +528,9 @@ describe('muffin model', () => {
     vi.spyOn(connection, 'signIn').mockResolvedValue({
       profileId: 'synthetic-profile',
       connected: true,
+      usable: true,
+      accessExpired: false,
+      needsLogin: false,
       scopes: ['chatgpt.tokens.use.direct'],
     });
     vi.spyOn(connection, 'listModels').mockResolvedValue([

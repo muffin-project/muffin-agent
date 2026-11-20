@@ -74,6 +74,8 @@ type TokenSet = {
   pendingIdentity: boolean;
 };
 
+type RefreshOutcome = 'ok' | 'reauth' | 'failed';
+
 type Profile = {
   id: string;
   clientId: string;
@@ -82,6 +84,8 @@ type Profile = {
   pendingSignIn?: { nonce: string; tokens: TokenSet };
   email?: string;
   tokens: TokenSet | null;
+  /** Non-secret result of the last refresh. Tokens themselves stay in `tokens`. */
+  lastRefresh?: { at: number; outcome: RefreshOutcome };
 };
 
 type Store = {
@@ -94,7 +98,13 @@ type Store = {
 export type ChatGPTSession = {
   profileId: string;
   email?: string;
+  /** A saved grant with the required scopes. This is not proof the access token still works. */
   connected: boolean;
+  /** False when the access token is expired or the last refresh was refused. */
+  usable: boolean;
+  accessExpired: boolean;
+  needsLogin: boolean;
+  refreshOutcome?: RefreshOutcome;
   scopes: string[];
   expiresAt?: number;
 };
@@ -275,17 +285,28 @@ function isStore(value: unknown): value is Store {
   );
 }
 
-function safeSession(profile: Profile, active = false): ChatGPTProfile {
+function safeSession(profile: Profile, active = false, now = Date.now()): ChatGPTProfile {
   const scopes = profile.tokens?.scopes ?? [];
+  const connected =
+    profile.tokens !== null &&
+    !profile.tokens.pendingIdentity &&
+    profile.subject.length > 0 &&
+    profile.tokens.tokenType === 'Bearer' &&
+    hasRequiredScopes(scopes);
+  const expiresAt = profile.tokens?.expiresAt;
+  const accessExpired =
+    !profile.tokens ||
+    !Number.isFinite(expiresAt) ||
+    (expiresAt as number) <= now + ACCESS_REFRESH_SKEW_MS;
+  const needsLogin = profile.lastRefresh?.outcome === 'reauth';
   return {
     profileId: profile.id,
     ...(profile.email ? { email: profile.email } : {}),
-    connected:
-      profile.tokens !== null &&
-      !profile.tokens.pendingIdentity &&
-      profile.subject.length > 0 &&
-      profile.tokens.tokenType === 'Bearer' &&
-      hasRequiredScopes(scopes),
+    connected,
+    usable: connected && !accessExpired && !needsLogin,
+    accessExpired,
+    needsLogin,
+    ...(profile.lastRefresh ? { refreshOutcome: profile.lastRefresh.outcome } : {}),
     scopes: [...scopes],
     ...(profile.tokens ? { expiresAt: profile.tokens.expiresAt } : {}),
     active,
@@ -580,15 +601,28 @@ export class ChatGPTConnection {
       ) {
         return profile.tokens.accessToken;
       }
-      const token = await this.exchange(
-        {
-          grant_type: 'refresh_token',
-          client_id: profile.clientId,
-          refresh_token: profile.tokens.refreshToken,
-          resource: RESOURCE,
-        },
-        signal,
-      );
+      let token: Record<string, unknown>;
+      try {
+        token = await this.exchange(
+          {
+            grant_type: 'refresh_token',
+            client_id: profile.clientId,
+            refresh_token: profile.tokens.refreshToken,
+            resource: RESOURCE,
+          },
+          signal,
+        );
+      } catch (error) {
+        profile.lastRefresh = {
+          at: Date.now(),
+          outcome: error instanceof ChatGPTReauthenticationRequired ? 'reauth' : 'failed',
+        };
+        this.writeStore(store);
+        if (error instanceof ChatGPTReauthenticationRequired) {
+          process.stderr.write('ChatGPT refresh refused; run `muffin chatgpt login`\n');
+        }
+        throw error;
+      }
       const receivedAt = Date.now();
       const rotated = {
         receivedAt,
@@ -612,6 +646,7 @@ export class ChatGPTConnection {
       // A refresh token may be single-use: checkpoint every rotated field before
       // any identity/JWKS validation that can fail, and never retry the old token.
       profile.tokens = rotated;
+      profile.lastRefresh = { at: receivedAt, outcome: 'ok' };
       if (safeString(token.id_token)) delete profile.pendingNonce;
       this.writeStore(store);
       if (
