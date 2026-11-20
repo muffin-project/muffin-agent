@@ -1,5 +1,8 @@
 import OpenAI, { APIConnectionError, APIError } from 'openai';
-import type { ChatGPTModel } from '../../core/config/chatgpt-oauth.js';
+import {
+  type ChatGPTModel,
+  ChatGPTReauthenticationRequired,
+} from '../../core/config/chatgpt-oauth.js';
 import { isThinkingEffort } from '../../core/config/thinking.js';
 import { compileForOpenAI } from './compile.js';
 import {
@@ -82,11 +85,12 @@ export class OpenAIChatGPTProvider implements Provider {
     let model: ChatGPTModel | undefined;
     try {
       model = await this.findModel(call.model, call.signal);
-    } catch {
+    } catch (error) {
       if (call.signal?.aborted)
         throw new ProviderError('aborted', false, undefined, 'transport', undefined, false, {
           receivedAnyEvent: false,
         });
+      if (error instanceof ChatGPTReauthenticationRequired) throw reauthenticationError(error);
       return {
         requested: request,
         status: 'unsupported',
@@ -177,11 +181,12 @@ export class OpenAIChatGPTProvider implements Provider {
     let accessToken: string;
     try {
       accessToken = await this.connection.accessToken(call.signal);
-    } catch {
+    } catch (error) {
       if (call.signal?.aborted)
         throw new ProviderError('aborted', false, undefined, 'transport', undefined, false, {
           receivedAnyEvent: false,
         });
+      if (error instanceof ChatGPTReauthenticationRequired) throw reauthenticationError(error);
       // Credential acquisition is not an inference-stream failure. Preserve
       // its non-retryable boundary without exposing OAuth error details.
       throw new ProviderError('ChatGPT access token unavailable', false);
@@ -374,6 +379,12 @@ export class OpenAIChatGPTProvider implements Provider {
         : {}),
     };
   }
+}
+
+function reauthenticationError(error: ChatGPTReauthenticationRequired): ProviderError {
+  return new ProviderError(error.message, false, undefined, 'transport', undefined, false, {
+    reauthentication: 'chatgpt',
+  });
 }
 
 function textOnly(block: ContentBlock, label: string): string {
