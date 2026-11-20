@@ -1,7 +1,9 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { runInit } from '../../cli/init.js';
+import { buildRuntime } from '../runtime.js';
 import { loadProfiles, selectProfile } from './profile.js';
 
 /**
@@ -30,28 +32,38 @@ describe('shipped profiles', () => {
     ]);
   });
 
-  it('the pinned GPT-6 plan model uses legal default reasoning without overriding owner controls', () => {
-    expect(selectProfile('gpt-6.1-sol', profiles).thinking).toBe('adaptive');
+  const frontierDefaults = { name: 'frontier', thinking: 'adaptive', sampling: 'model-default' };
+
+  it.each([
+    ['gpt-6-sol', frontierDefaults],
+    ['gpt-6-mini', frontierDefaults],
+    ['gpt-6.1', frontierDefaults],
+    ['gpt-6.1-sol', frontierDefaults],
+    ['gpt-6.1-terra', frontierDefaults],
+    ['gpt-6.2-sol', frontierDefaults],
+    ['gpt-6.2-astra', frontierDefaults],
+    ['gpt-6', { name: 'conservative' }],
+    ['gpt-60b-local', { name: 'conservative' }],
+    ['gpt-6x', { name: 'conservative' }],
+    ['gpt-oss-120b', { name: 'consumer-local' }],
+  ])('selects the shipped profile or fallback for %s in the runtime', (id, expected) => {
+    const root = mkdtempSync(join(tmpdir(), 'muffin-profile-selection-'));
+    const home = join(root, 'home');
+    const workspace = join(root, 'workspace');
+    try {
+      mkdirSync(workspace);
+      runInit({ home, mainModel: id, apiKey: 'unused-test-key' });
+      const runtime = buildRuntime(home, workspace);
+      try {
+        expect(runtime.deps.profile).toMatchObject(expected);
+      } finally {
+        runtime.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
-  it('a dotted GPT-6 minor stays on frontier instead of the conservative floor', () => {
-    // `gpt-6-*` does not match `gpt-6.2-sol`: the dot is not the hyphen.
-    // Observed 2026-11-21 on the owner install: doctor said
-    // `gpt-6.2-sol -> conservative · nessun profilo matcha`.
-    for (const id of [
-      'gpt-6-sol',
-      'gpt-6.1-sol',
-      'gpt-6.1-terra',
-      'gpt-6.2-sol',
-      'gpt-6.2-astra',
-    ]) {
-      const profile = selectProfile(id, profiles);
-      expect(profile.name, id).toBe('frontier');
-      expect(profile.thinking, id).toBe('adaptive');
-      expect(profile.sampling, id).toBe('model-default');
-    }
-    expect(selectProfile('gpt-oss-120b', profiles).name).toBe('consumer-local');
-  });
   it('frontier: a nudge and one retry, in that order', () => {
     const frontier = profiles.find((p) => p.name === 'frontier');
     expect(frontier?.recovery).toEqual(['nudge', 'retryOnce']);
