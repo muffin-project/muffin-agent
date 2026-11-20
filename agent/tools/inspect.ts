@@ -203,10 +203,9 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
             ? ' · conservativo (nessun profilo matcha)'
             : ` · ${profileSource.origin} (${profileSource.file.split('/').pop()})`;
       const [report, build] = await Promise.all([sources.doctor(), sources.build()]);
-      // Same authority filter and same #469 projection as the live loop.
-      // Under the cap capability_search disappears entirely (ordinary fast
-      // path). Under pressure the cap bounds only the currently loaded schemas:
-      // the remaining authorized tools stay reachable through discovery.
+      // Same authority filter and same projection as the live loop.
+      // Tools outside the core are not in the first schema list; they load
+      // through capability_search. There is no numeric exposure cap.
       const filtrati = visibleTools(
         [...sources.tools],
         principal,
@@ -216,7 +215,6 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
       const discoveryTool = filtrati.find((tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME);
       const initialProjection = createCapabilityExposure({
         eligible: filtrati,
-        maxToolsExposed: profile.maxToolsExposed,
         ...(discoveryTool === undefined ? {} : { discoveryTool }),
       });
       const exposure = ctx.capabilityDiscovery?.snapshot() ?? {
@@ -245,7 +243,7 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
         `cartella di lavoro: ${sources.workspace}`,
         // Il profilo non è cosmetico: decide quanti tool vede il modello e se
         // il reasoning viene chiesto spento (#167).
-        `profilo: ${profile.name}${profiloOrigine} — max ${profile.maxToolsExposed} tool esposti, ${profile.maxToolCallsPerTurn === null ? 'nessun tetto numerico di tool call' : `${profile.maxToolCallsPerTurn} call/turno`}, thinking ${profile.thinking}`,
+        `profilo: ${profile.name}${profiloOrigine} — tool caricati per pertinenza, ${profile.maxToolCallsPerTurn === null ? 'nessun tetto numerico di tool call' : `${profile.maxToolCallsPerTurn} call/turno`}, thinking ${profile.thinking}`,
         `root of trust: ${sources.safeMode ? `SAFE MODE (${sources.safeMode.reason}: ${sources.safeMode.diverged.join(', ')}) — capability sopra 'low' negate` : `${sources.config.rot.mode}, integro`}`,
         ...(sources.judgment === undefined
           ? []
@@ -272,7 +270,7 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
           ? ''
           : `  (${sources.tools.length - filtrati.length} registrate ma non esposte a questo principal)`,
         exposure.pressured
-          ? `  (catalogo discoverable: ${exposure.hiddenCount} tool autorizzati non-core; maxToolsExposed limita gli schema caricati, non la raggiungibilità)`
+          ? `  (catalogo discoverable: ${exposure.hiddenCount} tool autorizzati non nel nucleo; si caricano con capability_search)`
           : '',
         '',
         // Distinto da quanto sopra apposta: qui non è «non visto da questo
