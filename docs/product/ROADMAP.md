@@ -39,7 +39,7 @@ The phase list is when a deferred idea is reconsidered. The version train below 
 
 ## Version train
 
-Versions name general capabilities: talk, remember, wake, execute on a computer, connect to a service, reuse a method, change this repository, stay with an open loop. A home-lab task, a calendar, or a named model provider is a scene or a configuration, not a version of its own. Use cases show up when the capability exists.
+Versions name general capabilities: talk, remember, wake, execute on a computer, connect to a service, reuse a method, change this repository, stay with an open loop. A home-lab task, a calendar, or a named model provider is a scene or a configuration, not a version of its own. Use cases show up when the capability exists. Owner decision, 2026-11-21: a Muffin app catalogue is not part of this train.
 
 Capabilities already on `dev` are not re-specified here. The exit is an observation, and a fixture PASS is not a live PASS.
 
@@ -111,9 +111,9 @@ Capabilities already on `dev` are not re-specified here. The exit is an observat
 
 **In.** Bounded coding Work (#668) whose first proof is one pull request to muffin-agent (#970, sub-issue of #668). The required checks are the repository ruleset. A CRITICAL claim still needs an independent MERGE verdict.
 
-**Out.** Self-merge, weakening branch protection, and authority, privacy, or durable-data changes. Those wait on [#972](https://github.com/muffin-project/muffin-agent/issues/972) D4. Governed edits to persona (#667) are a different act and are not part of v4.
+**Out.** Self-merge of a CRITICAL claim, weakening branch protection, and authority, privacy, or durable-data changes. Governed edits to persona (#667) are a different act and are not part of v4.
 
-**Exit.** One pull request from a Muffin run, with profile and falsifier written down, and the required checks green. The merge is not the exit until D4 is decided.
+**Exit.** One pull request from a Muffin run, with profile and falsifier written down, and the required checks green. Owner decision D4, 2026-11-21: Muffin may merge that pull request to `dev` when those checks are green and the profile is not CRITICAL. `main`, a CRITICAL claim, and any change to authority, privacy, or the owner's durable data stay with the owner.
 
 **Depends on.** v2 for a computer that can edit and test the tree. Not on a GitHub-named product tool.
 
@@ -133,11 +133,21 @@ Capabilities already on `dev` are not re-specified here. The exit is an observat
 
 **Risk.** Notification fatigue. Elapsed time is not a reason to interrupt; a heartbeat fails the exit.
 
-### Decisions that stay with the owner
+### Decisions from the owner, 2026-11-21
 
-[#972](https://github.com/muffin-project/muffin-agent/issues/972) is the only issue for these. They are not authorized by being written here, and they are not split into implementation issues.
+[#972](https://github.com/muffin-project/muffin-agent/issues/972) collected these. Comments on that issue are blocked for this integration (HTTP 403), so this section is the record. Nothing here was applied by being written, except where a decision says the implementation is authorized.
 
-The proposals are: one operating prompt instead of `WORK_RULES` plus `WORK_RULES_V2`; not treating the hand-counted tool cap as the design; a fence before Telegram-originated work can write another computer; merge rights for v4; and keeping #914, #915, and #924/#925 out of the version train. Root of trust, the effect journal, and owner approval are not on that list.
+**D1, still open.** `WORK_RULES` and `WORK_RULES_V2` both stay. The recommendation, not a decision: keep v2 as the single operating text. v1 is the default and does not state what to do on failure, uncertainty, or when to stop; v2 does, and those rules are the ones the assembler cites as measured. No character eval shows that v2 is the better voice. Do not delete either copy until the owner chooses.
+
+**D2, decided.** The numeric tool cap is not the design. Authorized, installed tools are reached by selective load: a small core stays visible, and the rest load when the task needs them. An authorized tool is not dropped because of registration order or a count. #469 is that reachability. The October challenge already rejected raising the count and rejected dumping every schema into every turn.
+
+**D3, still open.** A Telegram message must not gain a write on another computer as a side effect. No such write is enabled. The recommendation, not a decision: a write on a paired computer is an owner approval of that effect (machine, path, action), shown with the ingress taint, and it does not become a standing grant. A different path asks again. Proof, when implemented: a tainted fixture is denied until that approval exists, and removing the check fails the fixture.
+
+**D4, decided.** Muffin may merge to `dev` when the required checks are green and the verification profile is not CRITICAL. `main`, a CRITICAL claim, and changes to authority, privacy, or the owner's durable data stay with the owner.
+
+**D5, decided.** #914, #915, #924 and #925 are not in this train. Closing them from this integration returned HTTP 403, so they stay open until a token that can close a pull request does it, with a pointer back here and to #972.
+
+Root of trust, the effect journal, and owner approval are not on this list.
 
 ## Phase placement
 
