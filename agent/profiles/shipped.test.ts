@@ -33,6 +33,19 @@ describe('shipped profiles', () => {
   it('the pinned GPT-6 plan model uses legal default reasoning without overriding owner controls', () => {
     expect(selectProfile('gpt-6.1-sol', profiles).thinking).toBe('adaptive');
   });
+
+  it('a dotted GPT-6 minor stays on frontier instead of the conservative floor', () => {
+    // `gpt-6-*` does not match `gpt-6.2-sol`: the dot is not the hyphen.
+    // Observed 2026-11-21 on the owner install: doctor said
+    // `gpt-6.2-sol -> conservative · nessun profilo matcha`.
+    for (const id of ['gpt-6-sol', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6.2-sol', 'gpt-6.2-astra']) {
+      const profile = selectProfile(id, profiles);
+      expect(profile.name, id).toBe('frontier');
+      expect(profile.thinking, id).toBe('adaptive');
+      expect(profile.sampling, id).toBe('model-default');
+    }
+    expect(selectProfile('gpt-oss-120b', profiles).name).toBe('consumer-local');
+  });
   it('frontier: a nudge and one retry, in that order', () => {
     const frontier = profiles.find((p) => p.name === 'frontier');
     expect(frontier?.recovery).toEqual(['nudge', 'retryOnce']);
