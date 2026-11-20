@@ -524,6 +524,8 @@ export type ProviderErrorSource = 'transport' | 'output';
 export type ProviderErrorDetails = {
   /** An account quota that requires user action before another attempt. */
   quota?: 'chatgpt-plan';
+  /** The provider confirmed that a fresh owner sign-in is required. */
+  reauthentication?: 'chatgpt';
   /** Upstream generation/request id, when the provider exposed one. */
   requestId?: string;
   /** Concrete upstream that served the call (e.g. OpenRouter `provider`), when known. */

@@ -11,6 +11,7 @@ import { compactToolResults } from '../context/compact.js';
 import { type RecoveryFailure, recoveryStep } from '../profiles/recovery.js';
 import {
   ReasoningConfigurationError,
+  type ReasoningResolution,
   reasoningFromLegacyThinking,
 } from '../providers/reasoning.js';
 import {
@@ -618,29 +619,6 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       },
       turn,
     );
-    const reasoningResolution = await deps.provider.resolveReasoning?.(call);
-    if (reasoningResolution !== undefined) {
-      chatSpan.setAttributes({
-        'muffin.chat_call.reasoning_capability_source': reasoningResolution.capabilitySource,
-        'muffin.chat_call.reasoning_effective_mode':
-          reasoningResolution.effective?.mode ?? 'omitted',
-        ...(reasoningResolution.effective?.effort === undefined
-          ? {}
-          : {
-              'muffin.chat_call.reasoning_effective_effort': reasoningResolution.effective.effort,
-            }),
-        ...(reasoningResolution.effective?.maxTokens === undefined
-          ? {}
-          : {
-              'muffin.chat_call.reasoning_effective_max_tokens':
-                reasoningResolution.effective.maxTokens,
-            }),
-        'muffin.chat_call.reasoning_constraint_degraded': reasoningResolution.status !== 'applied',
-        ...(reasoningResolution.reason === undefined
-          ? {}
-          : { 'muffin.chat_call.reasoning_resolution_reason': reasoningResolution.reason }),
-      });
-    }
     // `chatSpan`'s own clock is not readable back from `SpanHandle` (it only
     // exposes `setAttributes`/`end`), so `ms` for the `model` progress event
     // below is timed here, at the same call site that starts the span it
@@ -720,7 +698,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
      * request that never finished, so what the surface already showed of it
      * is closed as `'superseded'` before the replacement starts arriving.
      */
-    const invoke = async (stream: boolean): Promise<ChatResult> => {
+    const invoke = async (
+      stream: boolean,
+      reasoningResolution: ReasoningResolution | undefined,
+    ): Promise<ChatResult> => {
       const lease = execution.beginModelCall(input.signal, (progress) => {
         input.onProgress?.({ type: 'model_status', ...progress });
       });
@@ -765,10 +746,12 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       }
     };
 
-    const requestChatResult = async (): Promise<ChatResult> => {
-      if (!call.stream || !deps.provider.chatStream) return invoke(false);
+    const requestChatResult = async (
+      reasoningResolution: ReasoningResolution | undefined,
+    ): Promise<ChatResult> => {
+      if (!call.stream || !deps.provider.chatStream) return invoke(false, reasoningResolution);
       try {
-        return await invoke(true);
+        return await invoke(true, reasoningResolution);
       } catch (error) {
         if (!(error instanceof ProviderStreamError)) throw error;
         closeLive('superseded');
@@ -776,13 +759,37 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
           'muffin.stream.fell_back_to_non_stream': true,
           'muffin.stream.partial': error.partial,
         });
-        return invoke(false);
+        return invoke(false, reasoningResolution);
       }
     };
 
     let result: ChatResult;
     try {
-      result = await requestChatResult();
+      const reasoningResolution = await deps.provider.resolveReasoning?.(call);
+      if (reasoningResolution !== undefined) {
+        chatSpan.setAttributes({
+          'muffin.chat_call.reasoning_capability_source': reasoningResolution.capabilitySource,
+          'muffin.chat_call.reasoning_effective_mode':
+            reasoningResolution.effective?.mode ?? 'omitted',
+          ...(reasoningResolution.effective?.effort === undefined
+            ? {}
+            : {
+                'muffin.chat_call.reasoning_effective_effort': reasoningResolution.effective.effort,
+              }),
+          ...(reasoningResolution.effective?.maxTokens === undefined
+            ? {}
+            : {
+                'muffin.chat_call.reasoning_effective_max_tokens':
+                  reasoningResolution.effective.maxTokens,
+              }),
+          'muffin.chat_call.reasoning_constraint_degraded':
+            reasoningResolution.status !== 'applied',
+          ...(reasoningResolution.reason === undefined
+            ? {}
+            : { 'muffin.chat_call.reasoning_resolution_reason': reasoningResolution.reason }),
+        });
+      }
+      result = await requestChatResult(reasoningResolution);
     } catch (error) {
       const abortReason = lastAbortReason;
       chatSpan.setAttributes({

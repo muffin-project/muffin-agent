@@ -80,6 +80,7 @@ export async function cmdChatGPT(
       }
       out(JSON.stringify(await connection.session()));
       for (const profile of await connection.profiles()) out(JSON.stringify(profile));
+      out('Status shows saved authorization. Run `muffin chatgpt models` to check access.');
       out(`Manage usage: ${CHATGPT_USAGE_URL}`);
       return 0;
     }
