@@ -143,58 +143,44 @@ function takeCore<T extends CapabilityTool>(
  * Build one turn's model-visible tool projection from an already authority-
  * filtered catalogue.
  *
- * Under the cap, the old fast path is byte-for-byte in the same order and no
- * discovery schema is added. Under pressure, a small retrieval kernel stays
- * visible, capability_search occupies one slot, and the remaining slots are a
- * replaceable task-local projection loaded by deterministic lexical search.
+ * There is no numeric cap. Tools named in the core stay visible. Every other
+ * eligible tool stays reachable: when a discovery tool exists it is not in
+ * the first schema list and loads by deterministic lexical search; when
+ * discovery is absent the eligible catalogue is shown whole, because a
+ * missing search door must not hide an authorized tool.
  *
  * eligible must already be principal/grant filtered. Execution remains on the
  * normal tool path and therefore gets the kernel's full policy re-check.
  */
 export function createCapabilityExposure<T extends CapabilityTool>(input: {
   readonly eligible: readonly T[];
-  readonly maxToolsExposed: number;
   readonly discoveryTool?: T | undefined;
   readonly coreNames?: readonly string[] | undefined;
 }): CapabilityExposure<T> {
-  const max = input.maxToolsExposed;
-  if (!Number.isInteger(max) || max <= 0) {
-    throw new Error('maxToolsExposed must be a positive integer');
-  }
-
   const discoveryName = input.discoveryTool?.spec.name;
   const catalog =
     discoveryName === undefined
       ? [...input.eligible]
       : input.eligible.filter((tool) => tool.spec.name !== discoveryName);
 
-  if (catalog.length <= max) {
+  const preferred = input.coreNames ?? DEFAULT_CORE_TOOL_NAMES;
+  const core = takeCore(catalog, preferred.length, preferred).filter((tool) =>
+    preferred.includes(tool.spec.name),
+  );
+  const coreNames = new Set(core.map((tool) => tool.spec.name));
+  const searchable = catalog.filter((tool) => !coreNames.has(tool.spec.name));
+
+  if (searchable.length === 0 || input.discoveryTool === undefined) {
     return {
       exposed: [...catalog],
       pressured: false,
       hiddenCount: 0,
     };
   }
-
-  if (input.discoveryTool === undefined) {
-    throw new Error(
-      'capability_search is required when the authorized catalogue exceeds maxToolsExposed',
-    );
-  }
   const discoveryTool = input.discoveryTool;
 
-  const preferred = input.coreNames ?? DEFAULT_CORE_TOOL_NAMES;
-  // Reserve one slot for discovery and, where possible, at least one slot for
-  // a task-local schema. Five is only the preferred maximum core, never a
-  // reason to violate the profile ceiling.
-  const coreTarget =
-    max === 1 ? 0 : Math.min(preferred.length, catalog.length, Math.max(0, max - 2));
-  const core = takeCore(catalog, coreTarget, preferred);
   const fixed = [...core, discoveryTool];
   const exposed = [...fixed];
-  const coreNames = new Set(core.map((tool) => tool.spec.name));
-  const searchable = catalog.filter((tool) => !coreNames.has(tool.spec.name));
-  const dynamicCapacity = Math.max(0, max - fixed.length);
 
   let pending: T[] | null = null;
 
@@ -206,21 +192,8 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
         .filter((row) => row.score > 0)
         .sort((left, right) => right.score - left.score || left.index - right.index);
 
-      const matches = ranked.slice(0, limit);
-      const selected =
-        max === 1
-          ? matches.slice(0, 1).map((row) => row.tool)
-          : matches.slice(0, dynamicCapacity).map((row) => row.tool);
-
-      if (max === 1) {
-        // With a one-schema custom profile the search door temporarily swaps
-        // with the selected schema. On a miss it stays in place, but a miss is
-        // still reported as a miss rather than pretending discovery loaded
-        // itself.
-        pending = selected.length > 0 ? selected : [discoveryTool];
-      } else {
-        pending = selected;
-      }
+      const selected = ranked.slice(0, limit).map((row) => row.tool);
+      pending = selected;
 
       const loaded = selected.map((tool) => ({
         name: tool.spec.name,
@@ -236,12 +209,8 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
 
     activatePending() {
       if (pending === null) return;
-      if (max === 1) {
-        exposed.splice(0, exposed.length, ...pending);
-      } else {
-        exposed.splice(fixed.length);
-        exposed.push(...pending);
-      }
+      exposed.splice(fixed.length);
+      exposed.push(...pending);
       pending = null;
     },
 
@@ -267,8 +236,8 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
  * round from the task text. This is the provider-neutral fallback for models
  * that do not reliably decide to invoke the discovery meta-tool themselves.
  *
- * The search door remains visible (except on the intentionally tiny one-slot
- * profile), so a later need can still replace the task-local selection.
+ * The search door remains visible, so a later need can still replace the
+ * task-local selection.
  */
 export function preloadCapabilitiesForTask<T extends CapabilityTool>(
   exposure: CapabilityExposure<T>,

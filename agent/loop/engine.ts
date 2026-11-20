@@ -423,13 +423,11 @@ async function runClaimedTurn(
   );
   const capabilityExposure = createCapabilityExposure({
     eligible: eligibleTools,
-    maxToolsExposed: deps.profile.maxToolsExposed,
     ...(discoveryTool === undefined ? {} : { discoveryTool }),
   });
-  const preloaded =
-    capabilityExposure.pressured && deps.profile.maxToolsExposed > 1
-      ? preloadCapabilitiesForTask(capabilityExposure, input.text, 2)
-      : null;
+  const preloaded = capabilityExposure.pressured
+    ? preloadCapabilitiesForTask(capabilityExposure, input.text, 2)
+    : null;
   const exposed = capabilityExposure.exposed;
   turn.setAttributes({
     'muffin.context.class': turnClass,
