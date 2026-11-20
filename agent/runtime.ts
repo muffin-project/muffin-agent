@@ -372,6 +372,7 @@ export function baseToolOrder(input: {
     'wait',
     'todo',
     'schedule_recurring',
+    'schedule_once',
     'sys_inspect',
   ];
 }
@@ -1013,19 +1014,17 @@ export function buildRuntime(
   // «cosa hai fatto oggi» chiesto al gateway (launchd/systemd, `TZ` del
   // supervisore) risponderebbe su una giornata diversa da quella che
   // `muffin effects` stampa sul terminale dell'owner.
+  const scheduleToolDeps = {
+    jobs,
+    defaultTimezone: budgets.quietHours.timezone,
+    defaultChannel: () => readDefaultChannel(home, config.surfaces.default),
+  };
   tools.push(
     makeWaitTool(turns),
     makeTodoTool(todos),
     makeEffectsTool(turns, budgets.quietHours.timezone),
-    // La porta conversazionale sui job ricorrenti («ricordamelo ogni giorno
-    // alle 9»): valida e persiste sullo stesso `JobStore` della CLI, con la
-    // provenance del turno che ha chiesto. È una primitive del runtime; quando
-    // non è nella proiezione iniziale resta caricabile via capability_search.
-    makeScheduleTool({
-      jobs,
-      defaultTimezone: budgets.quietHours.timezone,
-      defaultChannel: () => readDefaultChannel(home, config.surfaces.default),
-    }),
+    makeScheduleTool(scheduleToolDeps),
+    makeScheduleTool(scheduleToolDeps, 'once'),
   );
 
   const capabilities = new Map<string, CapabilityDecl>(
