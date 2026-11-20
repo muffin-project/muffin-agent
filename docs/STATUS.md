@@ -26,9 +26,10 @@ Current work is observed from Git/GitHub, with `scripts/agent/repo-state.mjs`
 providing a deterministic fresh-session summary. Dated plans are historical.
 The curated front door — selected initiatives with their Now / Next / Later /
 Exploring horizon and work status — is the
-[Muffin roadmap project](https://github.com/orgs/muffin-project/projects/2);
-phase horizons and deferrals remain in
-[product/ROADMAP.md](product/ROADMAP.md).
+[Muffin roadmap project](https://github.com/orgs/muffin-project/projects/2).
+Version scope and exit criteria are
+[product/ROADMAP.md](product/ROADMAP.md); version membership is the milestone
+and issues that section names, not a second copy in this file.
 
 ## Supported surfaces
 

@@ -60,6 +60,13 @@ Likewise, a conversation Muffin says it will follow should not evaporate because
 a session ended. Work state exists partly to **close loops**, not merely to make
 crash recovery possible.
 
+Owner direction, 2026-11-20: that presence is also how Muffin does the owner's
+real infrastructure work, and later how Muffin proposes changes to its own
+code. Both are uses of general capabilities (a computer, a connection, a
+learned method, a gated change), not named products. What each version
+includes and what still needs the owner is `ROADMAP.md`. This page does not
+repeat those boundaries.
+
 ## Human-first means augmentation, not cognitive theatre
 
 Muffin should make the owner **more capable without making the owner less

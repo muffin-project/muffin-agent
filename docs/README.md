@@ -51,6 +51,7 @@ unused manifest would be another source of drift.
 | Where is the product trying to go? | `docs/product/VISION.md` |
 | What is the MVP, what proves it, and what is explicitly out? | `docs/product/MVP.md` |
 | Which cognitive/human hypotheses is Muffin exploring, with what evidence status and kill criteria? | `docs/product/COGNITIVE-DESIGN.md` |
+| What does each product version include, exclude, and accept as done? Live membership is the GitHub milestone and its issues, not a second copy of status. | `docs/product/ROADMAP.md` |
 | In which phase should a deliberately deferred capability be reconsidered? | `docs/product/ROADMAP.md` |
 | How is Muffin shaped now? | `docs/architecture/ARCHITECTURE.md` |
 | What security boundary does Muffin claim now? | `docs/architecture/SECURITY.md` |
