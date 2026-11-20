@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { ChatGPTModel } from '../../core/config/chatgpt-oauth.js';
+import {
+  type ChatGPTModel,
+  ChatGPTReauthenticationRequired,
+} from '../../core/config/chatgpt-oauth.js';
 import { OpenAIChatGPTProvider } from './openai-chatgpt.js';
 import { type ChatCall, ProviderError } from './types.js';
 
@@ -120,6 +123,37 @@ describe('OpenAI ChatGPT plan Responses provider', () => {
     expect(requests).toBe(0);
     expect(String(error)).not.toContain('private credential detail');
   });
+
+  it.each(['adaptive', 'exact'] as const)(
+    'preserves the reauthentication requirement for %s reasoning',
+    async (mode) => {
+      const provider = new OpenAIChatGPTProvider(
+        {
+          accessToken: async () => {
+            throw new ChatGPTReauthenticationRequired();
+          },
+          listModels: async () => {
+            throw new ChatGPTReauthenticationRequired();
+          },
+        },
+        {
+          fetch: async () => {
+            throw new Error('Responses must not be contacted');
+          },
+        },
+      );
+      await expect(
+        provider.chat({
+          ...CALL,
+          reasoning: mode === 'adaptive' ? { mode } : { mode: 'on', effort: 'low' },
+        }),
+      ).rejects.toMatchObject({
+        name: 'ProviderError',
+        retryable: false,
+        details: { reauthentication: 'chatgpt' },
+      });
+    },
+  );
 
   it.each([401, 403, 400])('does not make HTTP %s retryable', async (status) => {
     const provider = new OpenAIChatGPTProvider(

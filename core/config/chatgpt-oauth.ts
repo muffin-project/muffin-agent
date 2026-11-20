@@ -55,6 +55,13 @@ const SAFE_ERROR = 'ChatGPT connection failed';
 const NETWORK_TIMEOUT_MS = 10_000;
 const SIGN_IN_TIMEOUT_MS = 10 * 60_000;
 
+export class ChatGPTReauthenticationRequired extends Error {
+  constructor() {
+    super('ChatGPT authorization expired or was revoked. Run `muffin chatgpt login` to reconnect.');
+    this.name = 'ChatGPTReauthenticationRequired';
+  }
+}
+
 type TokenSet = {
   accessToken: string;
   refreshToken: string;
@@ -823,7 +830,14 @@ export class ChatGPTConnection {
     } catch {
       throw new Error(SAFE_ERROR);
     }
-    if (!response.ok) throw new Error(SAFE_ERROR);
+    if (!response.ok) {
+      if (form.grant_type === 'refresh_token' && response.status === 400) {
+        const body: unknown = await response.json().catch(() => null);
+        if (body && typeof body === 'object' && 'error' in body && body.error === 'invalid_grant')
+          throw new ChatGPTReauthenticationRequired();
+      }
+      throw new Error(SAFE_ERROR);
+    }
     let result: unknown;
     try {
       result = await response.json();

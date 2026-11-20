@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ChatGPTConnection } from './chatgpt-oauth.js';
+import { ChatGPTConnection, ChatGPTReauthenticationRequired } from './chatgpt-oauth.js';
 
 const ISSUER = 'https://auth.openai.com';
 const JWKS_URL = `${ISSUER}/.well-known/jwks.json`;
@@ -45,7 +45,7 @@ async function idToken(
     expiresInSeconds?: number;
   } = {},
 ): Promise<string> {
-  let jwt = new SignJWT({
+  const jwt = new SignJWT({
     email: 'account@example.test',
     ...(input.nonce ? { nonce: input.nonce } : {}),
     ...(input.azp ? { azp: input.azp } : {}),
@@ -339,6 +339,41 @@ describe('ChatGPT plan OAuth credentials', () => {
     };
     const exchangeConnection = new ChatGPTConnection(exchangePath, { fetch: failing });
     await expect(signIn(exchangeConnection)).rejects.toThrow('ChatGPT connection failed');
+  });
+
+  it.each([
+    [400, 'invalid_grant', true],
+    [400, 'invalid_request', false],
+    [503, 'invalid_grant', false],
+  ])('classifies refresh HTTP %i with OAuth code %s', async (status, code, reauthenticate) => {
+    const path = home();
+    const { fetchImpl } = fakeFetch({ loginExpiresIn: 1 });
+    const connection = new ChatGPTConnection(path, {
+      fetch: async (input, init) => {
+        if (
+          init?.body instanceof URLSearchParams &&
+          init.body.get('grant_type') === 'refresh_token'
+        ) {
+          return Response.json(
+            { error: code, error_description: 'private OAuth payload' },
+            { status },
+          );
+        }
+        return fetchImpl(input, init);
+      },
+    });
+    await signIn(connection);
+    const storePath = join(path, 'secrets', 'chatgpt');
+    const saved = readFileSync(storePath, 'utf8');
+    const error = await connection.listModels().catch((failure: unknown) => failure);
+    if (reauthenticate) {
+      expect(error).toBeInstanceOf(ChatGPTReauthenticationRequired);
+      expect(String(error)).toContain('muffin chatgpt login');
+    } else {
+      expect(error).toMatchObject({ name: 'Error', message: 'ChatGPT connection failed' });
+    }
+    expect(String(error)).not.toContain('private OAuth payload');
+    expect(readFileSync(storePath, 'utf8')).toBe(saved);
   });
 
   it('serializes independent refresh callers and checkpoints the rotating token set', async () => {
