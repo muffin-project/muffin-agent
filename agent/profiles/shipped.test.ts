@@ -38,7 +38,13 @@ describe('shipped profiles', () => {
     // `gpt-6-*` does not match `gpt-6.2-sol`: the dot is not the hyphen.
     // Observed 2026-11-21 on the owner install: doctor said
     // `gpt-6.2-sol -> conservative · nessun profilo matcha`.
-    for (const id of ['gpt-6-sol', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6.2-sol', 'gpt-6.2-astra']) {
+    for (const id of [
+      'gpt-6-sol',
+      'gpt-6.1-sol',
+      'gpt-6.1-terra',
+      'gpt-6.2-sol',
+      'gpt-6.2-astra',
+    ]) {
       const profile = selectProfile(id, profiles);
       expect(profile.name, id).toBe('frontier');
       expect(profile.thinking, id).toBe('adaptive');
