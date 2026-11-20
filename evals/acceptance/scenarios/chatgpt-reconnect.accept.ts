@@ -66,6 +66,7 @@ async function withCompiledGateway(
   inst: Install,
   preload: string,
   run: () => Promise<void>,
+  crashBeforeDelivery = false,
 ): Promise<string> {
   const gateway = spawn(process.execPath, [CLI, 'gateway', 'run'], {
     cwd: inst.workspace,
@@ -77,6 +78,7 @@ async function withCompiledGateway(
       XDG_CONFIG_HOME: inst.xdg,
       NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
       MUFFIN_GATEWAY_TICK_MS: '200',
+      ...(crashBeforeDelivery ? { MUFFIN_TELEGRAM_INBOUND_STALL_AFTER_DONE_MS: '60000' } : {}),
       NO_COLOR: '1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -92,18 +94,23 @@ async function withCompiledGateway(
     });
     await run();
   } finally {
-    gateway.kill('SIGTERM');
+    gateway.kill(crashBeforeDelivery ? 'SIGKILL' : 'SIGTERM');
     const timer = setTimeout(() => gateway.kill('SIGKILL'), 3_000);
     await closed.finally(() => clearTimeout(timer));
   }
-  expect(gateway.exitCode, log).toBe(EXIT_STOPPED);
+  if (crashBeforeDelivery) expect(gateway.signalCode, log).toBe('SIGKILL');
+  else expect(gateway.exitCode, log).toBe(EXIT_STOPPED);
   return log;
 }
 
 describe('acceptance · #937 · ChatGPT reconnection on Telegram', () => {
-  it.each(['low', 'adaptive'] as const)(
-    'delivers a reconnect notice with thinking=%s and reads back the same turn after restart',
-    async (thinking) => {
+  it.each([
+    { thinking: 'low', interruption: 'after delivery', crashBeforeDelivery: false },
+    { thinking: 'adaptive', interruption: 'after delivery', crashBeforeDelivery: false },
+    { thinking: 'low', interruption: 'before delivery', crashBeforeDelivery: true },
+  ] as const)(
+    'delivers one reconnect notice with thinking=$thinking and restart $interruption',
+    async ({ thinking, crashBeforeDelivery }) => {
       const inst = await install({ main: [] });
       const telegram = await startFakeTelegram();
       try {
@@ -152,43 +159,61 @@ globalThis.fetch = async (input, init) => {
 `,
         );
 
-        const readTurn = () =>
+        const readTurns = () =>
           inst.db((db) =>
             db
               .prepare('SELECT id, status, turn_outcome, delivery FROM turns WHERE input_text = ?')
-              .get(REQUEST),
-          ) as { id: string; status: string; turn_outcome: string; delivery: string } | undefined;
+              .all(REQUEST),
+          ) as { id: string; status: string; turn_outcome: string; delivery: string }[];
+        const readTurn = () => readTurns()[0];
         const notice = () =>
           telegram.messages().filter((message) => message.text.includes(RECONNECT));
-        const firstLog = await withCompiledGateway(inst, preload, async () => {
-          telegram.deliver(privateMessage({ id: OWNER }, REQUEST));
-          await until(() => readTurn()?.status === 'done');
-          expect(readFileSync(calls, 'utf8')).toBe('refresh\n');
-          expect(readTurn()).toMatchObject({ status: 'done', turn_outcome: 'error' });
+        const verifyDelivery = async () => {
           await until(() => notice().length > 0, 4_000).catch(() => {
             throw new Error(
               `Owner received no ChatGPT reconnect notice (delivery=${readTurn()?.delivery}): ${JSON.stringify(telegram.messages())}`,
             );
           });
-          expect(telegram.messages(), 'owner needs a concrete reconnection instruction').toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ chatId: OWNER, text: expect.stringContaining(RECONNECT) }),
-            ]),
-          );
+          expect(notice()).toEqual([
+            expect.objectContaining({ chatId: OWNER, text: expect.stringContaining(RECONNECT) }),
+          ]);
           await until(() => readTurn()?.delivery === 'sent');
-          expect(notice()).toHaveLength(1);
           expect(JSON.stringify(telegram.sent())).not.toContain(CANARY);
-        });
+        };
+        const firstLog = await withCompiledGateway(
+          inst,
+          preload,
+          async () => {
+            telegram.deliver(privateMessage({ id: OWNER }, REQUEST));
+            await until(() => readTurn()?.status === 'done');
+            expect(readFileSync(calls, 'utf8')).toBe('refresh\n');
+            expect(readTurn()).toMatchObject({ status: 'done', turn_outcome: 'error' });
+            if (crashBeforeDelivery) {
+              // Cut the process while the committed result is waiting for its first send.
+              expect(readTurn()?.delivery).toBe('pending');
+              expect(telegram.messages()).toHaveLength(0);
+            } else {
+              await verifyDelivery();
+            }
+          },
+          crashBeforeDelivery,
+        );
         expect(firstLog).not.toContain(CANARY);
 
         const finished = readTurn();
         if (!finished) throw new Error('Telegram turn missing after shutdown');
-        await withCompiledGateway(inst, preload, async () => {
+        const readBack = async () => {
           const readback = await inst.muffin(['gateway', 'turn', finished.id]);
           expect(readback.code, readback.err).toBe(0);
           expect(readback.out.trim()).toBe(`turno ${finished.id.slice(0, 12)}: error`);
+        };
+        const restartedLog = await withCompiledGateway(inst, preload, async () => {
+          if (crashBeforeDelivery) await verifyDelivery();
+          await readBack();
         });
-        expect(readTurn()).toEqual(finished);
+        expect(restartedLog).not.toContain(CANARY);
+        if (crashBeforeDelivery) await withCompiledGateway(inst, preload, readBack);
+        expect(readTurns()).toEqual([{ ...finished, delivery: 'sent' }]);
         expect(notice()).toHaveLength(1);
         expect(readFileSync(calls, 'utf8')).toBe('refresh\n');
       } finally {
