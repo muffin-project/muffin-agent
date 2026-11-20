@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -520,6 +520,56 @@ describe('muffin model', () => {
     expect(out.join(' ')).toContain('--key-ref');
   });
 
+  it.each([
+    [401, true],
+    [403, false],
+    [503, false],
+  ])(
+    'suggests ChatGPT login for catalog HTTP %i only when authentication failed',
+    async (status, authenticationFailed) => {
+      const h = home();
+      try {
+        writeFileSync(
+          join(h, 'secrets', 'chatgpt'),
+          JSON.stringify({
+            version: 1,
+            hostId: 'synthetic-host',
+            activeProfileId: 'p',
+            profiles: [
+              {
+                id: 'p',
+                clientId: 'synthetic-client',
+                subject: 'synthetic-subject',
+                tokens: {
+                  accessToken: 'access',
+                  refreshToken: 'refresh',
+                  tokenType: 'Bearer',
+                  scopes: ['chatgpt.tokens.use.direct', 'offline_access', 'resource.invoke'],
+                  expiresAt: Date.now() + 3600_000,
+                  pendingIdentity: false,
+                },
+              },
+            ],
+          }),
+          { mode: 0o600 },
+        );
+        const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status }));
+        const output: string[] = [];
+        expect(
+          await cmdModel(h, ['--list', '--provider', 'chatgpt'], {
+            out: (line) => output.push(line),
+            chatgpt: new ChatGPTConnection(h, { fetch }),
+          }),
+        ).toBe(1);
+        expect(fetch).toHaveBeenCalledWith('https://api.openai.com/v1/models', expect.anything());
+        expect(output.join('\n').includes('muffin chatgpt login')).toBe(authenticationFailed);
+        if (!authenticationFailed) expect(output).toEqual(['ChatGPT connection failed']);
+      } finally {
+        rmSync(h, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('signs in to ChatGPT from the terminal menu before listing and verifying a model', async () => {
     const h = home();
     const before = loadConfig(h);
@@ -529,6 +579,7 @@ describe('muffin model', () => {
       profileId: 'synthetic-profile',
       connected: true,
       usable: true,
+      renewable: true,
       accessExpired: false,
       needsLogin: false,
       scopes: ['chatgpt.tokens.use.direct'],

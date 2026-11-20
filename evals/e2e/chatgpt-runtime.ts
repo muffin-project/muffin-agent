@@ -120,9 +120,12 @@ function requireSyntheticFixture(): { model: string } {
     );
   }
   const session = new ChatGPTConnection(HOME).session();
-  if (!session?.usable || !session.scopes.includes('chatgpt.tokens.use.direct'))
+  if (
+    !(session?.usable || session?.renewable) ||
+    !session.scopes.includes('chatgpt.tokens.use.direct')
+  )
     throw new Error(
-      'BLOCKED: isolated home has no usable ChatGPT session with direct inference scope. Run `muffin chatgpt login`.',
+      'BLOCKED: isolated home has no usable or renewable ChatGPT session with direct inference scope. Run `muffin chatgpt login`.',
     );
   return { model };
 }

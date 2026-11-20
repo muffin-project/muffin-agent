@@ -81,7 +81,7 @@ export async function cmdChatGPT(
       const session = connection.session();
       out(JSON.stringify(session));
       for (const profile of connection.profiles()) out(JSON.stringify(profile));
-      if (!session?.usable) {
+      if (!session?.usable && !session?.renewable) {
         const why = session?.needsLogin
           ? 'ChatGPT refused to refresh this session.'
           : session?.accessExpired
@@ -91,7 +91,9 @@ export async function cmdChatGPT(
         return 1;
       }
       out(
-        'Status shows a usable saved authorization. Run `muffin chatgpt models` to check catalog access.',
+        session.usable
+          ? 'Status shows a usable saved authorization. Run `muffin chatgpt models` to check catalog access.'
+          : 'ChatGPT will attempt to refresh the saved authorization on the next request. Run `muffin chatgpt models` to check catalog access.',
       );
       out(`Manage usage: ${CHATGPT_USAGE_URL}`);
       return 0;

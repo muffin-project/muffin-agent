@@ -757,6 +757,11 @@ export async function runDoctor(
             'ChatGPT',
             'Account connected; plan quota and credits are managed at https://chatgpt.com/settings/usage',
           );
+        else if (session?.renewable)
+          credentialOk(
+            'ChatGPT',
+            'ChatGPT will attempt to refresh the saved authorization on the next request.',
+          );
         else if (session?.needsLogin)
           credentialFail(
             'ChatGPT',

@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -7,10 +8,11 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ChatGPTConnection, ChatGPTReauthenticationRequired } from './chatgpt-oauth.js';
 
 const ISSUER = 'https://auth.openai.com';
@@ -32,6 +34,40 @@ function home(): string {
   const path = mkdtempSync(join(tmpdir(), 'muffin-chatgpt-oauth-'));
   homes.push(path);
   return path;
+}
+
+function seedExpiredGrant(path: string): string {
+  const dir = join(path, 'secrets');
+  mkdirSync(dir, { mode: 0o700 });
+  const file = join(dir, 'chatgpt');
+  writeFileSync(
+    file,
+    JSON.stringify({
+      version: 1,
+      hostId: 'synthetic-host',
+      activeProfileId: 'p',
+      profiles: [
+        {
+          id: 'p',
+          clientId: CLIENT_ID,
+          subject: 'subject-1',
+          tokens: {
+            accessToken: 'access-login-secret',
+            refreshToken: 'refresh-login-secret',
+            idToken: 'synthetic-id-token',
+            tokenType: 'Bearer',
+            scopes: SCOPES.split(' '),
+            receivedAt: 1,
+            idTokenReceivedAt: 1,
+            expiresAt: 1,
+            pendingIdentity: false,
+          },
+        },
+      ],
+    }),
+    { mode: 0o600 },
+  );
+  return file;
 }
 
 async function idToken(
@@ -171,6 +207,41 @@ async function signIn(
   });
   if (!authorize) throw new Error('browser was not opened');
   return { session, authorize };
+}
+
+async function signInWithCallbackFixture(connection: ChatGPTConnection): Promise<void> {
+  let callbackServer: Server | undefined;
+  const listen = vi.spyOn(Server.prototype, 'listen').mockImplementation(function (
+    this: Server,
+    ...args: unknown[]
+  ) {
+    callbackServer = this;
+    const ready = args.at(-1);
+    if (typeof ready !== 'function') throw new Error('Missing callback listener');
+    ready();
+    return this;
+  });
+  const address = vi
+    .spyOn(Server.prototype, 'address')
+    .mockReturnValue({ address: '127.0.0.1', family: 'IPv4', port: 12345 });
+  try {
+    await connection.signIn({
+      openBrowser: async (url) => {
+        const authorize = new URL(url);
+        loginNonce = authorize.searchParams.get('nonce') ?? '';
+        const callback = new URL(authorize.searchParams.get('redirect_uri') ?? '');
+        callback.searchParams.set('state', authorize.searchParams.get('state') ?? '');
+        callback.searchParams.set('code', 'auth-code');
+        const response = { writeHead: vi.fn().mockReturnThis(), end: vi.fn() };
+        if (!callbackServer) throw new Error('Callback listener was not created');
+        callbackServer.emit('request', { method: 'GET', url: callback.href }, response);
+        expect(response.writeHead).toHaveBeenCalledWith(200, expect.anything());
+      },
+    });
+  } finally {
+    address.mockRestore();
+    listen.mockRestore();
+  }
 }
 
 describe('ChatGPT plan OAuth credentials', () => {
@@ -389,19 +460,119 @@ describe('ChatGPT plan OAuth credentials', () => {
     }
   });
 
-  it('an expired access token is saved but not usable', async () => {
+  it.each([false, true])(
+    'clears a refused refresh when a new login is validated (recovery=%s)',
+    async (recover) => {
+      const path = home();
+      seedExpiredGrant(path);
+      let jwksUnavailable = false;
+      const service = fakeFetch();
+      const connection = new ChatGPTConnection(path, {
+        fetch: async (input, init) => {
+          if (
+            init?.body instanceof URLSearchParams &&
+            init.body.get('grant_type') === 'refresh_token'
+          )
+            return Response.json({ error: 'invalid_grant' }, { status: 400 });
+          if (jwksUnavailable && String(input) === JWKS_URL)
+            return new Response(null, { status: 503 });
+          return service.fetchImpl(input, init);
+        },
+      });
+      const profileId = connection.session()?.profileId;
+      await expect(connection.accessToken()).rejects.toBeInstanceOf(
+        ChatGPTReauthenticationRequired,
+      );
+      expect(connection.session()).toMatchObject({ usable: false, needsLogin: true });
+
+      if (recover) {
+        jwksUnavailable = true;
+        await expect(signInWithCallbackFixture(connection)).rejects.toThrow(
+          'ChatGPT identity validation unavailable',
+        );
+        expect(connection.session()).toMatchObject({ usable: false, needsLogin: true });
+        jwksUnavailable = false;
+        await expect(connection.accessToken()).resolves.toBe('access-login-secret');
+      } else {
+        await signInWithCallbackFixture(connection);
+      }
+      const saved = new ChatGPTConnection(path).session();
+      expect(saved).toMatchObject({
+        profileId,
+        usable: true,
+        needsLogin: false,
+      });
+      expect(saved).not.toHaveProperty('refreshOutcome');
+    },
+  );
+
+  it('preserves the reauthentication error if recording the refresh outcome fails', async () => {
     const path = home();
-    const connection = new ChatGPTConnection(path, { fetch: fakeFetch().fetchImpl });
-    await signIn(connection);
-    const storePath = join(path, 'secrets', 'chatgpt');
-    const saved = JSON.parse(readFileSync(storePath, 'utf8')) as {
-      profiles: Array<{ tokens: { expiresAt: number } }>;
-    };
-    saved.profiles[0]!.tokens.expiresAt = Date.now() - 60_000;
-    writeFileSync(storePath, `${JSON.stringify(saved)}\n`, { mode: 0o600 });
-    const session = connection.session();
-    expect(session).toMatchObject({ connected: true, usable: false, accessExpired: true });
-    // Removing the expiry comparison in safeSession leaves usable true and this fails.
+    const storePath = seedExpiredGrant(path);
+    const { fetchImpl } = fakeFetch();
+    const connection = new ChatGPTConnection(path, {
+      fetch: async (input, init) => {
+        if (
+          init?.body instanceof URLSearchParams &&
+          init.body.get('grant_type') === 'refresh_token'
+        ) {
+          rmSync(storePath);
+          mkdirSync(storePath);
+          return Response.json({ error: 'invalid_grant' }, { status: 400 });
+        }
+        return fetchImpl(input, init);
+      },
+    });
+    await expect(connection.listModels()).rejects.toBeInstanceOf(ChatGPTReauthenticationRequired);
+  });
+
+  it('reports an expired grant as renewable and refreshes it on use', async () => {
+    const path = home();
+    seedExpiredGrant(path);
+    const service = fakeFetch();
+    const connection = new ChatGPTConnection(path, { fetch: service.fetchImpl });
+    expect(connection.session()).toMatchObject({
+      connected: true,
+      usable: false,
+      renewable: true,
+      accessExpired: true,
+    });
+    expect(service.refreshCount()).toBe(0);
+    await expect(connection.accessToken()).resolves.toBe('access-rotated-secret');
+    expect(connection.session()).toMatchObject({ usable: true, accessExpired: false });
+  });
+
+  it('checkpoints rotation with an empty access token as failed and retries with the rotated grant', async () => {
+    const path = home();
+    seedExpiredGrant(path);
+    let accessToken = '';
+    let refreshToken = 'refresh-rotated-secret';
+    const service = fakeFetch({
+      refresh: async () => ({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        expires_in: 3600,
+      }),
+    });
+    const connection = new ChatGPTConnection(path, { fetch: service.fetchImpl });
+    await expect(connection.accessToken()).rejects.toThrow();
+    expect(connection.session()).toMatchObject({
+      usable: false,
+      accessExpired: false,
+      needsLogin: false,
+      refreshOutcome: 'failed',
+    });
+    accessToken = 'access-recovered-secret';
+    refreshToken = 'refresh-recovered-secret';
+    await expect(connection.accessToken()).resolves.toBe('access-recovered-secret');
+    const refreshes = service.requests.filter(
+      ({ body }) => body?.get('grant_type') === 'refresh_token',
+    );
+    expect(refreshes.map(({ body }) => body?.get('refresh_token'))).toEqual([
+      'refresh-login-secret',
+      'refresh-rotated-secret',
+    ]);
+    expect(connection.session()).toMatchObject({ usable: true, refreshOutcome: 'ok' });
   });
 
   it('serializes independent refresh callers and checkpoints the rotating token set', async () => {
