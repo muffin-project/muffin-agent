@@ -97,7 +97,9 @@ export class GatewayLock {
     // `since` is set only here: a heartbeat that touched it would reset uptime
     // every thirty seconds, and `doctor` would report a process that has been
     // up for a week as thirty seconds old, forever.
-    this.claimInfo = db.prepare(`UPDATE gateway_lock SET since = @at, status = @status WHERE id = 1`);
+    this.claimInfo = db.prepare(
+      `UPDATE gateway_lock SET since = @at, status = @status WHERE id = 1`,
+    );
     this.beatInfo = db.prepare(`UPDATE gateway_lock SET status = @status WHERE id = 1`);
   }
 
@@ -111,8 +113,11 @@ export class GatewayLock {
 
   /**
    * One beat: push the horizon out and say what it is doing. False means this
-   * process is no longer the holder — a cue to stop, not an error to swallow,
-   * because the only way it happens is that something took the lock over.
+   * process no longer holds the current token — the lease is past the hard
+   * horizon, or another acquisition owns the row. Those are not the same
+   * event. ADR-0106 slice 1 re-acquires only when nobody else holds the row;
+   * stealing a live holder stays forbidden. Callers must not keep writing
+   * under the old token.
    */
   beat(now: Date, status: string, pid: number = process.pid): boolean {
     return this.lock.refresh(now, pid, () => this.beatInfo.run({ status }));
@@ -171,7 +176,9 @@ export function readGateway(
     return null;
   }
   const judged =
-    row === undefined ? undefined : { pid: row.pid, takenAt: row.taken_at, holderId: row.holder_id ?? null };
+    row === undefined
+      ? undefined
+      : { pid: row.pid, takenAt: row.taken_at, holderId: row.holder_id ?? null };
   const pid = heldBy(judged, now.getTime(), STALE_AFTER_MS, alive);
   if (pid === null || !row) return null;
   return {

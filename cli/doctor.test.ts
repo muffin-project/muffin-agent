@@ -1420,8 +1420,7 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
     // just copied them from this very checkout, so every one must read as
     // up-to-date, not merely "present".
     for (const relPath of [
-      'persona.md',
-      'voice.md',
+      'skills/voce/SKILL.md',
       'rot/identity.md',
       'rot/policy.json',
       'rot/egress.json',
@@ -1434,13 +1433,31 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('persona.md and voice.md on an existing home stay prompt sources, and doctor does not reseal', async () => {
+    const dir = home();
+    const identity = join(dir, 'rot', 'identity.md');
+    const before = readFileSync(identity);
+    writeFileSync(join(dir, 'persona.md'), 'vecchio patto\n');
+    writeFileSync(join(dir, 'voice.md'), 'vecchia voce\n');
+    const c = await check(dir, 'prompt sources');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('persona.md');
+    expect(c?.detail).toContain('voice.md');
+    expect(c?.detail).toContain('rot/identity.md');
+    expect(c?.remedy).toBeUndefined();
+    expect(existsSync(join(dir, 'persona.md'))).toBe(true);
+    expect(existsSync(join(dir, 'voice.md'))).toBe(true);
+    expect(readFileSync(identity)).toEqual(before);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it('an owner edit reads as ok — "è suo", never a proposal to overwrite it', async () => {
     const dir = home();
     writeFileSync(
-      paths(dir).persona,
+      join(dir, 'skills', 'voce', 'SKILL.md'),
       "testo scritto a mano dall'owner, non spedito da nessun commit\n",
     );
-    const c = await check(dir, 'default persona.md');
+    const c = await check(dir, 'default skills/voce/SKILL.md');
     expect(c?.level).toBe('ok');
     expect(c?.remedy).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });

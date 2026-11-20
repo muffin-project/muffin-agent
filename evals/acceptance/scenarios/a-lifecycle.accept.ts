@@ -1,4 +1,3 @@
-import DatabaseCtor from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
@@ -15,14 +14,15 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { afterAll, beforeAll, describe } from 'vitest';
 import { runUpdate } from '../../../cli/update.js';
 import { currentSchemaVersion } from '../../../core/db/migrate.js';
 import { EXIT_STOPPED } from '../../../core/gateway/service.js';
-import { install, type Install, type Run } from '../harness.js';
-import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
+import { type Install, install, type Run } from '../harness.js';
 import type { RecordedRequest } from '../provider.js';
 import { scenario } from '../scenario.js';
+import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
 
 /**
  * A · Installation and lifecycle.
@@ -43,7 +43,9 @@ async function pollGatewayStatus(inst: Install, wantCode: 0 | 1, timeoutMs = 15_
     const r = await inst.muffin(['gateway', 'status']);
     if (r.code === wantCode) return r;
     if (Date.now() > deadline) {
-      throw new Error(`\`gateway status\` non ha mai risposto ${wantCode} (ultimo: ${r.code})\n${r.out}${r.err}`);
+      throw new Error(
+        `\`gateway status\` non ha mai risposto ${wantCode} (ultimo: ${r.code})\n${r.out}${r.err}`,
+      );
     }
     await new Promise((r2) => setTimeout(r2, 150));
   }
@@ -103,19 +105,40 @@ describe('acceptance · A · installazione e ciclo di vita', () => {
         // A turn that suspends on `wait`, straight from the CLI — no gateway
         // involved, same shape as B3. An hour out is "clearly not due yet",
         // not a real wait: backdated below, once no gateway is alive to race.
-        const suspended = await inst.muffin(['run', '--session', 'a1-recovery', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'avvisami fra un’ora']);
+        const suspended = await inst.muffin([
+          'run',
+          '--session',
+          'a1-recovery',
+          '--timeout',
+          String(HEADLESS_TURN_TIMEOUT_SECONDS),
+          'avvisami fra un’ora',
+        ]);
         if (suspended.code !== 6) {
-          throw new Error(`atteso exit 6 (sospeso) dal turno che aspetta, ricevuto ${suspended.code}\n${suspended.err}`);
+          throw new Error(
+            `atteso exit 6 (sospeso) dal turno che aspetta, ricevuto ${suspended.code}\n${suspended.err}`,
+          );
         }
-        const waitTurnId = inst.db((db) => (db.prepare(`SELECT id FROM turns`).get() as { id: string } | undefined)?.id);
+        const waitTurnId = inst.db(
+          (db) => (db.prepare(`SELECT id FROM turns`).get() as { id: string } | undefined)?.id,
+        );
         if (!waitTurnId) throw new Error('nessuna riga turns dopo il turno sospeso');
 
         // A job due tomorrow-ish — same `jobs add` + backdate shape as B8,
         // `--channel cli` so delivery is real and observable on stdout rather
         // than B8's own (unrelated) "consegna remota da cablare" gap.
-        const added = await inst.muffin(['jobs', 'add', '--cron', '0 8 * * *', '--channel', 'cli', 'manda il brief']);
+        const added = await inst.muffin([
+          'jobs',
+          'add',
+          '--cron',
+          '0 8 * * *',
+          '--channel',
+          'cli',
+          'manda il brief',
+        ]);
         if (added.code !== 0) throw new Error(`jobs add: exit ${added.code}\n${added.err}`);
-        const jobId = inst.db((db) => (db.prepare(`SELECT id FROM jobs`).get() as { id: string } | undefined)?.id);
+        const jobId = inst.db(
+          (db) => (db.prepare(`SELECT id FROM jobs`).get() as { id: string } | undefined)?.id,
+        );
         if (!jobId) throw new Error('nessuna riga jobs dopo `jobs add`');
 
         // --- (b) the first gateway: a real process, a real claim -----------
@@ -175,6 +198,7 @@ describe('acceptance · A · installazione e ciclo di vita', () => {
 
         // --- (e) restart — what a supervisor would do -----------------------
         const gw2 = await inst.gateway();
+        let exitCode: number | undefined;
         try {
           // The job fires on the very first tick (`serve()` ticks once at
           // boot, precisely so a fire that came due while nothing was running
@@ -187,13 +211,19 @@ describe('acceptance · A · installazione e ciclo di vita', () => {
 
           const state = inst.db((db) => ({
             turnRows: (db.prepare(`SELECT count(*) AS n FROM turns`).get() as { n: number }).n,
-            waitTurn: db.prepare(`SELECT status, delivery, turn_outcome FROM turns WHERE id = ?`).get(waitTurnId) as
+            waitTurn: db
+              .prepare(`SELECT status, delivery, turn_outcome FROM turns WHERE id = ?`)
+              .get(waitTurnId) as
               | { status: string; delivery: string | null; turn_outcome: string | null }
               | undefined,
-            jobTurn: db.prepare(`SELECT status, delivery, turn_outcome FROM turns WHERE id != ?`).get(waitTurnId) as
+            jobTurn: db
+              .prepare(`SELECT status, delivery, turn_outcome FROM turns WHERE id != ?`)
+              .get(waitTurnId) as
               | { status: string; delivery: string | null; turn_outcome: string | null }
               | undefined,
-            job: db.prepare(`SELECT last_run_at, next_fire_at FROM jobs WHERE id = ?`).get(jobId) as {
+            job: db
+              .prepare(`SELECT last_run_at, next_fire_at FROM jobs WHERE id = ?`)
+              .get(jobId) as {
               last_run_at: string | null;
               next_fire_at: string;
             },
@@ -202,41 +232,60 @@ describe('acceptance · A · installazione e ciclo di vita', () => {
           // Exactly once, both directions: two rows total (the resumed one +
           // the job's fresh one), never zero and never a duplicate of either.
           if (state.turnRows !== 2) {
-            throw new Error(`atteso 2 righe in turns (il turno ripreso + quello del job), trovate ${state.turnRows}`);
+            throw new Error(
+              `atteso 2 righe in turns (il turno ripreso + quello del job), trovate ${state.turnRows}`,
+            );
           }
           if (state.waitTurn?.status !== 'done' || state.waitTurn.delivery !== 'undeliverable') {
-            throw new Error(`il turno sospeso non risulta ripreso e contabilizzato una sola volta: ${JSON.stringify(state.waitTurn)}`);
+            throw new Error(
+              `il turno sospeso non risulta ripreso e contabilizzato una sola volta: ${JSON.stringify(state.waitTurn)}`,
+            );
           }
           if (state.jobTurn?.status !== 'done' || state.jobTurn.delivery !== 'sent') {
             // This is B8's own "consegna genuina su superficie connessa" half,
             // proved here for real: `--channel cli` reaches `cliSurface`, which
             // is always connected (L0-1), so `sent` — not "consegna remota da
             // cablare" — is the honest outcome for this channel.
-            throw new Error(`il turno del job non risulta consegnato: ${JSON.stringify(state.jobTurn)}`);
+            throw new Error(
+              `il turno del job non risulta consegnato: ${JSON.stringify(state.jobTurn)}`,
+            );
           }
-          if (state.job.last_run_at === null) throw new Error('il job non risulta eseguito (last_run_at nullo)');
+          if (state.job.last_run_at === null)
+            throw new Error('il job non risulta eseguito (last_run_at nullo)');
           if (Date.parse(state.job.next_fire_at) <= Date.now()) {
-            throw new Error(`next_fire_at non è avanzato oltre ora (markRan lo ricalcola da ora, non dal vecchio orario): ${state.job.next_fire_at}`);
+            throw new Error(
+              `next_fire_at non è avanzato oltre ora (markRan lo ricalcola da ora, non dal vecchio orario): ${state.job.next_fire_at}`,
+            );
           }
           // The delivered text reached stdout exactly once — not a second
           // time from a duplicate fire. Mutation-tested (see the PR): this is
           // the assertion that goes red when the job's claim is disabled.
           const deliveries = gw2.stdout().split('⏰ ecco il tuo brief').length - 1;
-          if (deliveries !== 1) throw new Error(`il testo del job è comparso ${deliveries} volte su stdout, non 1`);
+          if (deliveries !== 1)
+            throw new Error(`il testo del job è comparso ${deliveries} volte su stdout, non 1`);
 
           const upAgain = await inst.muffin(['gateway', 'status']);
-          if (upAgain.code !== 0) throw new Error(`atteso status exit 0 dopo il riavvio, ricevuto ${upAgain.code}\n${upAgain.out}`);
+          if (upAgain.code !== 0)
+            throw new Error(
+              `atteso status exit 0 dopo il riavvio, ricevuto ${upAgain.code}\n${upAgain.out}`,
+            );
           const secondPid = pidFrom(upAgain.out);
-          if (secondPid === firstPid) throw new Error(`atteso un pid diverso dal primo gateway (${firstPid}), trovato lo stesso`);
+          if (secondPid === firstPid)
+            throw new Error(
+              `atteso un pid diverso dal primo gateway (${firstPid}), trovato lo stesso`,
+            );
 
           const doctor = await inst.muffin(['doctor']);
           if (doctor.code === 2) throw new Error(`doctor in fail dopo il riavvio:\n${doctor.out}`);
         } finally {
-          // --- (f) drain-and-stop, exit code included -----------------------
-          const exitCode = await gw2.stop();
-          if (exitCode !== EXIT_STOPPED) {
-            throw new Error(`atteso EXIT_STOPPED (${EXIT_STOPPED}) da un gateway drenato via SIGTERM, ricevuto ${exitCode}`);
-          }
+          // --- (f) drain-and-stop. The exit code is checked after this
+          // finally: a throw here would replace the failure that made us stop.
+          exitCode = await gw2.stop();
+        }
+        if (exitCode !== EXIT_STOPPED) {
+          throw new Error(
+            `atteso EXIT_STOPPED (${EXIT_STOPPED}) da un gateway drenato via SIGTERM, ricevuto ${exitCode}`,
+          );
         }
       } finally {
         await inst.cleanup();
@@ -247,18 +296,19 @@ describe('acceptance · A · installazione e ciclo di vita', () => {
 });
 
 /**
- * A2/A3 · identity + persona reach the real system prompt, and `prompt show`
- * does not describe them from a second, parallel assembly.
+ * A2/A3 · the sealed identity reaches the real system prompt, and `prompt show`
+ * does not describe it from a second, parallel assembly.
  *
  * One install, one real `muffin run` against the fake provider, one real
  * `muffin prompt show` — shared across both rows in `beforeAll` because they
  * are two readings of the *same* evidence (DAY-1 requirement A2 "sa chi è e quali
- * limiti ha" is `identity.md`'s claim, A3 "il comportamento è definito" is
- * `persona.md`'s), not two independent turns. Every marker is read from the
- * files this install actually wrote under `inst.home` — never from
+ * limiti ha" is `identity.md`'s claim, A3 "il comportamento è definito" is the
+ * register rule in that same file, with the long examples in the `voce` skill
+ * and not in the prefix), not two independent turns. Every marker is read from
+ * the files this install actually wrote under `inst.home` — never from
  * `defaults/`, which is only the seed `muffin init` copies from once.
  */
-describe('acceptance · A2/A3 · identity + persona wiring', () => {
+describe('acceptance · A2/A3 · identity wiring', () => {
   let inst: Install;
   /** The real request the fake provider received for the one turn this suite runs. */
   let sent: RecordedRequest;
@@ -266,21 +316,29 @@ describe('acceptance · A2/A3 · identity + persona wiring', () => {
   let shown: string;
 
   const IDENTITY_MARKER = 'Non mi dai ragione per farmi contento.';
-  const PERSONA_MARKER = 'Sono una seconda prospettiva con memoria.';
-  const VOICE_MARKER = 'Niente meta-commentary';
+  const REGISTER_MARKER = 'Il registro segue il momento';
+  /** A line that lives only in the skill body, not in the sealed pact. */
+  const VOICE_EXAMPLE = '15% dei messaggi';
 
   beforeAll(async () => {
     inst = await install({ main: [{ text: 'ciao, sono Muffin' }] });
-    const run = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'ciao']);
+    const run = await inst.muffin([
+      'run',
+      '--timeout',
+      String(HEADLESS_TURN_TIMEOUT_SECONDS),
+      'ciao',
+    ]);
     if (run.code !== 0) throw new Error(`turno iniziale: exit ${run.code}\n${run.err}`);
 
     const mainCalls = inst.provider.main();
     const last = mainCalls[mainCalls.length - 1];
-    if (!last) throw new Error('il provider finto non ha registrato nessuna request del lane principale');
+    if (!last)
+      throw new Error('il provider finto non ha registrato nessuna request del lane principale');
     sent = last;
 
     const promptShow = await inst.muffin(['prompt', 'show']);
-    if (promptShow.code !== 0) throw new Error(`muffin prompt show: exit ${promptShow.code}\n${promptShow.err}`);
+    if (promptShow.code !== 0)
+      throw new Error(`muffin prompt show: exit ${promptShow.code}\n${promptShow.err}`);
     shown = promptShow.out;
   }, headlessTestTimeoutMs(1));
 
@@ -306,37 +364,25 @@ describe('acceptance · A2/A3 · identity + persona wiring', () => {
   });
 
   scenario('A3', async () => {
-    const installedPersona = readFileSync(join(inst.home, 'persona.md'), 'utf8');
-    const installedVoice = readFileSync(join(inst.home, 'voice.md'), 'utf8');
-    if (!installedPersona.includes(PERSONA_MARKER)) {
-      throw new Error(`fixture rotta: il persona.md installato non contiene "${PERSONA_MARKER}"`);
+    const installedIdentity = readFileSync(join(inst.home, 'rot', 'identity.md'), 'utf8');
+    const installedSkill = readFileSync(join(inst.home, 'skills', 'voce', 'SKILL.md'), 'utf8');
+    if (!installedIdentity.includes(REGISTER_MARKER)) {
+      throw new Error(`fixture rotta: identity.md non contiene "${REGISTER_MARKER}"`);
     }
-    if (!installedVoice.includes(VOICE_MARKER)) {
-      throw new Error(`fixture rotta: il voice.md installato non contiene "${VOICE_MARKER}"`);
+    if (!installedSkill.includes(VOICE_EXAMPLE)) {
+      throw new Error(`fixture rotta: la skill voce non contiene "${VOICE_EXAMPLE}"`);
     }
-
-    for (const [name, marker] of [
-      ['persona.md', PERSONA_MARKER],
-      ['voice.md', VOICE_MARKER],
-    ] as const) {
-      if (!sent.system.includes(marker)) {
-        throw new Error(`il system prompt inviato al provider non contiene ${name} ("${marker}")`);
-      }
-      if (!shown.includes(marker)) {
-        throw new Error(`muffin prompt show non contiene ${name} ("${marker}")`);
-      }
+    if (!sent.system.includes(REGISTER_MARKER)) {
+      throw new Error(`il system prompt inviato al provider non contiene la regola di registro`);
     }
-
-    // The canonical order (agent/context/assemble.ts buildSystemPromptBlocks):
-    // persona, then identity, then voice.
-    const iPersona = sent.system.indexOf(PERSONA_MARKER);
-    const iIdentity = sent.system.indexOf(IDENTITY_MARKER);
-    const iVoice = sent.system.indexOf(VOICE_MARKER);
-    if (!(iPersona < iIdentity && iIdentity < iVoice)) {
-      throw new Error(
-        `ordine canonico violato — atteso persona < identity < voice, trovato persona@${iPersona} ` +
-          `identity@${iIdentity} voice@${iVoice}`,
-      );
+    if (!shown.includes(REGISTER_MARKER)) {
+      throw new Error(`muffin prompt show non contiene la regola di registro`);
+    }
+    if (!sent.system.includes('voce')) {
+      throw new Error('il catalogo delle skill non nomina voce');
+    }
+    if (sent.system.includes(VOICE_EXAMPLE)) {
+      throw new Error('il corpo della skill voce è nel prefisso: doveva restare on-demand');
     }
 
     // The truthfulness claim `prompt show` exists for: byte-identical to what
@@ -363,27 +409,39 @@ describe('acceptance · A · doctor, backup', () => {
         // tampering below is attributable to the tamper and nothing else.
         const clean = await inst.muffin(['doctor']);
         if (!/✓ root of trust\s/.test(clean.out)) {
-          throw new Error(`doctor non riporta 'root of trust' come ok su un'installazione pulita:\n${clean.out}`);
+          throw new Error(
+            `doctor non riporta 'root of trust' come ok su un'installazione pulita:\n${clean.out}`,
+          );
         }
 
         // Tamper with a real sealed file — not a fixture doctor was told about,
         // the actual file `muffin init` wrote and sealed a hash of.
         const policyPath = join(inst.home, 'rot', 'policy.json');
         const original = readFileSync(policyPath, 'utf8');
-        const tampered = JSON.stringify({ ...(JSON.parse(original) as object), _manomesso_da_test: true }, null, 2);
+        const tampered = JSON.stringify(
+          { ...(JSON.parse(original) as object), _manomesso_da_test: true },
+          null,
+          2,
+        );
         writeFileSync(policyPath, tampered);
 
         const broken = await inst.muffin(['doctor']);
         if (broken.code === 0) {
-          throw new Error(`doctor è tornato ok dopo la manomissione — non se ne è accorto:\n${broken.out}`);
+          throw new Error(
+            `doctor è tornato ok dopo la manomissione — non se ne è accorto:\n${broken.out}`,
+          );
         }
         if (!/root of trust/.test(broken.out) || !/policy\.json/.test(broken.out)) {
-          throw new Error(`doctor ha trovato *qualcosa* ma non ha nominato il file manomesso:\n${broken.out}`);
+          throw new Error(
+            `doctor ha trovato *qualcosa* ma non ha nominato il file manomesso:\n${broken.out}`,
+          );
         }
         // A problem an owner cannot act on is half a diagnosis. The check must
         // say what to do, not just that something is wrong.
         if (!/rifai|reseal|ripristina/i.test(broken.out)) {
-          throw new Error(`doctor ha segnalato la manomissione senza dire come rimediare:\n${broken.out}`);
+          throw new Error(
+            `doctor ha segnalato la manomissione senza dire come rimediare:\n${broken.out}`,
+          );
         }
       } finally {
         await inst.cleanup();
@@ -416,63 +474,99 @@ describe('acceptance · A · doctor, backup', () => {
         ],
       });
       try {
-        const said = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'il mio numero fortunato è 42, ricordatelo']);
+        const said = await inst.muffin([
+          'run',
+          '--timeout',
+          String(HEADLESS_TURN_TIMEOUT_SECONDS),
+          'il mio numero fortunato è 42, ricordatelo',
+        ]);
         if (said.code !== 0) throw new Error(`turno iniziale: exit ${said.code}\n${said.err}`);
 
         const before = await inst.muffin(['memory', 'search', 'numero fortunato']);
         if (before.code !== 0 || !before.out.includes('42')) {
-          throw new Error(`prima del backup la ricerca non trova già il contenuto — la fixture è rotta:\n${before.out}`);
+          throw new Error(
+            `prima del backup la ricerca non trova già il contenuto — la fixture è rotta:\n${before.out}`,
+          );
         }
 
         // `muffin backup` — the real verb, not a directory copy.
         const backup = await inst.muffin(['backup']);
-        if (backup.code !== 0) throw new Error(`muffin backup: exit ${backup.code}\n${backup.out}${backup.err}`);
+        if (backup.code !== 0)
+          throw new Error(`muffin backup: exit ${backup.code}\n${backup.out}${backup.err}`);
         const backupMatch = /backup: (\S+) \(/.exec(backup.out);
-        if (!backupMatch) throw new Error(`l'output di \`muffin backup\` non nomina il file prodotto: ${JSON.stringify(backup.out)}`);
+        if (!backupMatch)
+          throw new Error(
+            `l'output di \`muffin backup\` non nomina il file prodotto: ${JSON.stringify(backup.out)}`,
+          );
         const backupFile = backupMatch[1]!;
         if (!existsSync(backupFile)) {
-          throw new Error(`\`muffin backup\` dice di aver scritto ${backupFile}, ma il file non esiste sul disco`);
+          throw new Error(
+            `\`muffin backup\` dice di aver scritto ${backupFile}, ma il file non esiste sul disco`,
+          );
         }
         if (!backup.out.includes('quick_check ok')) {
-          throw new Error(`\`muffin backup\` non dichiara il quick_check sul file prodotto: ${JSON.stringify(backup.out)}`);
+          throw new Error(
+            `\`muffin backup\` non dichiara il quick_check sul file prodotto: ${JSON.stringify(backup.out)}`,
+          );
         }
 
         // Written AFTER the backup — the property this proves is that
         // restore *replaces*, not merges: this must vanish once restored.
-        const said2 = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'la mia squadra del cuore è il Milan, ricordatelo']);
+        const said2 = await inst.muffin([
+          'run',
+          '--timeout',
+          String(HEADLESS_TURN_TIMEOUT_SECONDS),
+          'la mia squadra del cuore è il Milan, ricordatelo',
+        ]);
         if (said2.code !== 0) throw new Error(`secondo turno: exit ${said2.code}\n${said2.err}`);
         const midway = await inst.muffin(['memory', 'search', 'Milan']);
         if (midway.code !== 0 || !midway.out.includes('Milan')) {
-          throw new Error(`prima del restore la ricerca non trova il contenuto scritto dopo il backup — la fixture è rotta:\n${midway.out}`);
+          throw new Error(
+            `prima del restore la ricerca non trova il contenuto scritto dopo il backup — la fixture è rotta:\n${midway.out}`,
+          );
         }
 
         // `muffin restore <file> --yes` — the real verb.
         const restore = await inst.muffin(['restore', backupFile, '--yes']);
-        if (restore.code !== 0) throw new Error(`muffin restore: exit ${restore.code}\n${restore.out}${restore.err}`);
+        if (restore.code !== 0)
+          throw new Error(`muffin restore: exit ${restore.code}\n${restore.out}${restore.err}`);
         if (!restore.out.includes('ripristinato')) {
-          throw new Error(`l'output di \`muffin restore\` non conferma il ripristino: ${JSON.stringify(restore.out)}`);
+          throw new Error(
+            `l'output di \`muffin restore\` non conferma il ripristino: ${JSON.stringify(restore.out)}`,
+          );
         }
         // The courtesy copy `restoreFrom` sets aside before overwriting —
         // real file, not a claim.
         const asideMatch = /db precedente messo da parte: (\S+)/.exec(restore.out);
         if (!asideMatch) {
-          throw new Error(`\`muffin restore\` non dichiara la copia messa da parte del db corrente: ${JSON.stringify(restore.out)}`);
+          throw new Error(
+            `\`muffin restore\` non dichiara la copia messa da parte del db corrente: ${JSON.stringify(restore.out)}`,
+          );
         }
         if (!existsSync(asideMatch[1]!)) {
-          throw new Error(`la copia-di-cortesia dichiarata (${asideMatch[1]}) non esiste sul disco`);
+          throw new Error(
+            `la copia-di-cortesia dichiarata (${asideMatch[1]}) non esiste sul disco`,
+          );
         }
 
         // After restore: the pre-backup content is back...
         const after = await inst.muffin(['memory', 'search', 'numero fortunato']);
-        if (after.code !== 0) throw new Error(`dopo il ripristino la ricerca fallisce: exit ${after.code}\n${after.err}`);
+        if (after.code !== 0)
+          throw new Error(
+            `dopo il ripristino la ricerca fallisce: exit ${after.code}\n${after.err}`,
+          );
         if (!after.out.includes('42')) {
-          throw new Error(`dopo il ripristino il contenuto ante-backup non si ritrova più:\n${after.out}`);
+          throw new Error(
+            `dopo il ripristino il contenuto ante-backup non si ritrova più:\n${after.out}`,
+          );
         }
         // ...and the post-backup content is genuinely gone — restore replaced
         // the database, it did not merge into it.
         const afterMilan = await inst.muffin(['memory', 'search', 'Milan']);
         if (afterMilan.out.includes('Milan')) {
-          throw new Error(`dopo il ripristino il contenuto scritto DOPO il backup si trova ancora — il restore ha aggiunto, non sostituito:\n${afterMilan.out}`);
+          throw new Error(
+            `dopo il ripristino il contenuto scritto DOPO il backup si trova ancora — il restore ha aggiunto, non sostituito:\n${afterMilan.out}`,
+          );
         }
       } finally {
         await inst.cleanup();
@@ -500,7 +594,9 @@ describe('acceptance · A · doctor, backup', () => {
           'sk-acceptance-persisted-key\n',
         );
         if (persisted.code !== 0) {
-          throw new Error(`\`secret set --persist\` non riuscito: exit ${persisted.code}\n${persisted.err}`);
+          throw new Error(
+            `\`secret set --persist\` non riuscito: exit ${persisted.code}\n${persisted.err}`,
+          );
         }
 
         const beforeHash = hashDir(inst.home);
@@ -509,16 +605,21 @@ describe('acceptance · A · doctor, backup', () => {
         // dalla catena, mai da un prompt o da una copia.
         const localDir = join(inst.workspace, 'local-clean-home');
         const local = await inst.muffin(['init', '--local', localDir]);
-        if (local.code !== 0) throw new Error(`\`init --local\` non riuscito: exit ${local.code}\n${local.err}`);
+        if (local.code !== 0)
+          throw new Error(`\`init --local\` non riuscito: exit ${local.code}\n${local.err}`);
         if (!/api key\s+già presente \(persistent\)/.test(local.err)) {
-          throw new Error(`init --local non ha trovato la chiave sul backend persistent:\n${local.err}`);
+          throw new Error(
+            `init --local non ha trovato la chiave sul backend persistent:\n${local.err}`,
+          );
         }
         if (!local.err.includes(`export MUFFIN_HOME=${localDir}`)) {
           throw new Error(`init --local non stampa la riga per usare la nuova home:\n${local.err}`);
         }
         // Il punto intero della riga: nessuna seconda copia della chiave.
         if (existsSync(join(localDir, 'secrets', 'provider_api_key'))) {
-          throw new Error(`init --local ha copiato la chiave nella home locale — non deve mai farlo`);
+          throw new Error(
+            `init --local ha copiato la chiave nella home locale — non deve mai farlo`,
+          );
         }
 
         // (c) L'installazione locale è reale: doctor la trova sana, guidato
@@ -530,17 +631,23 @@ describe('acceptance · A · doctor, backup', () => {
           throw new Error(`doctor non riporta 'database' ok sulla home locale:\n${doctor.out}`);
         }
         if (!/✓ root of trust\s/.test(doctor.out)) {
-          throw new Error(`doctor non riporta 'root of trust' ok sulla home locale:\n${doctor.out}`);
+          throw new Error(
+            `doctor non riporta 'root of trust' ok sulla home locale:\n${doctor.out}`,
+          );
         }
 
         // (e) --local puntato sulla home reale stessa è rifiutato, prima di
         // scrivere qualunque cosa.
         const rejected = await inst.muffin(['init', '--local', inst.home]);
         if (rejected.code !== 78) {
-          throw new Error(`init --local sulla home reale doveva essere rifiutato (78), ricevuto ${rejected.code}:\n${rejected.err}`);
+          throw new Error(
+            `init --local sulla home reale doveva essere rifiutato (78), ricevuto ${rejected.code}:\n${rejected.err}`,
+          );
         }
         if (!/rifiuto/i.test(rejected.err)) {
-          throw new Error(`init --local sulla home reale non spiega perché rifiuta:\n${rejected.err}`);
+          throw new Error(
+            `init --local sulla home reale non spiega perché rifiuta:\n${rejected.err}`,
+          );
         }
 
         // (d) La home originale non è mai stata toccata, né dalla (b) né dal
@@ -602,11 +709,18 @@ describe('acceptance · A6 · update: backup before swap', () => {
     async () => {
       const inst = await install({ main: [{ text: 'segnato: 42' }] });
       try {
-        const said = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'il mio numero fortunato è 42, ricordatelo']);
+        const said = await inst.muffin([
+          'run',
+          '--timeout',
+          String(HEADLESS_TURN_TIMEOUT_SECONDS),
+          'il mio numero fortunato è 42, ricordatelo',
+        ]);
         if (said.code !== 0) throw new Error(`turno iniziale: exit ${said.code}\n${said.err}`);
         const before = await inst.muffin(['memory', 'search', 'numero fortunato']);
         if (before.code !== 0 || !before.out.includes('42')) {
-          throw new Error(`prima dell'update la ricerca non trova già il contenuto — fixture rotta:\n${before.out}`);
+          throw new Error(
+            `prima dell'update la ricerca non trova già il contenuto — fixture rotta:\n${before.out}`,
+          );
         }
 
         // --- a real, throwaway git checkout + a real, throwaway "origin" ---
@@ -620,24 +734,50 @@ describe('acceptance · A6 · update: backup before swap', () => {
         // Never the developer's own global git config (hooks, signing) —
         // only this scratch repo's own commits, with identity passed
         // explicitly per call.
-        const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
+        const gitEnv = {
+          ...process.env,
+          GIT_CONFIG_GLOBAL: '/dev/null',
+          GIT_CONFIG_SYSTEM: '/dev/null',
+        };
         const git = (args: string[], cwd: string): void => {
           const r = spawnSync('git', args, { cwd, env: gitEnv, encoding: 'utf8' });
-          if (r.status !== 0) throw new Error(`git ${args.join(' ')} (in ${cwd}) è uscito ${r.status}:\n${r.stderr}`);
+          if (r.status !== 0)
+            throw new Error(`git ${args.join(' ')} (in ${cwd}) è uscito ${r.status}:\n${r.stderr}`);
         };
         const gitOut = (args: string[], cwd: string): string => {
           const r = spawnSync('git', args, { cwd, env: gitEnv, encoding: 'utf8' });
-          if (r.status !== 0) throw new Error(`git ${args.join(' ')} (in ${cwd}) è uscito ${r.status}:\n${r.stderr}`);
+          if (r.status !== 0)
+            throw new Error(`git ${args.join(' ')} (in ${cwd}) è uscito ${r.status}:\n${r.stderr}`);
           return r.stdout.trim();
         };
         const commit = (msg: string): void =>
-          git(['-c', 'user.name=acceptance', '-c', 'user.email=acceptance@test.local', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', msg], seedDir);
+          git(
+            [
+              '-c',
+              'user.name=acceptance',
+              '-c',
+              'user.email=acceptance@test.local',
+              '-c',
+              'commit.gpgsign=false',
+              'commit',
+              '-q',
+              '-m',
+              msg,
+            ],
+            seedDir,
+          );
 
         const writeSeedRelease = (helpLine: string, schemaVersion: number): void => {
           mkdirSync(join(seedDir, 'dist', 'cli'), { recursive: true });
           mkdirSync(join(seedDir, 'dist', 'core', 'db'), { recursive: true });
-          writeFileSync(join(seedDir, 'dist', 'cli', 'main.js'), `process.stdout.write(${JSON.stringify(helpLine)});\nprocess.exit(0);\n`);
-          writeFileSync(join(seedDir, 'dist', 'core', 'db', 'migrate.js'), `export function currentSchemaVersion(){ return ${schemaVersion}; }\n`);
+          writeFileSync(
+            join(seedDir, 'dist', 'cli', 'main.js'),
+            `process.stdout.write(${JSON.stringify(helpLine)});\nprocess.exit(0);\n`,
+          );
+          writeFileSync(
+            join(seedDir, 'dist', 'core', 'db', 'migrate.js'),
+            `export function currentSchemaVersion(){ return ${schemaVersion}; }\n`,
+          );
         };
 
         // `--initial-branch=main` on both, and it is not cosmetic: the seed
@@ -649,10 +789,19 @@ describe('acceptance · A6 · update: backup before swap', () => {
         // defaults to `main`, red on Linux: the class `lessons.md` already names.
         git(['init', '-q', '--bare', '--initial-branch=main', originDir], root);
         git(['init', '-q', '--initial-branch=main', seedDir], root);
-        writeFileSync(join(seedDir, 'package.json'), JSON.stringify({ name: 'scratch', version: '1.0.0', type: 'module' }));
+        writeFileSync(
+          join(seedDir, 'package.json'),
+          JSON.stringify({ name: 'scratch', version: '1.0.0', type: 'module' }),
+        );
         writeFileSync(
           join(seedDir, 'package-lock.json'),
-          JSON.stringify({ name: 'scratch', version: '1.0.0', lockfileVersion: 3, requires: true, packages: { '': { name: 'scratch', version: '1.0.0' } } }),
+          JSON.stringify({
+            name: 'scratch',
+            version: '1.0.0',
+            lockfileVersion: 3,
+            requires: true,
+            packages: { '': { name: 'scratch', version: '1.0.0' } },
+          }),
         );
         writeSeedRelease('scratch v1 --help\n', 2);
         git(['add', '-A'], seedDir);
@@ -669,7 +818,8 @@ describe('acceptance · A6 · update: backup before swap', () => {
         commit('v2 — schema v3');
         git(['push', '-q', 'origin', 'HEAD:refs/heads/main'], seedDir);
         const newSha = gitOut(['rev-parse', 'HEAD'], seedDir);
-        if (newSha === oldSha) throw new Error('fixture rotta: origin non è avanzato oltre il checkout');
+        if (newSha === oldSha)
+          throw new Error('fixture rotta: origin non è avanzato oltre il checkout');
 
         // A launcher, in the scratch bindir, pointing at the OLD release —
         // exactly what `findOwnedLaunchers` looks for, so the flip is real
@@ -688,20 +838,27 @@ describe('acceptance · A6 · update: backup before swap', () => {
         const iBackup = idx('backup');
         const iFlip = idx('flip');
         if (iBackup === -1 || iFlip === -1) {
-          throw new Error(`passi attesi mancanti fra quelli reali: ${JSON.stringify(result.steps.map((s) => s.name))}`);
+          throw new Error(
+            `passi attesi mancanti fra quelli reali: ${JSON.stringify(result.steps.map((s) => s.name))}`,
+          );
         }
         // The property A6 asks for, checked as an order rather than assumed:
         // the backup happens BEFORE the swap, not after and not never.
         if (iBackup > iFlip) {
-          throw new Error(`'backup' viene dopo 'flip' invece che prima: ${JSON.stringify(result.steps.map((s) => s.name))}`);
+          throw new Error(
+            `'backup' viene dopo 'flip' invece che prima: ${JSON.stringify(result.steps.map((s) => s.name))}`,
+          );
         }
         const backupStep = result.steps[iBackup]!;
-        if (!backupStep.done) throw new Error(`il passo di backup non è riuscito: ${backupStep.detail}`);
+        if (!backupStep.done)
+          throw new Error(`il passo di backup non è riuscito: ${backupStep.detail}`);
 
         const backupMatch = /^(\S+) \(/.exec(backupStep.detail);
-        if (!backupMatch) throw new Error(`il passo 'backup' non nomina il file prodotto: ${backupStep.detail}`);
+        if (!backupMatch)
+          throw new Error(`il passo 'backup' non nomina il file prodotto: ${backupStep.detail}`);
         const backupFile = backupMatch[1]!;
-        if (!existsSync(backupFile)) throw new Error(`il backup dichiarato non esiste sul disco: ${backupFile}`);
+        if (!existsSync(backupFile))
+          throw new Error(`il backup dichiarato non esiste sul disco: ${backupFile}`);
 
         // Validated independently of the mechanism's own claim — a real
         // sqlite file, quick_check ok, carrying the content written before
@@ -710,8 +867,10 @@ describe('acceptance · A6 · update: backup before swap', () => {
         try {
           const check = backupDb.pragma('quick_check', { simple: true });
           if (check !== 'ok') throw new Error(`quick_check sul backup: ${String(check)}`);
-          const row = backupDb.prepare(`SELECT content FROM episodes WHERE content LIKE '%42%' LIMIT 1`).get();
-          if (!row) throw new Error('il backup non porta il contenuto scritto prima dell\'update');
+          const row = backupDb
+            .prepare(`SELECT content FROM episodes WHERE content LIKE '%42%' LIMIT 1`)
+            .get();
+          if (!row) throw new Error("il backup non porta il contenuto scritto prima dell'update");
         } finally {
           backupDb.close();
         }
@@ -720,15 +879,23 @@ describe('acceptance · A6 · update: backup before swap', () => {
         // and the launcher now resolves into it.
         const releaseStep = result.steps[idx('release')]!;
         const releaseMatch = /worktree creato in (\S+)/.exec(releaseStep.detail);
-        if (!releaseMatch) throw new Error(`il passo 'release' non nomina la directory creata: ${releaseStep.detail}`);
+        if (!releaseMatch)
+          throw new Error(
+            `il passo 'release' non nomina la directory creata: ${releaseStep.detail}`,
+          );
         const releaseDir = releaseMatch[1]!;
         const releaseHead = gitOut(['rev-parse', 'HEAD'], releaseDir);
-        if (releaseHead !== newSha) throw new Error(`il worktree della release non è al commit nuovo: ${releaseHead}, atteso ${newSha}`);
+        if (releaseHead !== newSha)
+          throw new Error(
+            `il worktree della release non è al commit nuovo: ${releaseHead}, atteso ${newSha}`,
+          );
 
         const flipTarget = readlinkSync(launcherPath);
         const expectedEntry = join(releaseDir, 'dist', 'cli', 'main.js');
         if (flipTarget !== expectedEntry) {
-          throw new Error(`il launcher non punta alla release nuova dopo il flip: ${flipTarget}, atteso ${expectedEntry}`);
+          throw new Error(
+            `il launcher non punta alla release nuova dopo il flip: ${flipTarget}, atteso ${expectedEntry}`,
+          );
         }
 
         // `defaultReadNewSchemaVersion` really spawned node and imported the
@@ -736,7 +903,9 @@ describe('acceptance · A6 · update: backup before swap', () => {
         // process itself has loaded.
         const schemaStep = result.steps[idx('schema')]!;
         if (!/v3/.test(schemaStep.detail)) {
-          throw new Error(`il passo 'schema' non ha letto v3 dalla release compilata: ${schemaStep.detail}`);
+          throw new Error(
+            `il passo 'schema' non ha letto v3 dalla release compilata: ${schemaStep.detail}`,
+          );
         }
 
         // The live database was never touched directly by `update` — it was
@@ -745,7 +914,9 @@ describe('acceptance · A6 · update: backup before swap', () => {
         // there after it.
         const after = await inst.muffin(['memory', 'search', 'numero fortunato']);
         if (after.code !== 0 || !after.out.includes('42')) {
-          throw new Error(`dopo l'update il contenuto scritto prima non si trova più:\n${after.out}`);
+          throw new Error(
+            `dopo l'update il contenuto scritto prima non si trova più:\n${after.out}`,
+          );
         }
 
         rmSync(root, { recursive: true, force: true });
@@ -777,19 +948,31 @@ describe('acceptance · A4 · config: hand-edit + reseal, end to end', () => {
     'A4',
     async () => {
       const inst = await install({
-        main: [{ text: 'ciao dal modello di partenza' }, { text: 'ciao dal modello cambiato a mano' }],
+        main: [
+          { text: 'ciao dal modello di partenza' },
+          { text: 'ciao dal modello cambiato a mano' },
+        ],
       });
       try {
         // --- (a) baseline: models.main as `muffin init` wrote it ------------
         const configPath = join(inst.home, 'config.json');
-        const baseline = JSON.parse(readFileSync(configPath, 'utf8')) as { models: { main: string } };
+        const baseline = JSON.parse(readFileSync(configPath, 'utf8')) as {
+          models: { main: string };
+        };
         const originalModel = baseline.models.main;
 
-        const first = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'ciao']);
+        const first = await inst.muffin([
+          'run',
+          '--timeout',
+          String(HEADLESS_TURN_TIMEOUT_SECONDS),
+          'ciao',
+        ]);
         if (first.code !== 0) throw new Error(`turno iniziale: exit ${first.code}\n${first.err}`);
         const firstModelSent = inst.provider.main().at(-1)?.model;
         if (firstModelSent !== originalModel) {
-          throw new Error(`il provider finto ha ricevuto model=${firstModelSent}, atteso il valore di config.json (${originalModel}) — fixture rotta`);
+          throw new Error(
+            `il provider finto ha ricevuto model=${firstModelSent}, atteso il valore di config.json (${originalModel}) — fixture rotta`,
+          );
         }
 
         // --- (b) hand-edit config.json — a real, unsealed knob ---------------
@@ -798,38 +981,67 @@ describe('acceptance · A4 · config: hand-edit + reseal, end to end', () => {
         writeFileSync(configPath, JSON.stringify(edited, null, 2));
 
         const knobsAfterEdit = await inst.muffin(['config', '--json']);
-        if (knobsAfterEdit.code !== 0) throw new Error(`muffin config --json: exit ${knobsAfterEdit.code}\n${knobsAfterEdit.err}`);
-        const knobs = JSON.parse(knobsAfterEdit.out) as Array<{ key: string; value: string; sealed: boolean }>;
+        if (knobsAfterEdit.code !== 0)
+          throw new Error(
+            `muffin config --json: exit ${knobsAfterEdit.code}\n${knobsAfterEdit.err}`,
+          );
+        const knobs = JSON.parse(knobsAfterEdit.out) as Array<{
+          key: string;
+          value: string;
+          sealed: boolean;
+        }>;
         const mainKnob = knobs.find((k) => k.key === 'models.main');
-        if (!mainKnob) throw new Error(`muffin config --json non elenca models.main: ${knobsAfterEdit.out}`);
+        if (!mainKnob)
+          throw new Error(`muffin config --json non elenca models.main: ${knobsAfterEdit.out}`);
         if (mainKnob.value !== EDITED_MODEL) {
-          throw new Error(`muffin config --json mostra ancora il vecchio valore dopo l'hand-edit: ${JSON.stringify(mainKnob)}`);
+          throw new Error(
+            `muffin config --json mostra ancora il vecchio valore dopo l'hand-edit: ${JSON.stringify(mainKnob)}`,
+          );
         }
         if (mainKnob.sealed !== false) {
-          throw new Error(`models.main risulta sigillato — non dovrebbe: ADR-0036 lo tiene fuori dal Root of Trust`);
+          throw new Error(
+            `models.main risulta sigillato — non dovrebbe: ADR-0036 lo tiene fuori dal Root of Trust`,
+          );
         }
 
         // The edited value is what the BINARY actually uses next — not just
         // what a reader of config.json would show. No `rot reseal` in
         // between: an unsealed knob must not need one.
-        const second = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'ciao di nuovo']);
-        if (second.code !== 0) throw new Error(`turno dopo l'hand-edit: exit ${second.code}\n${second.err}`);
+        const second = await inst.muffin([
+          'run',
+          '--timeout',
+          String(HEADLESS_TURN_TIMEOUT_SECONDS),
+          'ciao di nuovo',
+        ]);
+        if (second.code !== 0)
+          throw new Error(`turno dopo l'hand-edit: exit ${second.code}\n${second.err}`);
         const secondModelSent = inst.provider.main().at(-1)?.model;
         if (secondModelSent !== EDITED_MODEL) {
-          throw new Error(`il provider finto ha ricevuto model=${secondModelSent}, atteso il valore hand-editato (${EDITED_MODEL})`);
+          throw new Error(
+            `il provider finto ha ricevuto model=${secondModelSent}, atteso il valore hand-editato (${EDITED_MODEL})`,
+          );
         }
         const doctorAfterUnsealedEdit = await inst.muffin(['doctor']);
         if (doctorAfterUnsealedEdit.code === 2) {
-          throw new Error(`doctor va in fail per un hand-edit di un file esplicitamente NON sigillato:\n${doctorAfterUnsealedEdit.out}`);
+          throw new Error(
+            `doctor va in fail per un hand-edit di un file esplicitamente NON sigillato:\n${doctorAfterUnsealedEdit.out}`,
+          );
         }
-        if (/root of trust/i.test(doctorAfterUnsealedEdit.out) && !/✓ root of trust\s/.test(doctorAfterUnsealedEdit.out)) {
-          throw new Error(`doctor segnala il root of trust come compromesso per un edit di config.json, che non ne fa parte:\n${doctorAfterUnsealedEdit.out}`);
+        if (
+          /root of trust/i.test(doctorAfterUnsealedEdit.out) &&
+          !/✓ root of trust\s/.test(doctorAfterUnsealedEdit.out)
+        ) {
+          throw new Error(
+            `doctor segnala il root of trust come compromesso per un edit di config.json, che non ne fa parte:\n${doctorAfterUnsealedEdit.out}`,
+          );
         }
 
         // --- (c) hand-edit a SEALED file — takes effect immediately, but ----
         //         `doctor` calls it tampering until `muffin rot reseal` runs.
         const budgetsPath = join(inst.home, 'rot', 'budgets.json');
-        const budgetsBefore = JSON.parse(readFileSync(budgetsPath, 'utf8')) as { monthlyUsd: number };
+        const budgetsBefore = JSON.parse(readFileSync(budgetsPath, 'utf8')) as {
+          monthlyUsd: number;
+        };
         const originalCap = budgetsBefore.monthlyUsd;
         const budgetsTampered = { ...budgetsBefore, monthlyUsd: 0 };
         writeFileSync(budgetsPath, JSON.stringify(budgetsTampered, null, 2));
@@ -839,42 +1051,76 @@ describe('acceptance · A4 · config: hand-edit + reseal, end to end', () => {
         // turno si ferma"). This is what tells apart "the seal enforces a
         // real cap" from "the seal is decorative and the real cap is
         // somewhere unsealed can reach".
-        const stoppedByCap = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'un turno qualsiasi']);
+        const stoppedByCap = await inst.muffin([
+          'run',
+          '--timeout',
+          String(HEADLESS_TURN_TIMEOUT_SECONDS),
+          'un turno qualsiasi',
+        ]);
         if (stoppedByCap.code !== 4) {
-          throw new Error(`atteso exit 4 (budget) col tetto azzerato a mano, ricevuto ${stoppedByCap.code}\n${stoppedByCap.out}${stoppedByCap.err}`);
+          throw new Error(
+            `atteso exit 4 (budget) col tetto azzerato a mano, ricevuto ${stoppedByCap.code}\n${stoppedByCap.out}${stoppedByCap.err}`,
+          );
         }
 
         const doctorBeforeReseal = await inst.muffin(['doctor']);
         if (doctorBeforeReseal.code === 0) {
-          throw new Error(`doctor non si accorge dell'hand-edit di un file sigillato:\n${doctorBeforeReseal.out}`);
+          throw new Error(
+            `doctor non si accorge dell'hand-edit di un file sigillato:\n${doctorBeforeReseal.out}`,
+          );
         }
-        if (!/root of trust/.test(doctorBeforeReseal.out) || !/budgets\.json/.test(doctorBeforeReseal.out)) {
-          throw new Error(`doctor non nomina il file sigillato manomesso:\n${doctorBeforeReseal.out}`);
+        if (
+          !/root of trust/.test(doctorBeforeReseal.out) ||
+          !/budgets\.json/.test(doctorBeforeReseal.out)
+        ) {
+          throw new Error(
+            `doctor non nomina il file sigillato manomesso:\n${doctorBeforeReseal.out}`,
+          );
         }
 
         // --- (d) `muffin rot reseal` — the real terminal command ------------
         const reseal = await inst.muffin(['rot', 'reseal']);
-        if (reseal.code !== 0) throw new Error(`muffin rot reseal: exit ${reseal.code}\n${reseal.out}${reseal.err}`);
+        if (reseal.code !== 0)
+          throw new Error(`muffin rot reseal: exit ${reseal.code}\n${reseal.out}${reseal.err}`);
         if (!/resealed \d+ files/.test(reseal.out)) {
-          throw new Error(`muffin rot reseal non conferma quanti file ha risigillato: ${JSON.stringify(reseal.out)}`);
+          throw new Error(
+            `muffin rot reseal non conferma quanti file ha risigillato: ${JSON.stringify(reseal.out)}`,
+          );
         }
 
         const doctorAfterReseal = await inst.muffin(['doctor']);
         if (!/✓ root of trust\s/.test(doctorAfterReseal.out)) {
-          throw new Error(`doctor resta in fail sul root of trust dopo \`muffin rot reseal\`:\n${doctorAfterReseal.out}`);
+          throw new Error(
+            `doctor resta in fail sul root of trust dopo \`muffin rot reseal\`:\n${doctorAfterReseal.out}`,
+          );
         }
 
         const knobsAfterReseal = await inst.muffin(['config', '--json']);
-        const budgetKnob = (JSON.parse(knobsAfterReseal.out) as Array<{ key: string; value: string; sealed: boolean; source: string }>).find(
-          (k) => k.key === 'budgets.monthlyUsd',
-        );
-        if (!budgetKnob) throw new Error(`muffin config --json non elenca budgets.monthlyUsd: ${knobsAfterReseal.out}`);
-        if (budgetKnob.sealed !== true) throw new Error(`budgets.monthlyUsd non risulta sigillato: ${JSON.stringify(budgetKnob)}`);
+        const budgetKnob = (
+          JSON.parse(knobsAfterReseal.out) as Array<{
+            key: string;
+            value: string;
+            sealed: boolean;
+            source: string;
+          }>
+        ).find((k) => k.key === 'budgets.monthlyUsd');
+        if (!budgetKnob)
+          throw new Error(
+            `muffin config --json non elenca budgets.monthlyUsd: ${knobsAfterReseal.out}`,
+          );
+        if (budgetKnob.sealed !== true)
+          throw new Error(
+            `budgets.monthlyUsd non risulta sigillato: ${JSON.stringify(budgetKnob)}`,
+          );
         if (budgetKnob.value !== '0') {
-          throw new Error(`dopo il reseal muffin config --json non mostra il valore hand-editato (0): ${JSON.stringify(budgetKnob)}`);
+          throw new Error(
+            `dopo il reseal muffin config --json non mostra il valore hand-editato (0): ${JSON.stringify(budgetKnob)}`,
+          );
         }
         if (budgetKnob.value === String(originalCap)) {
-          throw new Error(`fixture inutile: il valore originale e quello editato coincidono (${originalCap})`);
+          throw new Error(
+            `fixture inutile: il valore originale e quello editato coincidono (${originalCap})`,
+          );
         }
       } finally {
         await inst.cleanup();
@@ -913,7 +1159,12 @@ describe('acceptance · A7 · migration: additive migration on populated data, a
     async () => {
       const inst = await install({ main: [{ text: 'ciao' }] });
       try {
-        const said = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'ciao']);
+        const said = await inst.muffin([
+          'run',
+          '--timeout',
+          String(HEADLESS_TURN_TIMEOUT_SECONDS),
+          'ciao',
+        ]);
         if (said.code !== 0) throw new Error(`turno iniziale: exit ${said.code}\n${said.err}`);
 
         const dbFile = join(inst.home, 'muffin.db');
@@ -931,10 +1182,17 @@ describe('acceptance · A7 · migration: additive migration on populated data, a
         {
           const seed = new DatabaseCtor(dbFile);
           try {
-            const episodeId = (seed.prepare(`SELECT id FROM episodes ORDER BY id DESC LIMIT 1`).get() as { id: number } | undefined)?.id;
-            if (!episodeId) throw new Error('fixture rotta: nessun episodio da cui appendere la fact');
+            const episodeId = (
+              seed.prepare(`SELECT id FROM episodes ORDER BY id DESC LIMIT 1`).get() as
+                | { id: number }
+                | undefined
+            )?.id;
+            if (!episodeId)
+              throw new Error('fixture rotta: nessun episodio da cui appendere la fact');
             const entityId = seed
-              .prepare(`INSERT INTO entities (tenant_id, kind, name, recorded_at) VALUES ('host', 'person', 'owner', ?)`)
+              .prepare(
+                `INSERT INTO entities (tenant_id, kind, name, recorded_at) VALUES ('host', 'person', 'owner', ?)`,
+              )
               .run(now).lastInsertRowid as number;
             factId = seed
               .prepare(
@@ -948,19 +1206,35 @@ describe('acceptance · A7 · migration: additive migration on populated data, a
         }
 
         const before = inst.db((db) => ({
-          schemaV: (db.prepare(`SELECT MAX(version) AS v FROM schema_version`).get() as { v: number }).v,
-          fact: db.prepare(`SELECT pinned, tenant_id, trust_tier, origin FROM facts WHERE id = ?`).get(factId) as
+          schemaV: (
+            db.prepare(`SELECT MAX(version) AS v FROM schema_version`).get() as { v: number }
+          ).v,
+          fact: db
+            .prepare(`SELECT pinned, tenant_id, trust_tier, origin FROM facts WHERE id = ?`)
+            .get(factId) as
             | { pinned: number; tenant_id: string; trust_tier: number; origin: string }
             | undefined,
           factCount: (db.prepare(`SELECT count(*) AS n FROM facts`).get() as { n: number }).n,
           entityCount: (db.prepare(`SELECT count(*) AS n FROM entities`).get() as { n: number }).n,
         }));
         if (!before.fact) throw new Error('fixture rotta: la fact appena inserita non si trova');
-        if (before.fact.pinned !== 0) throw new Error(`fixture inutile: la fact è già pinned prima della migrazione (${before.fact.pinned})`);
-        if (before.fact.tenant_id !== 'host' || before.fact.trust_tier !== 0 || before.fact.origin !== 'said') {
-          throw new Error(`fixture non soddisfa i criteri del backfill di v3: ${JSON.stringify(before.fact)}`);
+        if (before.fact.pinned !== 0)
+          throw new Error(
+            `fixture inutile: la fact è già pinned prima della migrazione (${before.fact.pinned})`,
+          );
+        if (
+          before.fact.tenant_id !== 'host' ||
+          before.fact.trust_tier !== 0 ||
+          before.fact.origin !== 'said'
+        ) {
+          throw new Error(
+            `fixture non soddisfa i criteri del backfill di v3: ${JSON.stringify(before.fact)}`,
+          );
         }
-        if (before.schemaV < 3) throw new Error(`fixture rotta: un'installazione fresca dovrebbe già essere a schema v3, trovato v${before.schemaV}`);
+        if (before.schemaV < 3)
+          throw new Error(
+            `fixture rotta: un'installazione fresca dovrebbe già essere a schema v3, trovato v${before.schemaV}`,
+          );
 
         // --- rewind: this install "has never run migration 3" --------------
         //     Only the stamps go away — the real, populated data stays
@@ -979,8 +1253,12 @@ describe('acceptance · A7 · migration: additive migration on populated data, a
             rewind.close();
           }
         }
-        const rewoundV = inst.db((db) => (db.prepare(`SELECT MAX(version) AS v FROM schema_version`).get() as { v: number }).v);
-        if (rewoundV !== 2) throw new Error(`il rewind dello schema_version non ha funzionato: v${rewoundV}`);
+        const rewoundV = inst.db(
+          (db) =>
+            (db.prepare(`SELECT MAX(version) AS v FROM schema_version`).get() as { v: number }).v,
+        );
+        if (rewoundV !== 2)
+          throw new Error(`il rewind dello schema_version non ha funzionato: v${rewoundV}`);
 
         // --- the real binary, migrating real populated data on its own boot -
         // Not asserted to find the fact via recall: it was inserted directly,
@@ -990,13 +1268,21 @@ describe('acceptance · A7 · migration: additive migration on populated data, a
         // outcome, a crash is not.
         const migrated = await inst.muffin(['memory', 'search', 'giardiniere']);
         if (migrated.code !== 0 && migrated.code !== 1) {
-          throw new Error(`muffin memory search dopo la migrazione: exit ${migrated.code}\n${migrated.out}${migrated.err}`);
+          throw new Error(
+            `muffin memory search dopo la migrazione: exit ${migrated.code}\n${migrated.out}${migrated.err}`,
+          );
         }
 
         const after = inst.db((db) => ({
-          schemaV: (db.prepare(`SELECT MAX(version) AS v FROM schema_version`).get() as { v: number }).v,
-          desc: db.prepare(`SELECT description FROM schema_version WHERE version = 3`).get() as { description: string } | undefined,
-          fact: db.prepare(`SELECT pinned FROM facts WHERE id = ?`).get(factId) as { pinned: number } | undefined,
+          schemaV: (
+            db.prepare(`SELECT MAX(version) AS v FROM schema_version`).get() as { v: number }
+          ).v,
+          desc: db.prepare(`SELECT description FROM schema_version WHERE version = 3`).get() as
+            | { description: string }
+            | undefined,
+          fact: db.prepare(`SELECT pinned FROM facts WHERE id = ?`).get(factId) as
+            | { pinned: number }
+            | undefined,
           factCount: (db.prepare(`SELECT count(*) AS n FROM facts`).get() as { n: number }).n,
           entityCount: (db.prepare(`SELECT count(*) AS n FROM entities`).get() as { n: number }).n,
         }));
@@ -1004,26 +1290,41 @@ describe('acceptance · A7 · migration: additive migration on populated data, a
         // tolto. Letto da `currentSchemaVersion()` invece che scritto a mano,
         // così la prossima migrazione non richiede una modifica qui.
         if (after.schemaV !== currentSchemaVersion()) {
-          throw new Error(`schema non è tornato a v${currentSchemaVersion()} dopo il boot: v${after.schemaV}`);
+          throw new Error(
+            `schema non è tornato a v${currentSchemaVersion()} dopo il boot: v${after.schemaV}`,
+          );
         }
         if (after.desc?.description.includes('fresh install')) {
-          throw new Error(`la riga di schema_version resta timbrata "fresh install" — la migrazione non è stata rieseguita per davvero: ${after.desc.description}`);
+          throw new Error(
+            `la riga di schema_version resta timbrata "fresh install" — la migrazione non è stata rieseguita per davvero: ${after.desc.description}`,
+          );
         }
         // Rows intact — the property an additive migration must have.
-        if (after.factCount !== before.factCount) throw new Error(`righe facts cambiate: ${before.factCount} prima, ${after.factCount} dopo`);
-        if (after.entityCount !== before.entityCount) throw new Error(`righe entities cambiate: ${before.entityCount} prima, ${after.entityCount} dopo`);
+        if (after.factCount !== before.factCount)
+          throw new Error(
+            `righe facts cambiate: ${before.factCount} prima, ${after.factCount} dopo`,
+          );
+        if (after.entityCount !== before.entityCount)
+          throw new Error(
+            `righe entities cambiate: ${before.entityCount} prima, ${after.entityCount} dopo`,
+          );
         // The constraint the migration exists for is now active: the owner's
         // identity fact is pinned, unconditionally in context from now on —
         // not merely "the column exists", which a stamp-only fresh install
         // would also show.
-        if (after.fact?.pinned !== 1) throw new Error(`la migrazione non ha pinnato la fact attesa: ${JSON.stringify(after.fact)}`);
+        if (after.fact?.pinned !== 1)
+          throw new Error(
+            `la migrazione non ha pinnato la fact attesa: ${JSON.stringify(after.fact)}`,
+          );
 
         // --- old code, newer data: SchemaAheadError, through the real binary
         {
           const bump = new DatabaseCtor(dbFile);
           try {
             bump
-              .prepare(`INSERT INTO schema_version (version, description, applied_at) VALUES (99, 'finto — dal futuro', ?)`)
+              .prepare(
+                `INSERT INTO schema_version (version, description, applied_at) VALUES (99, 'finto — dal futuro', ?)`,
+              )
               .run(new Date().toISOString());
           } finally {
             bump.close();
@@ -1031,18 +1332,27 @@ describe('acceptance · A7 · migration: additive migration on populated data, a
         }
         const ahead = await inst.muffin(['memory', 'search', 'giardiniere']);
         if (ahead.code === 0) {
-          throw new Error(`il binario ha girato contro uno schema più avanti di sé senza rifiutare (exit ${ahead.code})`);
+          throw new Error(
+            `il binario ha girato contro uno schema più avanti di sé senza rifiutare (exit ${ahead.code})`,
+          );
         }
         if (!/schema v99/.test(ahead.err) || !/più vecchio dei dati/.test(ahead.err)) {
-          throw new Error(`il rifiuto non nomina lo schema avanti o la ragione: ${JSON.stringify(ahead.err)}`);
+          throw new Error(
+            `il rifiuto non nomina lo schema avanti o la ragione: ${JSON.stringify(ahead.err)}`,
+          );
         }
         // Refused before writing anything — the data is exactly as it was.
         const untouched = inst.db((db) => ({
           factCount: (db.prepare(`SELECT count(*) AS n FROM facts`).get() as { n: number }).n,
           entityCount: (db.prepare(`SELECT count(*) AS n FROM entities`).get() as { n: number }).n,
         }));
-        if (untouched.factCount !== after.factCount || untouched.entityCount !== after.entityCount) {
-          throw new Error(`il rifiuto ha comunque cambiato le righe: prima ${JSON.stringify(after)}, dopo ${JSON.stringify(untouched)}`);
+        if (
+          untouched.factCount !== after.factCount ||
+          untouched.entityCount !== after.entityCount
+        ) {
+          throw new Error(
+            `il rifiuto ha comunque cambiato le righe: prima ${JSON.stringify(after)}, dopo ${JSON.stringify(untouched)}`,
+          );
         }
       } finally {
         await inst.cleanup();

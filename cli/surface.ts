@@ -146,11 +146,7 @@ type PortConnection = {
   readonly stopPoller: () => void;
   readonly stop: (budgetMs: number) => Promise<void>;
   readonly door?:
-    | ((
-        turnId: string,
-        replyTo: Record<string, unknown>,
-        text: string,
-      ) => ReturnType<LaneDeliver>)
+    | ((turnId: string, replyTo: Record<string, unknown>, text: string) => ReturnType<LaneDeliver>)
     | undefined;
   readonly stream?: AttachStream | undefined;
   readonly approver?: Approver | undefined;
@@ -977,11 +973,7 @@ export function connectSurfaces(
    */
   const doors = new Map<
     string,
-    (
-      turnId: string,
-      replyTo: Record<string, unknown>,
-      text: string,
-    ) => ReturnType<LaneDeliver>
+    (turnId: string, replyTo: Record<string, unknown>, text: string) => ReturnType<LaneDeliver>
   >();
   /**
    * The lane's own half of B11/B13 for a resumed turn — same shape as
@@ -1190,7 +1182,10 @@ export function attachSendFile(
     denyWrite: vaultGuards.denyWrite,
     denyRead: vaultGuards.denyRead,
   };
-  runtime.register(makeSendFileTool({ scopes: [projectScope, vaultScope], deliverFile }), sendFileCapability);
+  runtime.register(
+    makeSendFileTool({ scopes: [projectScope, vaultScope], deliverFile }),
+    sendFileCapability,
+  );
 }
 
 /**
@@ -1429,7 +1424,8 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
         turn.recovered &&
         record.replyTo?.scheduledDeliveryVersion !== SCHEDULED_DELIVERY_VERSION &&
         delivery.parts(turn.id, record.leaseIndex).length === 0
-      ) return 'possibly_sent';
+      )
+        return 'possibly_sent';
       return connector.deliverTo(turn.id, address, text);
     }),
     start: avvia,

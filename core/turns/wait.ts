@@ -78,8 +78,6 @@ export const MAX_SUSPENDED_PER_TENANT = 8;
  * adding its evaluator in the same change; `satisfied` below is a `switch` with
  * an exhaustive `default`, so the build says so.
  */
-type WaitKind = 'process_exit' | 'approval';
-
 /**
  * `process_exit:<pid>` o `approval:<id>` — la forma persistita: una stringa,
  * così la colonna resta una colonna.
@@ -143,7 +141,10 @@ export function parseWait(
 ): WaitParsed | WaitRefusal {
   const seconds = typeof input.seconds === 'number' ? input.seconds : Number.NaN;
   if (!Number.isFinite(seconds)) {
-    return { ok: false, why: '`seconds` è obbligatorio: un\'attesa senza scadenza non finisce mai e nessuno la vede.' };
+    return {
+      ok: false,
+      why: "`seconds` è obbligatorio: un'attesa senza scadenza non finisce mai e nessuno la vede.",
+    };
   }
   const ms = Math.round(seconds * 1000);
   if (ms < MIN_WAIT_MS) {
@@ -195,7 +196,10 @@ export type BarrierChecks = {
   answered?: ((id: string) => boolean) | undefined;
 };
 
-export function satisfied(waitFor: WaitFor, checks: BarrierChecks | ((pid: number) => boolean) = {}): boolean {
+export function satisfied(
+  waitFor: WaitFor,
+  checks: BarrierChecks | ((pid: number) => boolean) = {},
+): boolean {
   // `satisfied(barrier, alive)` era la firma di prima, e i suoi chiamanti sono
   // in due file. Accettare ancora la funzione nuda costa una riga e toglie una
   // modifica meccanica da un punto — la sweep delle barriere — dove sbagliare
@@ -265,25 +269,19 @@ export function wakeReport(waitFor: WaitFor | null, reason: WakeReason): string 
     // dalla scadenza, che non è passata. Dirlo è l'unica cosa onesta: il ramo
     // `timer` qui sotto affermerebbe una scadenza che nessuno ha osservato.
     return waitFor !== null
-      ? (
-        `Il turno si è svegliato per la risposta a un'altra domanda, non per il processo ${waitFor.pid}: ` +
+      ? `Il turno si è svegliato per la risposta a un'altra domanda, non per il processo ${waitFor.pid}: ` +
           `risulta ancora vivo e il tempo che avevi chiesto non è ancora passato. ` +
           `Riparti dalla risposta — se avevi una chiamata in attesa di approvazione, rifalla e la decisione verrà usata.`
-        )
-      : (
-        'Il turno si è svegliato per la risposta a una domanda di approvazione, prima del tempo che avevi chiesto. ' +
-        'Riparti dalla risposta.'
-        );
+      : 'Il turno si è svegliato per la risposta a una domanda di approvazione, prima del tempo che avevi chiesto. ' +
+          'Riparti dalla risposta.';
   }
   if (reason === 'early') {
     // Stessa forma senza risposta nel registro: svegliato prima che qualcosa
     // di atteso succedesse, quindi il referto non nomina cause — né scadenze
     // non passate, né risposte non date.
     return waitFor !== null
-      ? (
-        `Il turno riprende prima del tempo che avevi chiesto, e non perché il processo ${waitFor.pid} sia uscito ` +
+      ? `Il turno riprende prima del tempo che avevi chiesto, e non perché il processo ${waitFor.pid} sia uscito ` +
           `— risulta ancora vivo. Riprendi da dove eri.`
-        )
       : 'Attesa finita prima del tempo che avevi chiesto — nessuna scadenza è passata. Riprendi da dove eri.';
   }
   if (waitFor !== null) {
@@ -306,7 +304,10 @@ export function wakeReport(waitFor: WaitFor | null, reason: WakeReason): string 
  * `approval` barrier, handled by the guard and by `wakeReport` above) add no
  * noise.
  */
-export function approvalFootnote(openCapability: string | null, decidedUnconsumed: boolean): string | null {
+export function approvalFootnote(
+  openCapability: string | null,
+  decidedUnconsumed: boolean,
+): string | null {
   const righe: string[] = [];
   if (decidedUnconsumed) {
     righe.push(

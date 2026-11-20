@@ -298,8 +298,12 @@ ExecStart=${exec.join(' ')}
 # sposta fa fallire systemd allo CHDIR prima ancora che il runtime carichi, e
 # Restart=always va in crash-loop su una directory morta (ADR-0035).
 WorkingDirectory=${home}
-Environment=MUFFIN_HOME=${home}${unitPath(interpreterDir, toolBinDir) === null ? '' : `
-Environment=PATH=${unitPath(interpreterDir, toolBinDir)}`}
+Environment=MUFFIN_HOME=${home}${
+    unitPath(interpreterDir, toolBinDir) === null
+      ? ''
+      : `
+Environment=PATH=${unitPath(interpreterDir, toolBinDir)}`
+  }
 
 Restart=always
 RestartSec=${RESTART_SEC}
@@ -359,7 +363,10 @@ WantedBy=default.target
       identity === undefined
         ? []
         : [
-            { argv: ['systemctl', '--user', 'daemon-reload'], why: 'perché systemd rilegga la unit appena scritta' },
+            {
+              argv: ['systemctl', '--user', 'daemon-reload'],
+              why: 'perché systemd rilegga la unit appena scritta',
+            },
             {
               argv: ['systemctl', '--user', 'enable', '--now', `${SERVICE_NAME}.service`],
               why: "abilita all'avvio e la fa partire adesso",
@@ -382,7 +389,14 @@ WantedBy=default.target
   };
 }
 
-function launchdPlan({ home, exec, homeDir, interpreterDir, toolBinDir, identity }: UnitOptions): UnitPlan {
+function launchdPlan({
+  home,
+  exec,
+  homeDir,
+  interpreterDir,
+  toolBinDir,
+  identity,
+}: UnitOptions): UnitPlan {
   const path = join(homeDir ?? homedir(), 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`);
   const args = exec.map((a) => `      <string>${xml(a)}</string>`).join('\n');
   const text = `<?xml version="1.0" encoding="UTF-8"?>
@@ -564,4 +578,20 @@ export function resolveLauncher(probe: LauncherProbe): Launcher {
       ? `nessun launcher su PATH punta a questa build (quelli trovati sono di un altro programma: su Linux Mint \`muffin\` è il window manager di Cinnamon). L'unit punta direttamente a ${probe.entry}: se sposti il checkout, il supervisore fallisce prima ancora di caricare il runtime.${missing} Esegui \`./install.sh\` e rigenera.`
       : `l'unit punta direttamente a ${probe.entry}, dentro il checkout del codice. Se lo sposti, il supervisore fallisce allo CHDIR prima che il runtime carichi e va in crash-loop su una directory morta.${missing} Esegui \`./install.sh\` e rigenera l'unit.`,
   };
+}
+
+/**
+ * Lines from `systemd-analyze verify` that are about this unit.
+ *
+ * systemd also walks host units. Ubuntu 26.04 warns that `CPUAccounting=`
+ * was removed from xfs_scrub and the guest agent; those lines name another
+ * absolute path and do not say this unit was rejected. A line that names no
+ * file still counts: a parse failure is not someone else's unit.
+ */
+export function systemdDiagnosticsForUnit(unitPath: string, output: string): string {
+  return output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && (line.includes(unitPath) || !line.startsWith('/')))
+    .join('\n');
 }

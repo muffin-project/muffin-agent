@@ -65,7 +65,10 @@ export type WebSocketLike = {
    * signature is what a plain object literal fake can implement without
    * fighting structural typing over which overload it satisfies.
    */
-  addEventListener(type: 'open' | 'message' | 'close' | 'error', listener: (ev?: WsEvent) => void): void;
+  addEventListener(
+    type: 'open' | 'message' | 'close' | 'error',
+    listener: (ev?: WsEvent) => void,
+  ): void;
 };
 
 /** The union of fields this file ever reads off an event object, across all four event types. */
@@ -135,19 +138,43 @@ const IDENTIFY_PROPERTIES = { os: process.platform, browser: 'muffin', device: '
 export function nextAction(code: number): { reconnect: boolean; resume: boolean; why: string } {
   switch (code) {
     case 4004:
-      return { reconnect: false, resume: false, why: 'token non valido o revocato (Authentication failed)' };
+      return {
+        reconnect: false,
+        resume: false,
+        why: 'token non valido o revocato (Authentication failed)',
+      };
     case 4010:
       return { reconnect: false, resume: false, why: 'shard non valido (Invalid shard)' };
     case 4011:
-      return { reconnect: false, resume: false, why: 'serve lo sharding (Sharding required) — non atteso per un bot DM-only' };
+      return {
+        reconnect: false,
+        resume: false,
+        why: 'serve lo sharding (Sharding required) — non atteso per un bot DM-only',
+      };
     case 4012:
-      return { reconnect: false, resume: false, why: 'versione API del gateway non valida (Invalid API version)' };
+      return {
+        reconnect: false,
+        resume: false,
+        why: 'versione API del gateway non valida (Invalid API version)',
+      };
     case 4013:
-      return { reconnect: false, resume: false, why: 'intent richiesti non validi (Invalid intent(s))' };
+      return {
+        reconnect: false,
+        resume: false,
+        why: 'intent richiesti non validi (Invalid intent(s))',
+      };
     case 4014:
-      return { reconnect: false, resume: false, why: 'intent non autorizzati per questa app (Disallowed intent(s)) — vanno abilitati nel developer portal' };
+      return {
+        reconnect: false,
+        resume: false,
+        why: 'intent non autorizzati per questa app (Disallowed intent(s)) — vanno abilitati nel developer portal',
+      };
     case 4007:
-      return { reconnect: true, resume: false, why: 'sequence non valida (Invalid seq) — la sessione non è più valida, serve un nuovo Identify' };
+      return {
+        reconnect: true,
+        resume: false,
+        why: 'sequence non valida (Invalid seq) — la sessione non è più valida, serve un nuovo Identify',
+      };
     case 4009:
       return { reconnect: true, resume: false, why: 'sessione scaduta (Session timed out)' };
     // 4000 Unknown error, 4001 Unknown opcode, 4002 Decode error, 4003 Not
@@ -217,14 +244,12 @@ export class DiscordGateway {
   private stopRequested = false;
   private readonly log: (line: string) => void;
   private readonly stato: (connessa: boolean, causa?: string) => void;
-  private readonly now: () => Date;
   private readonly wsFactory: (url: string) => WebSocketLike;
   private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(private readonly deps: DiscordGatewayDeps) {
     this.log = deps.onLog ?? (() => {});
     this.stato = deps.onStato ?? (() => {});
-    this.now = deps.now ?? (() => new Date());
     this.wsFactory = deps.wsFactory ?? ((url) => new WebSocket(url) as unknown as WebSocketLike);
     this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }
@@ -266,7 +291,10 @@ export class DiscordGateway {
           // Il ramo che rende la promise indistinguibile da uno stop voluto.
           // Chi legge deve poter distinguerli, e questa e' l'unica riga che
           // glielo dice.
-          this.stato(false, `non riprovo — ${action.why} (serve intervento: token, intent o config)`);
+          this.stato(
+            false,
+            `non riprovo — ${action.why} (serve intervento: token, intent o config)`,
+          );
           return;
         }
         if (!action.resume) {
@@ -299,7 +327,10 @@ export class DiscordGateway {
    * caller could not see was exactly what let the reset go unbuilt the first
    * time, so it is returned instead.
    */
-  private connectOnce(url: string, resuming: boolean): Promise<{ code: number; sawReadyOrResumed: boolean }> {
+  private connectOnce(
+    url: string,
+    resuming: boolean,
+  ): Promise<{ code: number; sawReadyOrResumed: boolean }> {
     return new Promise((resolve, reject) => {
       let helloReceived = false;
       let sawReadyOrResumed = false;
@@ -342,7 +373,8 @@ export class DiscordGateway {
         switch (envelope.op) {
           case OP.HELLO: {
             helloReceived = true;
-            const interval = (envelope.d as { heartbeat_interval?: number } | undefined)?.heartbeat_interval;
+            const interval = (envelope.d as { heartbeat_interval?: number } | undefined)
+              ?.heartbeat_interval;
             if (typeof interval !== 'number' || !Number.isFinite(interval)) {
               ws.close(1002, 'Hello senza heartbeat_interval');
               return;
@@ -356,7 +388,11 @@ export class DiscordGateway {
             } else {
               this.send(ws, {
                 op: OP.IDENTIFY,
-                d: { token: this.deps.token, intents: this.deps.intents, properties: IDENTIFY_PROPERTIES },
+                d: {
+                  token: this.deps.token,
+                  intents: this.deps.intents,
+                  properties: IDENTIFY_PROPERTIES,
+                },
               });
             }
             return;
@@ -388,7 +424,9 @@ export class DiscordGateway {
           case OP.DISPATCH: {
             if (envelope.t === 'READY' || envelope.t === 'RESUMED') this.stato(true);
             if (envelope.t === 'READY') {
-              const ready = envelope.d as { session_id?: string; resume_gateway_url?: string } | undefined;
+              const ready = envelope.d as
+                | { session_id?: string; resume_gateway_url?: string }
+                | undefined;
               this.sessionId = ready?.session_id ?? this.sessionId;
               // Server data, validated at the store site: a forged URL never
               // becomes the next connect target — it just costs the session a
@@ -445,7 +483,9 @@ export class DiscordGateway {
     this.clearHeartbeat();
     const beat = (): void => {
       if (this.awaitingAck) {
-        this.log('discord: nessun ACK al battito precedente — connessione considerata zombie, riconnetto');
+        this.log(
+          'discord: nessun ACK al battito precedente — connessione considerata zombie, riconnetto',
+        );
         ws.close(1000, 'zombied connection');
         return; // no reschedule — the socket is closing, connectOnce's close handler takes over
       }

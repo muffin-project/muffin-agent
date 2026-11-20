@@ -1,10 +1,12 @@
 # ADR-0103 — Tutto gira sul gateway
 
-**Stato: adottato dall'owner il 14/10/2026.** Chiude la divergenza osservata
-in produzione: lo stesso turno girava in processi diversi con oggetti diversi
-(profili, budget, lane, workspace) a seconda di REPL, `run`, gateway o
-superficie — e i messaggi arrivavano a volte in uno, a volte in più bolle.
-Amenda ADR-0035 (stand-down) e la promessa dello scheduler nel REPL
+**Stato: adottato dall'owner il 14/10/2026.** Emendato da ADR-0106
+(2026-11-14): il divieto «senza gateway → rifiuto» per `muffin run` non è più
+la regola; il testo sotto resta la decisione del 14/10. Chiude la divergenza
+osservata in produzione: lo stesso turno girava in processi diversi con
+oggetti diversi (profili, budget, lane, workspace) a seconda di REPL, `run`,
+gateway o superficie — e i messaggi arrivavano a volte in uno, a volte in più
+bolle. Amenda ADR-0035 (stand-down) e la promessa dello scheduler nel REPL
 (ADR-0060): la promessa dei job vive nel gateway, non nella finestra.
 
 ## Decisione
@@ -43,3 +45,12 @@ Senza gateway e senza hatch: `run` esce 1 col rimedio e zero chiamate al
 modello; il REPL non schedula e non esegue. Con hatch: il vecchio percorso
 resta pinnato dai test. Se un'installazione deve davvero girare senza
 supervisore, serve una nuova decisione — questa non fornisce scorciatoie.
+
+## Emendamento — ADR-0106 (2026-11-14)
+
+ADR-0106 emenda il primo punto della Decisione e questo Falsificatore. Il
+caso senza supervisore c'è (container, CI, script) ed è la decisione nuova,
+non una scorciatoia dentro questa. `muffin run` senza un persistente diventa
+il ruolo effimero sullo stesso claim. Il REPL resta un rifiuto, con zero
+chiamate al modello. «Un solo esecutore, niente secondo runtime silenzioso»
+resta. Il testo sopra non è stato riscritto.

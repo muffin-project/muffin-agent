@@ -1,8 +1,8 @@
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import { JobStore } from './jobs.js';
-import { JobFireStore } from './job-fires.js';
 import { TurnStore } from '../turns/store.js';
+import { JobFireStore } from './job-fires.js';
+import { JobStore } from './jobs.js';
 
 const NOW = new Date('2026-06-15T06:00:00Z');
 const SPEC = { cron: '0 8 * * *', timezone: 'Europe/Rome', goal: 'brief', channel: 'cli' };
@@ -19,9 +19,14 @@ it('selects only pending Telegram replies from settled goals that should speak',
     const turns = new TurnStore(db, () => NOW);
     for (const scene of ['quiet', 'cli', 'unsettled', 'uncertain', 'script', 'pending']) {
       const channel = scene === 'cli' ? 'cli' : 'telegram:42';
-      const job = scene === 'script'
-        ? jobs.addOnce({ channel, kind: 'script', script: 'true' })
-        : jobs.addOnce({ channel, goal: 'brief', delivery: scene === 'quiet' ? 'silent' : 'deliver' });
+      const job =
+        scene === 'script'
+          ? jobs.addOnce({ channel, kind: 'script', script: 'true' })
+          : jobs.addOnce({
+              channel,
+              goal: 'brief',
+              delivery: scene === 'quiet' ? 'silent' : 'deliver',
+            });
       const scheduledFor = job.nextFireAt.toISOString();
       fires.claim(job.id, scheduledFor);
       const turn = turns.create({
@@ -49,9 +54,16 @@ it('selects only pending Telegram replies from settled goals that should speak',
         },
       });
       fires.bind(job.id, scheduledFor, turn.id);
-      turns.finish(turn.id, {
-        outcome: 'answered', messages: [], taint: 0, counters: turn.counters,
-      }, turn.claimToken);
+      turns.finish(
+        turn.id,
+        {
+          outcome: 'answered',
+          messages: [],
+          taint: 0,
+          counters: turn.counters,
+        },
+        turn.claimToken,
+      );
       if (scene !== 'unsettled') fires.settle(job.id, scheduledFor);
       if (scene === 'uncertain') turns.delivered(turn.id, 'possibly_sent');
     }
@@ -101,8 +113,12 @@ describe('JobFireStore — the migration (§ "cosa costruire" 3)', () => {
 
     // The table exists now, with exactly the columns the mandate asks for
     // (plus the S4 silent receipt — same additive discipline as the mandate).
-    const columns = (db.prepare(`PRAGMA table_info(job_fires)`).all() as { name: string }[]).map((c) => c.name);
-    expect(columns.sort()).toEqual(['created_at', 'job_id', 'scheduled_for', 'settled_at', 'silent', 'turn_id'].sort());
+    const columns = (db.prepare(`PRAGMA table_info(job_fires)`).all() as { name: string }[]).map(
+      (c) => c.name,
+    );
+    expect(columns.sort()).toEqual(
+      ['created_at', 'job_id', 'scheduled_for', 'settled_at', 'silent', 'turn_id'].sort(),
+    );
 
     // Nothing pre-existing was disturbed: same job, same turn, every column.
     expect(jobs.get(job.id)).toEqual(job);
@@ -119,7 +135,13 @@ describe('JobFireStore.claim — fault point 1: crash before the fire → it get
   it('the occurrence exists after the first call, exactly once', () => {
     const { db, fires } = memStore();
     const fire = fires.claim('job-1', '2026-06-16T06:00:00.000Z');
-    expect(fire).toEqual({ jobId: 'job-1', scheduledFor: '2026-06-16T06:00:00.000Z', turnId: null, settledAt: null, silent: false });
+    expect(fire).toEqual({
+      jobId: 'job-1',
+      scheduledFor: '2026-06-16T06:00:00.000Z',
+      turnId: null,
+      settledAt: null,
+      silent: false,
+    });
     const rows = db.prepare(`SELECT count(*) AS n FROM job_fires`).get() as { n: number };
     expect(rows.n).toBe(1);
   });
@@ -130,7 +152,13 @@ describe('JobFireStore.claim — fault point 1: crash before the fire → it get
     const { db, fires } = memStore();
     fires.claim('job-1', '2026-06-16T06:00:00.000Z');
     const second = fires.claim('job-1', '2026-06-16T06:00:00.000Z');
-    expect(second).toEqual({ jobId: 'job-1', scheduledFor: '2026-06-16T06:00:00.000Z', turnId: null, settledAt: null, silent: false });
+    expect(second).toEqual({
+      jobId: 'job-1',
+      scheduledFor: '2026-06-16T06:00:00.000Z',
+      turnId: null,
+      settledAt: null,
+      silent: false,
+    });
     const rows = db.prepare(`SELECT count(*) AS n FROM job_fires`).get() as { n: number };
     expect(rows.n).toBe(1);
   });
@@ -151,7 +179,9 @@ describe('JobFireStore.claim — fault point 1: crash before the fire → it get
     fires.claim('job-1', '2026-06-16T06:00:00.000Z');
     expect(() =>
       db
-        .prepare(`INSERT INTO job_fires (job_id, scheduled_for, turn_id, settled_at, created_at) VALUES (?, ?, NULL, NULL, ?)`)
+        .prepare(
+          `INSERT INTO job_fires (job_id, scheduled_for, turn_id, settled_at, created_at) VALUES (?, ?, NULL, NULL, ?)`,
+        )
         .run('job-1', '2026-06-16T06:00:00.000Z', NOW.toISOString()),
     ).toThrow(/UNIQUE constraint failed/);
   });
@@ -272,7 +302,10 @@ describe('JobFireStore.settle — silent receipt (#598 S4)', () => {
         INSERT INTO job_fires (job_id, scheduled_for, turn_id, settled_at, created_at)
         VALUES ('vecchio', '2026-06-16T06:00:00.000Z', 'turn-v', '2026-06-16T06:05:00.000Z', '2026-06-16T06:00:00.000Z');
       `);
-      const columns = () => (db.prepare(`PRAGMA table_info(job_fires)`).all() as Array<{ name: string }>).map((c) => c.name);
+      const columns = () =>
+        (db.prepare(`PRAGMA table_info(job_fires)`).all() as Array<{ name: string }>).map(
+          (c) => c.name,
+        );
       expect(columns()).not.toContain('silent');
 
       const fires = new JobFireStore(db, () => NOW);

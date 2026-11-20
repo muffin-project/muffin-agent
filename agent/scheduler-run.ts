@@ -1,18 +1,28 @@
 import { randomBytes } from 'node:crypto';
-import type { JobFireStore } from '../core/scheduler/job-fires.js';
-import { jobPayload, type Job } from '../core/scheduler/jobs.js';
-import type { FireDeferred, FireSettleOnly, JobOutcome, RunJob } from '../core/scheduler/scheduler.js';
-import type { ExecResult } from '../core/sandbox/executor.js';
 import type { TrustTier } from '../core/policy/types.js';
-import { CAPPED_MODEL, SCRIPT_MODEL, type TurnCounters, type TurnOutcome } from '../core/turns/store.js';
-import { runTurn, type LoopDeps, type TurnResult } from './loop.js';
-import { recoveredText } from './recovered-text.js';
+import type { ExecResult } from '../core/sandbox/executor.js';
+import type { JobFireStore } from '../core/scheduler/job-fires.js';
+import { type Job, jobPayload } from '../core/scheduler/jobs.js';
+import type {
+  FireDeferred,
+  FireSettleOnly,
+  JobOutcome,
+  RunJob,
+} from '../core/scheduler/scheduler.js';
 import {
-  dispatchRuntimeEvent,
+  CAPPED_MODEL,
+  SCRIPT_MODEL,
+  type TurnCounters,
+  type TurnOutcome,
+} from '../core/turns/store.js';
+import {
   type ActionRequest,
   type AutomationRule,
+  dispatchRuntimeEvent,
   type RuntimeEvent,
 } from './automation.js';
+import { type LoopDeps, runTurn, type TurnResult } from './loop.js';
+import { recoveredText } from './recovered-text.js';
 
 /**
  * The bridge from a scheduled job to a real turn.
@@ -227,8 +237,7 @@ async function runFresh(
   // authority/effects remain in the existing scheduler/Turn paths.
   const rule: AutomationRule<ScheduledOutcome> = {
     id: `scheduled-job:${job.id}`,
-    matches: (event) =>
-      event.kind === 'schedule.fire' && event.evidence['jobId'] === job.id,
+    matches: (event) => event.kind === 'schedule.fire' && event.evidence['jobId'] === job.id,
     action: () => action,
   };
 
@@ -263,6 +272,10 @@ async function runGoal(
      * legacy — indistinguibile da prima, per dichiarazione del campo stesso.
      */
     contentTaint: fireTaint(job),
+    // A goal job is a task, not a conversation. It does not pay the sealed
+    // pact or the guest posture. Observe/proactive turns stay interactive:
+    // those speak to the owner in the owner's register.
+    promptMode: 'minimal',
     // L'attribuzione della spesa, e non un'etichetta: ogni riga di `spend`
     // che questo turno scrive porta questo id, ed è ciò che il gate qui sopra
     // legge al giro successivo. Toglierla non rompe niente oggi e rende il
@@ -381,7 +394,12 @@ async function resolveBound(
  * un esecutore valido, come per `makeShellTool`.
  */
 export type JobExec = {
-  run(req: { command: string; cwd: string; writeScope: readonly string[]; timeoutMs?: number }): Promise<ExecResult>;
+  run(req: {
+    command: string;
+    cwd: string;
+    writeScope: readonly string[];
+    timeoutMs?: number;
+  }): Promise<ExecResult>;
 };
 
 /** Dove gira uno script di job, e per quanto al massimo. */
@@ -448,7 +466,8 @@ export function makeJobRunner(
     // recomputed later in this call.
     const scheduledFor = job.nextFireAt.toISOString();
     const fire = fires.claim(job.id, scheduledFor);
-    if (fire.turnId !== null) return resolveBound(deps, job, fire.turnId, signal, exec, scope, jobBudget);
+    if (fire.turnId !== null)
+      return resolveBound(deps, job, fire.turnId, signal, exec, scope, jobBudget);
 
     const minted = randomBytes(16).toString('hex');
     const winner = fires.bind(job.id, scheduledFor, minted);
@@ -459,7 +478,6 @@ export function makeJobRunner(
     return runFresh(deps, job, winner, signal, exec, scope, jobBudget);
   };
 }
-
 
 /**
  * Il tetto ha detto no: il giro non parte, e resta scritto perché.
@@ -651,7 +669,7 @@ async function runScript(
       turnId,
       {
         outcome,
-      messages: [
+        messages: [
           { role: 'user', content: [{ type: 'text', text: `script: ${comando}` }] },
           { role: 'assistant', content: [{ type: 'text', text }] },
         ],
@@ -696,7 +714,10 @@ async function runScript(
       ...(scope.timeoutMs === undefined ? {} : { timeoutMs: scope.timeoutMs }),
     });
   } catch (error) {
-    return chiudi('error', `Job "${job.id.slice(0, 8)}" non è partito: ${error instanceof Error ? error.message : String(error)}`);
+    return chiudi(
+      'error',
+      `Job "${job.id.slice(0, 8)}" non è partito: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 
   // Cosa dice, e quando. Lo stdout è la voce dello script — vuoto significa
@@ -705,7 +726,10 @@ async function runScript(
   // in silenzio è peggio di un controllo che non esiste, perché sembra verde.
   const out = result.stdout.trim();
   if (result.timedOut) {
-    return chiudi('error', `Job "${job.id.slice(0, 8)}": lo script ha superato il tempo massimo.${out ? `\n${out}` : ''}`);
+    return chiudi(
+      'error',
+      `Job "${job.id.slice(0, 8)}": lo script ha superato il tempo massimo.${out ? `\n${out}` : ''}`,
+    );
   }
   if (result.code !== 0) {
     const err = result.stderr.trim();

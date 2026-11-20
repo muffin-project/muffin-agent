@@ -1,14 +1,21 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
-import { tenantClass, type PromptBlock, type TenantClass } from '../agent/context/assemble.js';
+import {
+  PREFIX_TOKEN_BUDGET,
+  type PromptBlock,
+  reportPrefix,
+  type TenantClass,
+  tenantClass,
+} from '../agent/context/assemble.js';
 import { caratteriInEco, eco } from '../agent/context/eco.js';
+import { estimateTokens, formatPrefixBreakdown } from '../agent/context/tokens.js';
 import { buildRuntime } from '../agent/runtime.js';
 import {
   loadConfig,
-  promptVersion,
   PROMPT_VERSIONS,
-  saveConfig,
   type PromptVersion,
+  promptVersion,
+  saveConfig,
 } from '../core/config/config.js';
 import type { Principal, TenantId } from '../core/policy/types.js';
 import { sha256 } from '../core/rot/verify.js';
@@ -88,7 +95,7 @@ export function cmdPromptShow(home: string, argv: string[]): number {
     : { kind: 'owner', connector: surface, externalId: 'preview' };
   const cls: TenantClass = tenantClass(principal, tenant);
 
-  let runtime;
+  let runtime: ReturnType<typeof buildRuntime>;
   try {
     runtime = buildRuntime(home);
   } catch (error) {
@@ -106,16 +113,19 @@ export function cmdPromptShow(home: string, argv: string[]): number {
 
     const prompt = runtime.deps.systemPrompts[cls];
     const charCount = prompt.length;
-    // 4 char/token is the same rough constant `evals/acceptance/provider.ts
-    // tokensOf` uses for its fake billing — not a tokenizer, an order of
-    // magnitude, said as one.
-    const approxTokens = Math.ceil(charCount / 4);
+    const approxTokens = estimateTokens(prompt);
+    const breakdown = formatPrefixBreakdown(
+      reportPrefix(runtime.promptBlocks[cls]),
+      approxTokens,
+      PREFIX_TOKEN_BUDGET,
+    );
 
     process.stderr.write(
       `home: ${home}\n` +
         `surface: ${surface} · principal: ${principal.kind} · tenant: ${tenant} · classe: ${cls}\n` +
         `versione prompt: ${promptVersion(loadConfig(home))} (config.prompt.version; \`muffin prompt version v1|v2\` la cambia)\n` +
         `${charCount} caratteri, ~${approxTokens} token stimati (4 char/token, non un tokenizer reale)\n` +
+        `${breakdown}\n` +
         `[memoria] il recall non è nel system prompt: entra nei messages a ogni turno (agent/loop.ts buildContext) — qui non è mostrato\n` +
         `[tool] ${runtime.deps.tools.length} tool registrati in questo processo; quali sono esposti al turno dipende da principal e profilo (agent/context/assemble.ts visibleTools), non da questo comando\n`,
     );
@@ -212,7 +222,7 @@ export function cmdPromptVersion(home: string, argv: string[]): number {
     return 78;
   }
 
-  let config;
+  let config: ReturnType<typeof loadConfig>;
   try {
     config = loadConfig(home);
   } catch (error) {
@@ -228,7 +238,9 @@ export function cmdPromptVersion(home: string, argv: string[]): number {
   }
 
   if (!(PROMPT_VERSIONS as readonly string[]).includes(wanted)) {
-    process.stderr.write(`versione sconosciuta: ${wanted} (attese: ${PROMPT_VERSIONS.join(', ')})\n`);
+    process.stderr.write(
+      `versione sconosciuta: ${wanted} (attese: ${PROMPT_VERSIONS.join(', ')})\n`,
+    );
     return 78;
   }
 

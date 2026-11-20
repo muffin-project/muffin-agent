@@ -101,7 +101,7 @@ export class BudgetEngine {
   private wasExhausted = false;
 
   constructor(
-    private readonly db: Database.Database,
+    db: Database.Database,
     private readonly caps: BudgetCaps,
     private readonly clock: () => Date = () => new Date(),
   ) {

@@ -12,7 +12,6 @@ import {
   beginLocalOpenRouterOAuth,
   exchangeOpenRouterAuthorizationCode,
 } from '../core/config/openrouter-oauth.js';
-import { PROVIDERS } from '../core/config/providers.js';
 import { openConsentBrowser } from './browser.js';
 import { promptLine, promptSecret } from './prompt.js';
 
@@ -203,5 +202,3 @@ export function safeLine(text: string): string {
   if (/sk-or-|sk-ant-|code_verifier|verifier/i.test(text)) return 'probe failed';
   return text;
 }
-
-export const OPENROUTER_BASE = PROVIDERS.openrouter.baseUrl;
