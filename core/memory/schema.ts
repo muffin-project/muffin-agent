@@ -1,14 +1,19 @@
 /**
- * Memory schema — three planes.
+ * Memory schema — evidence and the belief graph.
  *
  *   evidence   episodes, append-only, the only source of truth
  *   graph      entities / identities / facts, bi-temporal, every row carrying
  *              where it came from and how much that source is trusted
- *   derived    profiles, digests — always reconstructible, never authoritative
  *
- * The invariant that makes the rest work: drop every derived table, replay the
- * episodes, and you are back where you were. Which is also how migration works
- * (02 §8) and why compaction can be lossy without being dangerous.
+ * Indexes that production actually keeps (the episodes FTS table here,
+ * embeddings elsewhere) are rebuildable from evidence. `profiles` and
+ * `digests` are not part of this schema: they had no reader and no writer,
+ * and a fresh install does not create them. A database that already has the
+ * empty tables keeps them; nothing here drops or migrates them (ADR-0040).
+ *
+ * The invariant that makes the rest work: beliefs and indexes are projections
+ * of the episodes. Replay rebuilds a projection, which is also why a lossy
+ * index is not a loss of evidence.
  *
  * Two decisions here are the scar tissue of the previous system:
  *
@@ -164,8 +169,7 @@ CREATE INDEX IF NOT EXISTS idx_facts_subject ON facts(tenant_id, subject_id, pre
 CREATE INDEX IF NOT EXISTS idx_facts_active ON facts(tenant_id, expired_at);
 
 -- ---------- graph addendum: the judge's "ask a human" outcome ---------------
--- Not plane 3: this is not reconstructible from the episodes, so it is not
--- droppable the way profiles/digests are. It is the durable home for the two
+-- Not a projection of the episodes: this is the durable home for the two
 -- things that used to go only to process.stderr and vanish — the judge's
 -- review verdict (judge.ts) and any error the pipeline could not act on.
 -- Append-only like the rest of the store: no resolved_at, no status column.
@@ -238,25 +242,6 @@ CREATE TABLE IF NOT EXISTS memory_proposals (
   UNIQUE(tenant_id, identity_key)
 );
 CREATE INDEX IF NOT EXISTS idx_proposals_pending ON memory_proposals(tenant_id, status);
-
--- ---------- plane 3: derived (droppable) -------------------------------------
-CREATE TABLE IF NOT EXISTS profiles (
-  entity_id     INTEGER PRIMARY KEY REFERENCES entities(id),
-  tenant_id     TEXT    NOT NULL,
-  text          TEXT    NOT NULL,
-  generated_at  TEXT    NOT NULL,
-  extraction_v  INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS digests (
-  id            INTEGER PRIMARY KEY,
-  tenant_id     TEXT    NOT NULL,
-  scope         TEXT    NOT NULL,
-  text          TEXT    NOT NULL,
-  covers_from   TEXT    NOT NULL,
-  covers_to     TEXT    NOT NULL,
-  generated_at  TEXT    NOT NULL
-);
 
 -- Which predicates hold exactly one current value. Everything else is a set:
 -- the default is deliberately the safe direction.

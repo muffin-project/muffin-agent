@@ -134,9 +134,12 @@ export function adoptOwnerState(
       movedRows += db.prepare(`DELETE FROM chunks WHERE tenant_id IN (?, ?)`).run(...sourceTenants).changes;
     }
 
-    // Profiles/digests are reconstructible summaries. Keeping a summary made
-    // while the speaker was unauthenticated would launder framing across the
-    // boundary even if the source rows retain tier 2, so rebuild instead.
+    // `profiles` and `digests` are not created anymore and nothing reads them.
+    // An older database may still hold rows written before pairing. Re-keying
+    // those onto `host` would launder an unauthenticated summary across the
+    // boundary, and there is no consumer to rebuild, so the rows are deleted
+    // when the table exists. A fresh database has neither table: the guard
+    // skips the statement instead of failing the adoption.
     for (const { table, tenantColumn } of DERIVED_TABLES) {
       if (!hasTable(db, table)) continue;
       movedRows += db
