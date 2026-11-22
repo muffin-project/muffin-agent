@@ -12,23 +12,21 @@ describe('Event Intelligence historical stored-state refusal', () => {
     const dataDir = join(home, 'event-intelligence');
     mkdirSync(dataDir);
 
-    const triggerBytes =
-      `${JSON.stringify({
-        triggerId: 'legacy-watch',
-        version: '1',
-        clauses: [{ id: 'a', event: 'legacy.changed', where: [], arguments: {} }],
-        pattern: { version: '2', root: { kind: 'event', ref: 'a' } },
-        withinMs: 60000,
-      })}\n`;
-    const receiptBytes =
-      `${JSON.stringify({
-        wakeId: 'legacy-wake',
-        triggerId: 'legacy-watch',
-        matchId: 'legacy-match',
-        runtime: 'muffin',
-        status: 'delivered',
-        runtimeReceiptId: 'legacy-host-receipt',
-      })}\n`;
+    const triggerBytes = `${JSON.stringify({
+      triggerId: 'legacy-watch',
+      version: '1',
+      clauses: [{ id: 'a', event: 'legacy.changed', where: [], arguments: {} }],
+      pattern: { version: '2', root: { kind: 'event', ref: 'a' } },
+      withinMs: 60000,
+    })}\n`;
+    const receiptBytes = `${JSON.stringify({
+      wakeId: 'legacy-wake',
+      triggerId: 'legacy-watch',
+      matchId: 'legacy-match',
+      runtime: 'muffin',
+      status: 'delivered',
+      runtimeReceiptId: 'legacy-host-receipt',
+    })}\n`;
 
     const triggerFile = join(dataDir, 'triggers.jsonl');
     const receiptFile = join(dataDir, 'wake-deliveries.jsonl');
