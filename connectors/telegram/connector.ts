@@ -1178,7 +1178,7 @@ export class TelegramConnector {
     this.sleep = deps.sleep ?? sleep;
   }
 
-  private workChat(turn: TurnRecord): number | null {
+  private currentOwnerChat(): number | null {
     let binding: ReturnType<NonNullable<LoopDeps['workMessageOwner']>> | undefined;
     try {
       binding = this.deps.loop.workMessageOwner?.();
@@ -1192,19 +1192,53 @@ export class TelegramConnector {
       chatId !== userId ||
       !isDirectChat(chatId) ||
       userId !== this.deps.config.ownerUserId ||
-      chatId !== (this.deps.config.ownerChatId ?? userId) ||
+      chatId !== (this.deps.config.ownerChatId ?? userId)
+    )
+      return null;
+    return chatId;
+  }
+
+  /** Gate the cached owner before ordinary DM ingress and the poller's fast paths. */
+  private staleOwnerDM(chatId: number, fromId?: number): boolean {
+    if (
+      this.deps.loop.sendWorkMessage !== this.sendWorkMessage ||
+      this.deps.config.ownerUserId === undefined
+    )
+      return false; // Keep the unpaired connector's pairing path available.
+    return (fromId !== undefined && fromId !== chatId) || this.currentOwnerChat() !== chatId;
+  }
+
+  private workChat(turn: TurnRecord): number | null {
+    const chatId = this.currentOwnerChat();
+    if (
+      chatId === null ||
       turn.surface !== 'telegram' ||
       turn.tenant !== 'host' ||
       turn.jobId !== null ||
       turn.principal.kind !== 'owner' ||
       turn.principal.connector !== 'telegram' ||
-      turn.principal.externalId !== String(userId) ||
+      turn.principal.externalId !== String(chatId) ||
       turn.replyTo?.chatId !== chatId ||
       turn.replyTo.channel !== `telegram:${chatId}` ||
       turn.replyTo.threadId !== undefined
     )
       return null;
     return chatId;
+  }
+
+  private canSendWork(turn: TurnRecord, chatId: number): boolean {
+    return (
+      !this.stopping &&
+      this.workChat(turn) === chatId &&
+      this.deps.loop.decide({
+        principal: turn.principal,
+        tenant: turn.tenant,
+        capability: replyCapability.id,
+        resource: { kind: 'none' },
+        args: {},
+        taint: turn.taint,
+      }).effect === 'allow'
+    );
   }
 
   /** Separate outbox identity: no access to the final delivery or its handoff. */
@@ -1217,18 +1251,7 @@ export class TelegramConnector {
     const turn = this.deps.loop.turns.get(turnId);
     if (turn === null) return 'deferred';
     const chatId = this.workChat(turn);
-    if (
-      chatId === null ||
-      this.deps.loop.decide({
-        principal: turn.principal,
-        tenant: turn.tenant,
-        capability: replyCapability.id,
-        resource: { kind: 'none' },
-        args: {},
-        taint: turn.taint,
-      }).effect !== 'allow'
-    )
-      return 'deferred';
+    if (chatId === null) return 'deferred';
     const html = escapeHtml(redactText(text));
     // Keep the question in a single addressable bubble even for escaped text.
     if (html === '' || html.length > 4096) return 'deferred';
@@ -1248,6 +1271,10 @@ export class TelegramConnector {
       ],
       () => this.now(),
       0,
+      (part) => {
+        const current = this.deps.loop.turns.get(turnId);
+        return part.chatId === chatId && current !== null && this.canSendWork(current, chatId);
+      },
     );
   };
 
@@ -1749,20 +1776,21 @@ export class TelegramConnector {
       const receipt = this.deps.delivery.recordedOutcome(turnId, record.leaseIndex);
       if (receipt !== undefined) return receipt;
     }
-    if (
-      record?.ownerQuestionFinal &&
-      (this.workChat(record) !== chatId ||
-        this.deps.loop.decide({
-          principal: record.principal,
-          tenant: record.tenant,
-          capability: replyCapability.id,
-          resource: { kind: 'none' },
-          args: {},
-          taint: record.taint,
-        }).effect !== 'allow')
-    ) {
-      throw new Error('Work reply is no longer authorized for this chat');
-    }
+    const checkAuthority = record?.ownerQuestionFinal
+      ? (destination: number): true => {
+          const current = this.deps.loop.turns.get(turnId);
+          if (
+            destination !== chatId ||
+            !current?.ownerQuestionFinal ||
+            current.leaseIndex !== record.leaseIndex ||
+            !this.canSendWork(current, chatId)
+          ) {
+            throw new Error('Work reply is no longer authorized for this chat');
+          }
+          return true;
+        }
+      : undefined;
+    checkAuthority?.(chatId);
     // #784 — il turno è terminale (la risposta che stiamo per consegnare lo
     // dice): le domande ritirate non hanno più nessuno che le decida, e le
     // loro bolle — mandate magari da un processo morto prima di un riavvio —
@@ -1837,6 +1865,7 @@ export class TelegramConnector {
           [{ ...first, kind: 'rich' as const, rich: turn, fallback: legacy }],
           () => this.now(),
           leaseIndex,
+          checkAuthority && ((part) => checkAuthority(part.chatId)),
         );
       }
       return deliverTelegram(
@@ -1846,6 +1875,7 @@ export class TelegramConnector {
         legacy,
         () => this.now(),
         leaseIndex,
+        checkAuthority && ((part) => checkAuthority(part.chatId)),
       );
     }
     return deliverTelegram(
@@ -1855,6 +1885,7 @@ export class TelegramConnector {
       this.maybeRich(text, combined, legacy),
       () => this.now(),
       leaseIndex,
+      checkAuthority && ((part) => checkAuthority(part.chatId)),
     );
   }
 
@@ -2195,6 +2226,11 @@ export class TelegramConnector {
     }
 
     for (const incoming of controlli) {
+      if (incoming.isPrivate && this.staleOwnerDM(incoming.chatId, incoming.fromId)) {
+        this.discardPrivateDM(incoming.updateId, this.deps.log ?? (() => {}));
+        this.gestiti.delete(incoming.updateId);
+        continue;
+      }
       try {
         await this.tryCommand(incoming);
       } catch (error) {
@@ -2248,6 +2284,7 @@ export class TelegramConnector {
     for (const update of updates) {
       const incoming = parseUpdate(update, this.meId);
       if (!incoming) continue;
+      if (incoming.isPrivate && this.staleOwnerDM(incoming.chatId, incoming.fromId)) continue;
       const { principal } = principalFor(incoming, this.deps.config.ownerUserId);
       if (principal.kind !== 'owner') continue;
       if (sembraComando(incoming.text)) continue;
@@ -2397,6 +2434,7 @@ export class TelegramConnector {
       log(`telegram: stop della generazione senza chat numerica — ignorato`);
       return;
     }
+    if (isDirectChat(chatId) && this.staleOwnerDM(chatId)) return;
     const ownerChat = this.deps.config.ownerChatId;
     if (ownerChat !== undefined && chatId !== ownerChat) {
       log(
@@ -2488,6 +2526,10 @@ export class TelegramConnector {
       // `markProcessed`, `markFailed` — che è dove stanno le tabelle
       // (§4 invariante 3).
       try {
+        if (incoming.isPrivate && this.staleOwnerDM(incoming.chatId, incoming.fromId)) {
+          this.discardPrivateDM(stored.updateId, log);
+          continue;
+        }
         if (this.answerQuestion(stored, incoming, update)) continue;
         await this.resolve(stored, incoming);
         await this.publishQuestions();
@@ -3160,6 +3202,8 @@ export class TelegramConnector {
 
     const owner = this.deps.config.ownerUserId;
     if (owner === undefined || query.from.id !== owner) return rispondi();
+    const chat = query.message?.chat;
+    if (chat?.type === 'private' && this.staleOwnerDM(chat.id, query.from.id)) return rispondi();
 
     const parsed = /^(ok|no):([0-9a-f]+)$/.exec(query.data ?? '');
     if (parsed === null || this.deps.approvals === undefined) {

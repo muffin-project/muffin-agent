@@ -499,7 +499,78 @@ describe('acceptance · Telegram messages during work', () => {
     90_000,
   );
 
-  it('discards a revoked owner’s native reply and sends nothing when the wait expires', async () => {
+  it.each(['rich rejection', 'first fallback', 'rate limit'] as const)(
+    'stops new final wire attempts when the binding is revoked at %s',
+    async (fault) => {
+      const final = Array.from(
+        { length: 12 },
+        (_, i) => `Part ${i}: ${'pickup details '.repeat(45)}`,
+      ).join('\n\n');
+      await withTelegram(
+        [
+          {
+            tool: {
+              name: 'work_message',
+              args: { text: 'What day is pickup?', wait_for_reply: true },
+            },
+          },
+          { text: final },
+        ],
+        async (inst, telegram) => {
+          await withGateway(inst, async () => {
+            telegram.deliver(dm(101, OWNER, 101, 'Draft my pickup confirmation.'));
+            await until(
+              () =>
+                turns(inst)[0]?.status === 'waiting' && deliveryParts(inst)[0]?.status === 'sent',
+            );
+            const asked = bubbles(telegram)[0];
+            if (asked?.id === undefined) throw new Error('Question missing its native message ID');
+            const wireBefore = telegram.sent().length;
+            const rateLimited = fault === 'rate limit';
+            telegram.guasta(
+              'sendMessage',
+              rateLimited ? 429 : 400,
+              rateLimited ? 'Too Many Requests' : 'RICH_MESSAGE_INVALID',
+            );
+            telegram.beforeNextResponse(
+              fault === 'first fallback' ? 'sendMessage' : 'sendRichMessage',
+              () => {
+                writeFileSync(join(inst.home, 'rot', 'owner.json'), '{}\n');
+              },
+            );
+            telegram.deliver(
+              dm(102, OWNER, 102, 'Saturday', { messageId: asked.id, text: asked.text }),
+            );
+            await until(
+              () => turns(inst)[0]?.status === 'done' && turns(inst)[0]?.delivery !== 'pending',
+            );
+            expect(turns(inst)[0]?.delivery).toMatch(
+              rateLimited ? /^failed:Telegram 429/ : /^failed:Work reply is no longer authorized/,
+            );
+            const wire = telegram
+              .sent()
+              .slice(wireBefore)
+              .filter((call) => call.method === 'sendMessage');
+            expect(wire).toHaveLength(fault === 'first fallback' ? 2 : 1);
+            expect(wire[0]?.payload.rich_message).toBeDefined();
+            const statuses = deliveryParts(inst)
+              .slice(1)
+              .map((part) => part.status);
+            if (rateLimited) expect(statuses).toEqual(['pending']);
+            else {
+              expect(statuses.shift()).toBe('rejected');
+              if (fault === 'first fallback') expect(statuses.shift()).toBe('sent');
+              expect(statuses.length).toBeGreaterThan(0);
+              expect(statuses.every((status) => status === 'pending')).toBe(true);
+            }
+          });
+        },
+      );
+    },
+    75_000,
+  );
+
+  it('discards a revoked owner’s DMs both during the wait and after terminal expiry', async () => {
     const final = 'The pickup is still missing a day.';
     await withTelegram(
       [
@@ -559,15 +630,49 @@ describe('acceptance · Telegram messages during work', () => {
               turns(inst)[0]?.status === 'done' &&
               turns(inst)[0]?.delivery?.startsWith('failed:') === true,
           );
-          expect(inst.provider.main().some((call) => call.transcript.includes(revokedReply))).toBe(
-            false,
+          const expired = turns(inst)[0];
+          expect(expired?.wait_for).toBeNull();
+          const lateReply = 'Sunday — too late and still revoked';
+          telegram.deliver(
+            dm(103, OWNER, 103, lateReply, { messageId: asked.id, text: asked.text }),
           );
+          const processed = (id: number) =>
+            inbox(inst).some((row) => row.update_id === id && row.processed_at !== null);
+          await until(() => processed(103) || turns(inst).length > 1);
+          expect(turns(inst)).toEqual([expired]);
+          telegram.deliver(dm(104, OWNER, 104, '/pause'));
+          await until(() => processed(104));
+          expect(inst.provider.main()).toHaveLength(2);
+          const transcripts = inst.provider
+            .main()
+            .map((call) => call.transcript)
+            .join('\n');
+          expect(transcripts).not.toContain(revokedReply);
+          expect(transcripts).not.toContain(lateReply);
+          expect(inbox(inst).slice(2)).toEqual(
+            [103, 104].map((update_id) => ({
+              update_id,
+              processed_at: expect.any(String),
+              failure: null,
+              work_id: null,
+            })),
+          );
+          expect(
+            inst.db((db) =>
+              db
+                .prepare(
+                  'SELECT payload FROM telegram_updates WHERE update_id IN (103, 104) ORDER BY update_id',
+                )
+                .pluck()
+                .all(),
+            ),
+          ).toEqual(['{}', '{}']);
           expect(
             telegram
               .sent()
               .slice(wireBefore)
               .filter((call) =>
-                /^(?:sendMessage|sendMessageDraft|editMessageText|sendChatAction)$/.test(
+                /^(?:send(?:Rich)?Message(?:Draft)?|editMessageText|sendChatAction)$/.test(
                   call.method,
                 ),
               ),

@@ -1,7 +1,7 @@
 import type { Message, Update, User } from '@grammyjs/types';
 import { causaDiRete } from '../../core/net/causa.js';
 import { sleep } from '../../core/net/sleep.js';
-import { richFitsHard, type OutboundRich } from './rich.js';
+import { type OutboundRich, richFitsHard } from './rich.js';
 
 /**
  * The Bot API, over `fetch`, with no library between.
@@ -49,7 +49,11 @@ const REQUEST_TIMEOUT_MS = (POLL_SECONDS + 15) * 1000;
  * verde, `primary`. Un "rifiuta" e un "consenti" che si somigliano sono un
  * pulsante premuto per sbaglio.
  */
-export type InlineButton = { text: string; callback_data: string; style?: 'danger' | 'success' | 'primary' };
+export type InlineButton = {
+  text: string;
+  callback_data: string;
+  style?: 'danger' | 'success' | 'primary';
+};
 
 export type SendOptions = {
   replyTo?: number;
@@ -72,7 +76,11 @@ export type SendOptions = {
    * si spaccava a metà — la prima parte nel topic, le altre in *General*.
    */
   threadId?: number;
+  /** The delivery journal owns every attempt; do not retry a 429 in transport. */
+  singleAttempt?: boolean;
 };
+
+type EditOptions = Pick<SendOptions, 'keyboard' | 'singleAttempt'>;
 
 /**
  * Draft-preview options, Bot API 10.3.
@@ -101,7 +109,12 @@ export type DraftOptions = {
  * never satisfy `TelegramApi` itself, only an interface like this one.
  */
 export interface TelegramApiLike {
-  call<T>(method: string, payload?: Record<string, unknown>, attempt?: number, signal?: AbortSignal): Promise<T>;
+  call<T>(
+    method: string,
+    payload?: Record<string, unknown>,
+    attempt?: number,
+    signal?: AbortSignal,
+  ): Promise<T>;
   upload<T>(method: string, body: FormData): Promise<T>;
   getMe(): Promise<User>;
   getUpdates(offset: number, allowed?: string[], signal?: AbortSignal): Promise<Update[]>;
@@ -113,22 +126,46 @@ export interface TelegramApiLike {
    * one, and the type makes passing both unrepresentable.
    */
   sendRichMessage(chatId: number, rich: OutboundRich, options?: SendOptions): Promise<Message>;
-  editMessageText(chatId: number, messageId: number, html: string, options?: Pick<SendOptions, 'keyboard'>): Promise<Message | boolean>;
+  editMessageText(
+    chatId: number,
+    messageId: number,
+    html: string,
+    options?: EditOptions,
+  ): Promise<Message | boolean>;
   /**
    * Bot API 10.1+: `editMessageText` with `rich_message` instead of `text`.
    * Same exclusivity as the send pair: rich OR text, never both.
    */
-  editMessageRichText(chatId: number, messageId: number, rich: OutboundRich, options?: Pick<SendOptions, 'keyboard'>): Promise<Message | boolean>;
-  editMessageReplyMarkup(chatId: number, messageId: number, keyboard?: InlineButton[][]): Promise<Message | boolean>;
+  editMessageRichText(
+    chatId: number,
+    messageId: number,
+    rich: OutboundRich,
+    options?: EditOptions,
+  ): Promise<Message | boolean>;
+  editMessageReplyMarkup(
+    chatId: number,
+    messageId: number,
+    keyboard?: InlineButton[][],
+  ): Promise<Message | boolean>;
   deleteMessage(chatId: number, messageId: number): Promise<boolean>;
   sendChatAction(chatId: number, action?: string, threadId?: number): Promise<boolean>;
-  sendMessageDraft(chatId: number, draftId: number, text: string, options?: DraftOptions): Promise<boolean>;
+  sendMessageDraft(
+    chatId: number,
+    draftId: number,
+    text: string,
+    options?: DraftOptions,
+  ): Promise<boolean>;
   /**
    * Bot API 10.1+ (draft), 10.3 (`can_stop`/`keep_on_stop`): the rich
    * preview. Ephemeral like its legacy sibling — never durable delivery,
    * never a second answer next to the final.
    */
-  sendRichMessageDraft(chatId: number, draftId: number, rich: OutboundRich, options?: DraftOptions): Promise<boolean>;
+  sendRichMessageDraft(
+    chatId: number,
+    draftId: number,
+    rich: OutboundRich,
+    options?: DraftOptions,
+  ): Promise<boolean>;
   fileUrl(fileId: string): Promise<string>;
   setMyCommands(commands: { command: string; description: string }[]): Promise<boolean>;
   answerCallbackQuery(callbackQueryId: string, text?: string): Promise<boolean>;
@@ -153,7 +190,12 @@ export class TelegramApi implements TelegramApiLike {
    * `stop()` in `connector.ts` aborts it instead of waiting out the up-to-65s
    * `REQUEST_TIMEOUT_MS` this same call already carries.
    */
-  async call<T>(method: string, payload: Record<string, unknown> = {}, attempt = 0, signal?: AbortSignal): Promise<T> {
+  async call<T>(
+    method: string,
+    payload: Record<string, unknown> = {},
+    attempt = 0,
+    signal?: AbortSignal,
+  ): Promise<T> {
     return this.request<T>(method, payload, true, attempt, signal);
   }
 
@@ -162,8 +204,12 @@ export class TelegramApi implements TelegramApiLike {
    * idempotency token, so a transport failure or a 5xx after acceptance could
    * turn a retry into a second visible message.
    */
-  private effect<T>(method: string, payload: Record<string, unknown>): Promise<T> {
-    return this.request<T>(method, payload, false, 0);
+  private effect<T>(
+    method: string,
+    payload: Record<string, unknown>,
+    singleAttempt = false,
+  ): Promise<T> {
+    return this.request<T>(method, payload, false, 0, undefined, singleAttempt);
   }
 
   private async request<T>(
@@ -172,6 +218,7 @@ export class TelegramApi implements TelegramApiLike {
     retryAmbiguous: boolean,
     attempt: number,
     signal?: AbortSignal,
+    singleAttempt = false,
   ): Promise<T> {
     let response: Response;
     try {
@@ -179,7 +226,11 @@ export class TelegramApi implements TelegramApiLike {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
-        signal: signal === undefined ? AbortSignal.timeout(REQUEST_TIMEOUT_MS) : AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
+        ...(singleAttempt ? { redirect: 'error' as const } : {}),
+        signal:
+          signal === undefined
+            ? AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+            : AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
       });
     } catch (error) {
       // A deliberate stop, not a network failure: retrying it (or wrapping it
@@ -228,7 +279,7 @@ export class TelegramApi implements TelegramApiLike {
     if (body.ok) return body.result;
 
     const retryAfter = body.parameters?.retry_after;
-    if (attempt === 0 && (response.status === 429 || response.status >= 500)) {
+    if (!singleAttempt && attempt === 0 && (response.status === 429 || response.status >= 500)) {
       // Plus a second: `retry_after` is when the window opens, not when it is
       // safe to be inside it.
       await sleep((retryAfter ?? 1) * 1000 + 1000);
@@ -298,7 +349,13 @@ export class TelegramApi implements TelegramApiLike {
     // `stopped_message_generation` (Bot API 10.3) per la stessa ragione: senza,
     // il controllo Stop dell'owner non arriva mai e un turno non fermabile è
     // un turno che si può fermare solo con `/stop` digitato.
-    allowed: string[] = ['message', 'edited_message', 'callback_query', 'my_chat_member', 'stopped_message_generation'],
+    allowed: string[] = [
+      'message',
+      'edited_message',
+      'callback_query',
+      'my_chat_member',
+      'stopped_message_generation',
+    ],
     // Il gancio che rende il long poll interrompibile davvero: senza, uno
     // `stop()` durante l'attesa non poteva far altro che aspettare fino a
     // `REQUEST_TIMEOUT_MS` — e il database, chiuso nel frattempo, riceveva la
@@ -319,15 +376,19 @@ export class TelegramApi implements TelegramApiLike {
   }
 
   sendMessage(chatId: number, html: string, options: SendOptions = {}): Promise<Message> {
-    return this.effect<Message>('sendMessage', {
-      chat_id: chatId,
-      text: html,
-      parse_mode: 'HTML',
-      link_preview_options: { is_disabled: options.preview !== true },
-      ...(options.threadId === undefined ? {} : { message_thread_id: options.threadId }),
-      ...(options.replyTo ? { reply_parameters: { message_id: options.replyTo } } : {}),
-      ...(options.keyboard ? { reply_markup: { inline_keyboard: options.keyboard } } : {}),
-    });
+    return this.effect<Message>(
+      'sendMessage',
+      {
+        chat_id: chatId,
+        text: html,
+        parse_mode: 'HTML',
+        link_preview_options: { is_disabled: options.preview !== true },
+        ...(options.threadId === undefined ? {} : { message_thread_id: options.threadId }),
+        ...(options.replyTo ? { reply_parameters: { message_id: options.replyTo } } : {}),
+        ...(options.keyboard ? { reply_markup: { inline_keyboard: options.keyboard } } : {}),
+      },
+      options.singleAttempt,
+    );
   }
 
   /**
@@ -347,19 +408,30 @@ export class TelegramApi implements TelegramApiLike {
     });
   }
 
-  editMessageText(chatId: number, messageId: number, html: string, options: Pick<SendOptions, 'keyboard'> = {}): Promise<Message | boolean> {
-    return this.effect<Message | boolean>('editMessageText', {
-      chat_id: chatId,
-      message_id: messageId,
-      text: html,
-      parse_mode: 'HTML',
-      link_preview_options: { is_disabled: true },
-      // La tastiera si ripassa esplicita finché è viva: la pagina ufficiale
-      // non promette cosa succede alla tastiera esistente quando `reply_markup`
-      // è omesso (§4.4 dell'evidenza 03/09), e un edit del processo non deve
-      // poterla far sparire per omissione.
-      ...(options.keyboard === undefined ? {} : { reply_markup: { inline_keyboard: options.keyboard } }),
-    });
+  editMessageText(
+    chatId: number,
+    messageId: number,
+    html: string,
+    options: EditOptions = {},
+  ): Promise<Message | boolean> {
+    return this.effect<Message | boolean>(
+      'editMessageText',
+      {
+        chat_id: chatId,
+        message_id: messageId,
+        text: html,
+        parse_mode: 'HTML',
+        link_preview_options: { is_disabled: true },
+        // La tastiera si ripassa esplicita finché è viva: la pagina ufficiale
+        // non promette cosa succede alla tastiera esistente quando `reply_markup`
+        // è omesso (§4.4 dell'evidenza 03/09), e un edit del processo non deve
+        // poterla far sparire per omissione.
+        ...(options.keyboard === undefined
+          ? {}
+          : { reply_markup: { inline_keyboard: options.keyboard } }),
+      },
+      options.singleAttempt,
+    );
   }
 
   /**
@@ -372,15 +444,21 @@ export class TelegramApi implements TelegramApiLike {
     chatId: number,
     messageId: number,
     rich: OutboundRich,
-    options: Pick<SendOptions, 'keyboard'> = {},
+    options: EditOptions = {},
   ): Promise<Message | boolean> {
     this.assertRichFits(rich);
-    return this.effect<Message | boolean>('editMessageText', {
-      chat_id: chatId,
-      message_id: messageId,
-      rich_message: rich,
-      ...(options.keyboard === undefined ? {} : { reply_markup: { inline_keyboard: options.keyboard } }),
-    });
+    return this.effect<Message | boolean>(
+      'editMessageText',
+      {
+        chat_id: chatId,
+        message_id: messageId,
+        rich_message: rich,
+        ...(options.keyboard === undefined
+          ? {}
+          : { reply_markup: { inline_keyboard: options.keyboard } }),
+      },
+      options.singleAttempt,
+    );
   }
 
   /**
@@ -492,7 +570,12 @@ export class TelegramApi implements TelegramApiLike {
    * `presence.ts`'s own choice to call this at least once a second either
    * way, comfortably inside any reading of "30 seconds," is asserted.
    */
-  sendMessageDraft(chatId: number, draftId: number, text: string, options: DraftOptions = {}): Promise<boolean> {
+  sendMessageDraft(
+    chatId: number,
+    draftId: number,
+    text: string,
+    options: DraftOptions = {},
+  ): Promise<boolean> {
     return this.call<boolean>('sendMessageDraft', {
       chat_id: chatId,
       draft_id: draftId,
@@ -511,7 +594,12 @@ export class TelegramApi implements TelegramApiLike {
    * `call()`, not `effect()`, like its legacy sibling: a redelivered preview
    * under the same `draft_id` replaces rather than duplicates.
    */
-  sendRichMessageDraft(chatId: number, draftId: number, rich: OutboundRich, options: DraftOptions = {}): Promise<boolean> {
+  sendRichMessageDraft(
+    chatId: number,
+    draftId: number,
+    rich: OutboundRich,
+    options: DraftOptions = {},
+  ): Promise<boolean> {
     this.assertRichFits(rich);
     return this.call<boolean>('sendRichMessageDraft', {
       chat_id: chatId,
@@ -530,13 +618,17 @@ export class TelegramApi implements TelegramApiLike {
    */
   sendRichMessage(chatId: number, rich: OutboundRich, options: SendOptions = {}): Promise<Message> {
     this.assertRichFits(rich);
-    return this.effect<Message>('sendRichMessage', {
-      chat_id: chatId,
-      rich_message: rich,
-      ...(options.threadId === undefined ? {} : { message_thread_id: options.threadId }),
-      ...(options.replyTo ? { reply_parameters: { message_id: options.replyTo } } : {}),
-      ...(options.keyboard ? { reply_markup: { inline_keyboard: options.keyboard } } : {}),
-    });
+    return this.effect<Message>(
+      'sendRichMessage',
+      {
+        chat_id: chatId,
+        rich_message: rich,
+        ...(options.threadId === undefined ? {} : { message_thread_id: options.threadId }),
+        ...(options.replyTo ? { reply_parameters: { message_id: options.replyTo } } : {}),
+        ...(options.keyboard ? { reply_markup: { inline_keyboard: options.keyboard } } : {}),
+      },
+      options.singleAttempt,
+    );
   }
 
   /**

@@ -1,7 +1,7 @@
+import { randomBytes } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { ensureColumn } from '../../core/lock/durable.js';
-import { randomBytes } from 'node:crypto';
-import { TelegramError, type TelegramApiLike } from './api.js';
+import { type TelegramApiLike, TelegramError } from './api.js';
 import type { OutboundRich } from './rich.js';
 
 type TelegramDeliveryStatus = 'pending' | 'attempting' | 'sent' | 'rejected' | 'possibly_sent';
@@ -156,8 +156,13 @@ export class TelegramDeliveryStore {
     }
 
     for (const part of requested) {
-      if ((part.kind ?? 'legacy') === 'rich' && (part.rich === undefined || part.fallback === undefined || part.fallback.length === 0)) {
-        throw new Error(`telegram delivery ${turnId}: parte rich senza payload o senza fallback limitato`);
+      if (
+        (part.kind ?? 'legacy') === 'rich' &&
+        (part.rich === undefined || part.fallback === undefined || part.fallback.length === 0)
+      ) {
+        throw new Error(
+          `telegram delivery ${turnId}: parte rich senza payload o senza fallback limitato`,
+        );
       }
     }
     const insert = this.db.prepare(
@@ -175,11 +180,14 @@ export class TelegramDeliveryStore {
       // restano l'ordine totale del turno, e il filtro per lease è la colonna.
       // La base si legge DENTRO la transazione, o due scrittori partono dallo
       // stesso MAX e l'`OR IGNORE` del secondo perde una parte in silenzio.
-      const base = (
-        this.db
-          .prepare(`SELECT COALESCE(MAX(part_index), -1) AS m FROM telegram_delivery_parts WHERE turn_id = ?`)
-          .get(turnId) as { m: number }
-      ).m + 1;
+      const base =
+        (
+          this.db
+            .prepare(
+              `SELECT COALESCE(MAX(part_index), -1) AS m FROM telegram_delivery_parts WHERE turn_id = ?`,
+            )
+            .get(turnId) as { m: number }
+        ).m + 1;
       requested.forEach((part, i) => {
         const kind = part.kind ?? 'legacy';
         insert.run({
@@ -204,7 +212,9 @@ export class TelegramDeliveryStore {
     // Un piano parziale è l'unica cosa che l'`OR IGNORE` può nascondere: se
     // è successo, dirlo invece di consegnare metà messaggio.
     if (planned.length !== requested.length) {
-      throw new Error(`telegram delivery ${turnId}: piano parziale (${planned.length}/${requested.length})`);
+      throw new Error(
+        `telegram delivery ${turnId}: piano parziale (${planned.length}/${requested.length})`,
+      );
     }
     return planned;
   }
@@ -248,7 +258,10 @@ export class TelegramDeliveryStore {
       ...row,
       kind: row.kind === 'rich' ? 'rich' : 'legacy',
       rich: row.richJson === null ? null : (JSON.parse(row.richJson) as OutboundRich),
-      fallback: row.fallbackJson === null ? null : (JSON.parse(row.fallbackJson) as TelegramDeliveryLegacyChunk[]),
+      fallback:
+        row.fallbackJson === null
+          ? null
+          : (JSON.parse(row.fallbackJson) as TelegramDeliveryLegacyChunk[]),
     }));
   }
 
@@ -296,9 +309,14 @@ export class TelegramDeliveryStore {
           `SELECT fallback_json AS fallbackJson, lease_index AS leaseIndex FROM telegram_delivery_parts WHERE turn_id = ? AND part_index = ?`,
         )
         .get(turnId, partIndex) as { fallbackJson: string | null; leaseIndex: number };
-      const fallback = row.fallbackJson === null ? [] : (JSON.parse(row.fallbackJson) as TelegramDeliveryLegacyChunk[]);
+      const fallback =
+        row.fallbackJson === null
+          ? []
+          : (JSON.parse(row.fallbackJson) as TelegramDeliveryLegacyChunk[]);
       const base = this.db
-        .prepare(`SELECT COALESCE(MAX(part_index), -1) AS m FROM telegram_delivery_parts WHERE turn_id = ?`)
+        .prepare(
+          `SELECT COALESCE(MAX(part_index), -1) AS m FROM telegram_delivery_parts WHERE turn_id = ?`,
+        )
         .get(turnId) as { m: number };
       const insert = this.db.prepare(
         `INSERT INTO telegram_delivery_parts
@@ -361,6 +379,18 @@ export class TelegramDeliveryStore {
     this.finishAttempt(turnId, partIndex, attemptId, 'rejected', reason, at);
   }
 
+  rateLimited(
+    turnId: string,
+    partIndex: number,
+    attemptId: string,
+    reason: string,
+    at: string,
+  ): void {
+    // A rich 429 is not a format rejection. Keep the original plan available
+    // for explicit recovery, without expanding the fallback or retrying here.
+    this.finishAttempt(turnId, partIndex, attemptId, 'pending', reason, at);
+  }
+
   possiblySent(
     turnId: string,
     partIndex: number,
@@ -375,7 +405,7 @@ export class TelegramDeliveryStore {
     turnId: string,
     partIndex: number,
     attemptId: string,
-    status: 'rejected' | 'possibly_sent',
+    status: 'pending' | 'rejected' | 'possibly_sent',
     reason: string,
     at: string,
   ): void {
@@ -414,8 +444,10 @@ export async function deliverTelegram(
   requested: TelegramDeliveryPlanPart[],
   now: () => string,
   leaseIndex: number,
+  canAttempt?: (part: TelegramDeliveryPart) => boolean,
 ): Promise<TelegramDeliveryOutcome> {
   const parts = store.plan(turnId, requested, now(), leaseIndex);
+  const transport = canAttempt === undefined ? undefined : { singleAttempt: true };
   for (const part of parts) {
     if (part.status === 'sent') continue;
     if (part.status === 'possibly_sent') return 'possibly_sent';
@@ -429,19 +461,23 @@ export async function deliverTelegram(
     }
 
     const attemptId = randomBytes(16).toString('hex');
+    // Check at the effect boundary, after any prior await. Reconcile completed
+    // attempts even if authority disappeared while their request was in flight.
+    if (canAttempt?.(part) === false) return 'deferred';
     if (!store.claim(turnId, part.partIndex, attemptId, now())) return 'deferred';
 
     try {
       const response =
         part.kind === 'rich'
-          ? await sendRich(api, part)
+          ? await sendRich(api, part, transport)
           : part.operation === 'edit'
-            ? await api.editMessageText(part.chatId, part.editMessageId!, part.html)
+            ? await api.editMessageText(part.chatId, part.editMessageId!, part.html, transport)
             : await api.sendMessage(part.chatId, part.html, {
                 // Su **ogni** pezzo, non solo sul primo: `reply_parameters`
                 // porta nel topic soltanto il messaggio che cita.
                 ...(part.threadId === null ? {} : { threadId: part.threadId }),
                 ...(part.replyTo === null ? {} : { replyTo: part.replyTo }),
+                ...transport,
               });
       const messageId =
         typeof response === 'object' &&
@@ -472,6 +508,10 @@ export async function deliverTelegram(
         continue;
       }
       if (error instanceof TelegramError && error.status > 0) {
+        if (part.kind === 'rich' && error.status === 429 && canAttempt !== undefined) {
+          store.rateLimited(turnId, part.partIndex, attemptId, reason, now());
+          throw error;
+        }
         if (part.kind === 'rich') {
           // Deterministic: Telegram refused the rich payload, so nothing was
           // displayed. Expand the frozen legacy chunks and keep delivering —
@@ -500,14 +540,20 @@ export async function deliverTelegram(
 }
 
 /** One rich attempt, send or transcript-owned edit. Thread/reply routing identical to the legacy path. */
-function sendRich(api: TelegramApiLike, part: TelegramDeliveryPart): Promise<unknown> {
-  if (part.rich === null) throw new Error(`telegram delivery: parte rich senza payload per ${part.turnId}`);
+function sendRich(
+  api: TelegramApiLike,
+  part: TelegramDeliveryPart,
+  transport?: { singleAttempt: boolean },
+): Promise<unknown> {
+  if (part.rich === null)
+    throw new Error(`telegram delivery: parte rich senza payload per ${part.turnId}`);
   if (part.operation === 'edit') {
-    return api.editMessageRichText(part.chatId, part.editMessageId!, part.rich);
+    return api.editMessageRichText(part.chatId, part.editMessageId!, part.rich, transport);
   }
   return api.sendRichMessage(part.chatId, part.rich, {
     ...(part.threadId === null ? {} : { threadId: part.threadId }),
     ...(part.replyTo === null ? {} : { replyTo: part.replyTo }),
+    ...transport,
   });
 }
 
