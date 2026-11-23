@@ -2096,7 +2096,18 @@ export class TelegramConnector {
     if (typeof chatId !== 'number' || approvalId === undefined || approvals === undefined)
       return 'unavailable';
     const record = this.deps.loop.turns.get(turnId);
-    if (record?.ownerQuestionFinal && this.workChat(record) !== chatId) return 'unavailable';
+    const canAttempt = record?.ownerQuestionFinal
+      ? () => {
+          const current = this.deps.loop.turns.get(turnId);
+          return (
+            current?.ownerQuestionFinal === true &&
+            current.leaseIndex === record.leaseIndex &&
+            where.replyTo?.['threadId'] === undefined &&
+            this.canSendWork(current, chatId)
+          );
+        }
+      : undefined;
+    if (canAttempt?.() === false) return 'unavailable';
     const row = approvals.get(approvalId);
     if (row === null || row.turnId !== turnId) return 'unavailable';
     if (row.telegramQuestionPending) return 'asked';
@@ -2104,7 +2115,8 @@ export class TelegramConnector {
       begin: () => approvals.beginTelegramQuestion(approvalId, turnId),
       reject: () => approvals.rejectTelegramQuestion(approvalId),
     };
-    const transcript = this.transcriptVivi.get(chatId);
+    // Resumed Work has no transcript, and must not borrow an unguarded one.
+    const transcript = canAttempt === undefined ? this.transcriptVivi.get(chatId) : undefined;
     if (transcript !== undefined) {
       let began = false;
       const presa = await transcript.ask({
@@ -2129,6 +2141,7 @@ export class TelegramConnector {
       this.deps.api,
       (mostrata) => this.notaDomanda(mostrata.approvalId, mostrata.messageId),
       attempt,
+      canAttempt,
     )(request, where);
   }
 

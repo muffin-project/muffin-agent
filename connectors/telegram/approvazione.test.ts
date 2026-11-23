@@ -9,6 +9,7 @@ import { ApprovalStore } from '../../core/approvals/store.js';
 import { SessionStore } from '../../core/session/store.js';
 import { ModelLane } from '../../core/turns/model-lane.js';
 import { TurnStore } from '../../core/turns/store.js';
+import { encodeWaitFor } from '../../core/turns/wait.js';
 import { type InlineButton, TelegramApi, TelegramError } from './api.js';
 import { type ConnectorDeps, rimuoviTastiereOrfane, TelegramConnector } from './connector.js';
 import { TelegramDeliveryStore } from './delivery.js';
@@ -199,17 +200,12 @@ async function deliver(h: ReturnType<typeof harness>, updates: Update[]): Promis
   await (h.connector as unknown as { drain: () => Promise<void> }).drain();
 }
 
-/** Una riga sospesa come la scrive il loop quando la domanda parte. */
-function turnoInAttesa(
-  h: ReturnType<typeof harness>,
-  replyTo?: Record<string, unknown>,
-): { turnId: string; approvalId: string } {
-  const turnId = 'a'.repeat(32);
+function creaTurno(h: ReturnType<typeof harness>, replyTo?: Record<string, unknown>) {
   // `create` restituisce la riga già reclamata (`running`), con il suo token:
   // è la forma che ha un turno mentre sta girando, cioè il momento in cui il
   // kernel decide di chiedere.
-  const record = h.turns.create({
-    id: turnId,
+  return h.turns.create({
+    id: 'a'.repeat(32),
     principal: { kind: 'owner', connector: 'telegram', externalId: String(OWNER) },
     tenant: 'host',
     surface: 'telegram',
@@ -231,6 +227,15 @@ function turnoInAttesa(
       contextBuilt: true,
     },
   });
+}
+
+/** Una riga sospesa come la scrive il loop quando la domanda parte. */
+function turnoInAttesa(
+  h: ReturnType<typeof harness>,
+  replyTo?: Record<string, unknown>,
+): { turnId: string; approvalId: string } {
+  const record = creaTurno(h, replyTo);
+  const turnId = record.id;
   const approvalId = h.approvals.ask(
     { turnId, capability: 'sys.shell', resource: 'rm -rf /tmp/x', prompt: 'eseguo?', taint: 0 },
     new Date(),
@@ -248,6 +253,128 @@ function turnoInAttesa(
   );
   return { turnId, approvalId };
 }
+
+describe('standalone approvals after a Work reply', () => {
+  it.each([
+    { fault: 'rich rejection', status: 400, revoke: true, wire: ['sendRichMessage'] },
+    { fault: 'confirmed rate limit', status: 429, revoke: true, wire: ['sendRichMessage'] },
+    { fault: 'legacy prefix accepted', status: 200, revoke: true, wire: ['sendMessage'] },
+    { fault: 'rate limit while bound', status: 429, revoke: false, wire: ['sendRichMessage'] },
+    {
+      fault: 'rich rejection while bound',
+      status: 400,
+      revoke: false,
+      wire: ['sendRichMessage', 'sendMessage'],
+    },
+  ])('checks live authority at the Bot API boundary: $fault', async ({ status, revoke, wire }) => {
+    const h = harness();
+    vi.useFakeTimers();
+    try {
+      const deps = (h.connector as unknown as { deps: ConnectorDeps }).deps;
+      let bound = true;
+      const decide = vi.fn((input: Parameters<LoopDeps['decide']>[0]) => {
+        if (!bound) throw new Error('Reply policy was evaluated before checking the binding');
+        return deps.loop.decide(input);
+      });
+      const connector = new TelegramConnector({
+        ...deps,
+        api: new TelegramApi('test'),
+        loop: { ...deps.loop, workMessageOwner: () => (bound ? { userId: OWNER } : {}), decide },
+      });
+      const replyTo = { chatId: OWNER, messageId: 5, channel: `telegram:${OWNER}` };
+      const turn = creaTurno(h, replyTo);
+      const waitFor = encodeWaitFor({
+        kind: 'owner_reply',
+        id: 'b'.repeat(64),
+        question: 'Which file?',
+      });
+      expect(
+        h.turns.suspend(
+          turn.id,
+          {
+            messages: [],
+            taint: turn.taint,
+            counters: turn.counters,
+            waitFor,
+            wakeAt: new Date(Date.now() + 60_000).toISOString(),
+          },
+          turn.claimToken,
+        ),
+      ).toBe(true);
+      expect(
+        h.turns.answerOwnerQuestion(
+          turn.id,
+          waitFor,
+          [{ role: 'user', content: 'The report.' }],
+          () => {},
+        ),
+      ).toBe(true);
+      const resumed = h.turns.claim(turn.id)!;
+      expect(resumed).toMatchObject({ status: 'running', ownerQuestionFinal: true });
+      const stream = connector.resumeStream(resumed);
+      expect(stream).toBeDefined();
+      expect(stream?.onProgress).toBeUndefined();
+
+      const request = {
+        capability: 'sys.shell',
+        prompt: 'Approve this action?',
+        taint: 0,
+        resource: status === 200 ? 'x'.repeat(9_000) : 'read the report',
+      } as const;
+      const approvalId = h.approvals.ask({ ...request, turnId: turn.id }, new Date());
+      const where = { surface: 'telegram', turnId: turn.id, replyTo, approvalId } as const;
+      const calls: { method: string; keyboard: boolean }[] = [];
+      vi.stubGlobal('fetch', async (url: string, init: { body: string }) => {
+        const payload = JSON.parse(init.body);
+        calls.push({
+          method: url.split('/').at(-1)!,
+          keyboard: payload.reply_markup !== undefined,
+        });
+        if (calls.length === 1) {
+          if (revoke) bound = false;
+          if (status !== 200)
+            return Response.json(
+              {
+                ok: false,
+                error_code: status,
+                description: 'Rejected',
+                parameters: { retry_after: 0 },
+              },
+              { status },
+            );
+        }
+        return Response.json({ ok: true, result: { message_id: 700 + calls.length } });
+      });
+
+      const pending = connector.approval(request, where).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(2_000);
+      const outcome = await pending;
+      expect(calls).toEqual(wire.map((method) => ({ method, keyboard: status !== 200 })));
+      expect(decide).toHaveBeenCalled();
+      if (status === 429) expect(outcome).toMatchObject({ status: 429 });
+      else expect(outcome).toBe(revoke ? 'unavailable' : 'asked');
+      expect(h.approvals.get(approvalId)).toMatchObject({
+        telegramQuestionPending: false,
+        questionMessageIds: wire.length > 1 ? [702] : [],
+      });
+
+      // A pending receipt must not bypass a revoked binding, nor may the
+      // reply policy be evaluated for a stale recipient.
+      bound = false;
+      decide.mockClear();
+      expect(h.approvals.beginTelegramQuestion(approvalId, turn.id)).toBe(true);
+      await expect(connector.approval(request, where)).resolves.toBe('unavailable');
+      expect(decide).not.toHaveBeenCalled();
+      expect(calls).toHaveLength(wire.length);
+      await stream?.stop?.();
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+      h.db.close();
+      rmSync(h.home, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('un pulsante premuto dall owner', () => {
   it.each([

@@ -79,6 +79,8 @@ export type PresentTarget = {
   editMessageId?: number;
   /** Tastiera inline: sul messaggio ricco, o sull'ultimo pezzo legacy. */
   keyboard?: InlineButton[][];
+  /** Recheck live authority before each write; guarded writes cannot retry in transport. */
+  canAttempt?: () => boolean;
   /** Wrap only the send that carries the keyboard, before chunk errors are decorated. */
   sendWithKeyboard?: (
     send: () => Promise<{ message_id: number }>,
@@ -101,6 +103,7 @@ function nonModificato(error: unknown): boolean {
  * risale: il messaggio potrebbe essere già arrivato, e ritentarlo qui sarebbe
  * il doppione che `effect()` esiste per evitare.
  *
+ * A refused authority check returns `deferred` without starting that write.
  * `onSent` receives the ID of every confirmed new message, never an edit.
  */
 export async function present(
@@ -108,9 +111,11 @@ export async function present(
   target: PresentTarget,
   p: Presentation,
   onSent?: (messageId: number) => void,
-): Promise<'rich' | 'legacy'> {
+): Promise<'rich' | 'legacy' | 'deferred'> {
   if (p.fallback.length === 0) return 'legacy';
   const topic = target.threadId === undefined ? {} : { threadId: target.threadId };
+  const { canAttempt } = target;
+  const transport = canAttempt === undefined ? undefined : { singleAttempt: true };
   const send = (
     keyboard: InlineButton[][] | undefined,
     write: () => Promise<{ message_id: number }>,
@@ -119,18 +124,18 @@ export async function present(
       ? target.sendWithKeyboard(write)
       : write();
   if (p.rich !== null) {
+    if (canAttempt?.() === false) return 'deferred';
     try {
       if (target.editMessageId !== undefined) {
-        await api.editMessageRichText(
-          target.chatId,
-          target.editMessageId,
-          p.rich,
-          target.keyboard === undefined ? {} : { keyboard: target.keyboard },
-        );
+        await api.editMessageRichText(target.chatId, target.editMessageId, p.rich, {
+          ...transport,
+          ...(target.keyboard === undefined ? {} : { keyboard: target.keyboard }),
+        });
       } else {
         const rich = p.rich;
         const mandato = await send(target.keyboard, () =>
           api.sendRichMessage(target.chatId, rich, {
+            ...transport,
             ...topic,
             ...(target.replyTo === undefined ? {} : { replyTo: target.replyTo }),
             ...(target.keyboard === undefined ? {} : { keyboard: target.keyboard }),
@@ -140,6 +145,9 @@ export async function present(
       }
       return 'rich';
     } catch (error) {
+      // A rate limit is not a format rejection and cannot justify another guarded write.
+      if (canAttempt !== undefined && error instanceof TelegramError && error.status === 429)
+        throw error;
       if (nonModificato(error)) return 'rich';
       // Solo un rifiuto deterministico fa scendere al legacy; uno status 0 è
       // ambiguo e risale al chiamante, che lo registra senza ritentare.
@@ -162,11 +170,13 @@ export async function present(
           ? target.keyboard
           : undefined;
     const options = {
+      ...transport,
       ...(primo && target.editMessageId === undefined && target.replyTo !== undefined
         ? { replyTo: target.replyTo }
         : {}),
       ...(keyboard === undefined ? {} : { keyboard }),
     };
+    if (canAttempt?.() === false) return 'deferred';
     try {
       if (primo && target.editMessageId !== undefined) {
         await api.editMessageText(target.chatId, target.editMessageId, html, options);

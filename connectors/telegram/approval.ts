@@ -112,6 +112,7 @@ export function approvatoreTelegram(
   api: TelegramApi | TelegramApiLike,
   onAsked?: DomandaMostrata,
   attempt?: { begin: () => boolean; reject: () => void },
+  canAttempt?: () => boolean,
 ): Approver {
   return async (request, where) => {
     const chatId = where.replyTo?.['chatId'];
@@ -134,12 +135,13 @@ export function approvatoreTelegram(
     // sull'ultimo pezzo — la domanda è l'ultima cosa che si legge.
     let mayHaveKeyboard = false;
     try {
-      await present(
+      const outcome = await present(
         api,
         {
           chatId,
           ...topic,
           keyboard: askKeyboard(request.capability, approvalId),
+          ...(canAttempt === undefined ? {} : { canAttempt }),
           sendWithKeyboard: async (send) => {
             if (attempt?.begin() === false) {
               mayHaveKeyboard = true;
@@ -163,6 +165,7 @@ export function approvatoreTelegram(
         },
         presentationOfHtml(askHtml(request)),
       );
+      if (outcome === 'deferred') return 'unavailable';
     } catch (error) {
       // A lost prefix has no buttons. A lost keyboard receipt may still be
       // followed by a callback, so the existing approval must stay actionable.
