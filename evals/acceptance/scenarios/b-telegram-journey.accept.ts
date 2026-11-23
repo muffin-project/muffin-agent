@@ -803,34 +803,36 @@ describe('acceptance · #746 · una seconda approvazione in un turno ripreso res
    * seconda domanda perde la tastiera alla sospensione e il click non risolve
    * più niente: l'`until` sulla seconda domanda o sulla risposta finale scade.
    *
-   * Il turno: due comandi diversi, quindi due approvazioni reali. La prima
-   * sospende il turno fresco; il click lo riprende; il modello chiede il
-   * secondo comando; la lane finalizza l'AttachStream sull'esito sospeso; la
+   * A workspace read raises taint before the two URL reads. The model-chosen
+   * paths require approval and the loopback target is rejected before the
+   * network request. D12 separately covers shell output.
+   *
+   * La prima sospende il turno fresco; il click lo riprende; il modello chiede
+   * la seconda lettura; la lane finalizza l'AttachStream sull'esito sospeso; la
    * domanda deve restare sullo **stesso messaggio** con la tastiera viva, e il
    * secondo click deve chiudere il turno.
    */
   it('#746 doppia approvazione: la seconda domanda vive sullo stesso messaggio, la tastiera sopravvive alla sospensione, il turno riprende e chiude', async () => {
     const tg = await startFakeTelegram();
+    const firstRead = {
+      tool: { name: 'http_get', args: { url: 'http://127.0.0.1:1/first-approval' } },
+    };
+    const secondRead = {
+      tool: { name: 'http_get', args: { url: 'http://127.0.0.1:1/second-approval' } },
+    };
     const inst = await install({
       main: [
-        {
-          tool: {
-            name: 'shell_run_write',
-            args: { command: 'echo primo', cwd: '.', description: 'primo comando' },
-          },
-        },
-        {
-          tool: {
-            name: 'shell_run_write',
-            args: { command: 'echo secondo', cwd: '.', description: 'secondo comando' },
-          },
-        },
-        { text: 'fatto, entrambi i comandi hanno risposto' },
+        { tool: { name: 'fs_read', args: { path: 'resources.txt' } } },
+        firstRead,
+        firstRead,
+        secondRead,
+        secondRead,
+        { text: 'entrambe le letture sono terminate' },
       ],
       env: { MUFFIN_GATEWAY_TICK_MS: '200' },
     });
     try {
-      plantTier2Episode(inst.home, 'fixture-746');
+      writeFileSync(join(inst.workspace, 'resources.txt'), 'Synthetic research notes.', 'utf8');
       const gw = await pairOwner(inst, tg, OWNER_ID);
       try {
         type Tastiera = { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
@@ -858,11 +860,11 @@ describe('acceptance · #746 · una seconda approvazione in un turno ripreso res
           return ok.callback_data;
         };
 
-        tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'esegui due comandi'));
+        tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'controlla le due risorse'));
 
-        // Prima domanda: il comando è `echo primo`.
         await until(
-          () => ultimaDomanda() !== undefined && testoDi(ultimaDomanda()!).includes('echo primo'),
+          () =>
+            ultimaDomanda() !== undefined && testoDi(ultimaDomanda()!).includes('first-approval'),
           20_000,
         );
         const prima = ultimaDomanda()!;
@@ -876,7 +878,7 @@ describe('acceptance · #746 · una seconda approvazione in un turno ripreso res
           }),
         );
 
-        // Seconda domanda: comando diverso, nuova approvazione, e deve vivere
+        // Seconda domanda: risorsa diversa, nuova approvazione, e deve vivere
         // sullo stesso messaggio del turno.
         try {
           await until(() => {
@@ -884,7 +886,7 @@ describe('acceptance · #746 · una seconda approvazione in un turno ripreso res
             return (
               ultima !== undefined &&
               idDi(ultima) === messaggio &&
-              testoDi(ultima).includes('echo secondo')
+              testoDi(ultima).includes('second-approval')
             );
           }, 30_000);
         } catch (error) {
@@ -913,6 +915,7 @@ describe('acceptance · #746 · una seconda approvazione in un turno ripreso res
           );
         }
         const seconda = ultimaDomanda()!;
+        expect(okDi(seconda)).not.toBe(okDi(prima));
 
         // La sospensione non deve aver tolto la tastiera: nessuna rimozione
         // esplicita dopo la seconda domanda, prima del click.
@@ -946,10 +949,19 @@ describe('acceptance · #746 · una seconda approvazione in un turno ripreso res
                     c.method === 'editMessageRichText' ||
                     c.method === 'sendMessage') &&
                   Number(c.payload['message_id'] ?? c.messageId) === messaggio &&
-                  testoDi(c).includes('entrambi i comandi hanno risposto'),
+                  testoDi(c).includes('entrambe le letture sono terminate'),
               ),
           30_000,
         );
+        expect(
+          inst.db((db) =>
+            db
+              .prepare(
+                "SELECT count(*) AS n FROM approvals WHERE capability = 'sys.http' AND decision = 'allow' AND consumed_at IS NOT NULL",
+              )
+              .get(),
+          ),
+        ).toEqual({ n: 2 });
       } finally {
         await gw.stop();
       }
