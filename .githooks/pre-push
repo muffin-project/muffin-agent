@@ -40,4 +40,9 @@ echo "pre-push: lint dei file cambiati rispetto a $base_ref"
 npx biome check --changed --since="$base_ref" --no-errors-on-unmatched
 
 echo "pre-push: test toccati dai cambi rispetto a $base_ref"
+# Tests create their own repositories. Git sets local variables for the hook
+# that would otherwise override the test commands' working directories.
+while IFS= read -r name; do
+  unset "$name"
+done < <(git rev-parse --local-env-vars)
 npx vitest run --changed "$base_ref" --reporter=dot --passWithNoTests
