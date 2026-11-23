@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { forwardIdOf } from '../../core/gateway/forward.js';
 import { armingTier, type CapabilityDecl } from '../../core/policy/types.js';
 import { type Job, JobError, type JobStore } from '../../core/scheduler/jobs.js';
 import type { RegisteredTool } from '../loop.js';
@@ -108,7 +109,7 @@ const scheduleSpec: ToolSpec = {
     'Takes a 5-field cron expression and the reminder text, validates both deterministically, and each accepted call persists ' +
     'one durable job on the same store as `muffin jobs add` — the job survives restarts and fires on schedule. ' +
     "`timezone` is an IANA zone and defaults to the owner's own zone; never guess one from the process environment. " +
-    "Delivery goes to this conversation's surface. " +
+    "Delivery goes to this conversation's surface. A terminal command forwarded to the gateway cannot receive later results. " +
     'Not for independent one-shot objectives, dated reminders, or resuming this turn. Use `schedule_once`, `todo` + `due`, or `wait`, respectively. ' +
     'Never emulate this with a shell command: there is no shell path to the scheduler.',
   inputSchema: {
@@ -143,6 +144,7 @@ const onceSpec: ToolSpec = {
   description:
     'Arm an independent background objective once, due on the next gateway tick ("fallo in background una sola volta"). ' +
     'Use it when the owner explicitly asks to delegate one run. The job survives restart and reports back to this conversation. ' +
+    'A terminal command forwarded to the gateway cannot receive later results. ' +
     'Not for a dated reminder or resuming the current turn. Use `todo` + `due` or `wait`, respectively.',
   inputSchema: {
     type: 'object',
@@ -232,6 +234,14 @@ export function makeScheduleTool(
         typeof ctx.replyChannel === 'string' && ctx.replyChannel !== ''
           ? ctx.replyChannel
           : fallback;
+      if (forwardIdOf(channel) !== null) {
+        return {
+          content:
+            'This terminal command closes before later results can be delivered. No job was created. Offer to do the work now or ask the owner to start the request from a connected messaging conversation for later delivery.',
+          isError: true,
+          tier: CLEAN,
+        };
+      }
       const surface = channel.split(':')[0] ?? fallback;
       const timezone = parsed.data.timezone?.trim() || deps.defaultTimezone;
       const jobInput = {

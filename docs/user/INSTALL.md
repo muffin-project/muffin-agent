@@ -80,6 +80,14 @@ for, what it will do to your machine, and how to undo it.
 runtime data home and changes nothing on the machine — useful before an install
 and for scripts that need to know where things will land.
 
+## Receiving the result of background work
+
+Ask from a connected conversation that can receive messages after you leave,
+such as your paired Telegram chat. A `muffin run` command forwarded to the
+gateway can return the current answer before it exits. To receive a result
+later, move the request to the connected conversation. Muffin reports that no
+job was created when the original conversation cannot receive the result.
+
 ## What it does, in order
 
 | Step | What ends up where |

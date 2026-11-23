@@ -5,7 +5,32 @@ import { seal } from '../../../core/rot/verify.js';
 import { install, until } from '../harness.js';
 import { privateMessage, startFakeTelegram } from '../telegram.js';
 
-describe('acceptance · #598 · a Telegram request arms one autonomous job', () => {
+describe('acceptance · #598 · deferred work delivery', () => {
+  it('refuses deferred delivery over the temporary forwarded CLI connection', async () => {
+    const request =
+      'Confronta in background una sola volta 80 più 25 di spedizione con 100 spedizione inclusa. Rimandami il risultato quando è finito.';
+    const result = 'Questa conversazione può ricevere il confronto soltanto ora.';
+    const inst = await install({
+      main: [{ tool: { name: 'schedule_once', args: { goal: request } } }, { text: result }],
+    });
+    try {
+      const gateway = await inst.gateway();
+      await gateway.waitFor(/muffin gateway/, 15_000);
+      const reply = await inst.muffin(['run', '--json', '--timeout', '40', request]);
+      expect(reply.code, reply.err).toBe(0);
+      expect(reply.err).toContain('esecuzione sul gateway');
+      expect(JSON.parse(reply.out).text).toBe(result);
+      expect(inst.db((db) => db.prepare('SELECT * FROM jobs').all())).toHaveLength(0);
+      expect(inst.db((db) => db.prepare('SELECT * FROM job_fires').all())).toHaveLength(0);
+      expect(inst.provider.main()).toHaveLength(2);
+      expect(inst.provider.main()[1]?.transcript).toContain('No job was created.');
+      expect(inst.provider.main()[1]?.transcript).toContain('a connected messaging conversation');
+      await gateway.stop();
+    } finally {
+      await inst.cleanup();
+    }
+  }, 60_000);
+
   it('survives gateway restart before firing and sends one final receipt to the original chat', async () => {
     const owner = { id: 424242, name: 'Synthetic owner' };
     const filename = 'one-shot-evidence.txt';

@@ -377,6 +377,30 @@ it('one-shot arming rejects model-supplied routing, authority and budget fields'
   }
 });
 
+it.each(['once', 'recurring'] as const)(
+  'does not arm a %s job for a temporary gateway-forwarded terminal',
+  async (mode) => {
+    const db = new DatabaseCtor(':memory:');
+    try {
+      const jobs = new JobStore(db);
+      const tool = makeScheduleTool(
+        { jobs, defaultTimezone: 'Europe/Rome', defaultChannel: 'telegram' },
+        mode,
+      );
+      const goal = 'Compare the shipping quotes';
+      const args = mode === 'once' ? { goal } : { goal, cron: '0 9 * * *' };
+      const result = await tool.handler(args, toolContext({ replyChannel: 'forward:request-id' }));
+      expect(result).toMatchObject({
+        isError: true,
+        content: expect.stringContaining('No job was created.'),
+      });
+      expect(jobs.list()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  },
+);
+
 describe('un principal autonomo non arma ricorrenze (S1)', () => {
   /**
    * Amplification boundary: un'autonomia già delegata (il fire gira con il
