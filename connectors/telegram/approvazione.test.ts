@@ -1,9 +1,9 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Update } from '@grammyjs/types';
 import DatabaseCtor from 'better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ApprovalRequest, LoopDeps } from '../../agent/loop.js';
 import { ApprovalStore } from '../../core/approvals/store.js';
 import { SessionStore } from '../../core/session/store.js';
@@ -31,6 +31,12 @@ import { UpdateInbox } from './updates.js';
 const OWNER = 771001;
 const STRANGER = 771002;
 
+function latch(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 const premuto = (
   data: string,
   from = OWNER,
@@ -53,9 +59,9 @@ const premuto = (
     },
   }) as unknown as Update;
 
-function harness() {
+function harness(durable = false) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-appr-tg-'));
-  const db = new DatabaseCtor(':memory:');
+  const db = new DatabaseCtor(durable ? join(home, 'muffin.db') : ':memory:');
   const approvals = new ApprovalStore(db);
   const turns = new TurnStore(db);
 
@@ -182,7 +188,7 @@ function harness() {
     onWork: () => spinte.push(1),
     config: { token: 't', ownerUserId: OWNER, ownerChatId: OWNER },
   });
-  return { connector, approvals, turns, risposte, modifiche, spinte, inviati, api };
+  return { connector, approvals, turns, risposte, modifiche, spinte, inviati, api, db, home };
 }
 
 async function deliver(h: ReturnType<typeof harness>, updates: Update[]): Promise<void> {
@@ -242,22 +248,34 @@ function turnoInAttesa(
 }
 
 describe('un pulsante premuto dall owner', () => {
-  it('does not post a second approval when Telegram accepted the first but the response was lost', async () => {
-    const h = harness();
+  it.each(['hosted', 'standalone'] as const)('%s lost receipt: no duplicate on re-ask or restart, and the original button works', async (route) => {
+    const h = harness(true);
     const { turnId, approvalId } = turnoInAttesa(h, { chatId: OWNER, messageId: 5 });
-    const stream = h.connector.resumeStream(h.turns.get(turnId)!);
+    const stream = route === 'hosted' ? h.connector.resumeStream(h.turns.get(turnId)!) : undefined;
+    const request = { capability: 'sys.shell', prompt: 'Approva questa azione?', taint: 0 } as const;
+    const where = { surface: 'telegram', turnId, replyTo: { chatId: OWNER, messageId: 5 }, approvalId } as const;
     const sent = h.api.sendRichMessage.bind(h.api);
+    const restartedDb = new DatabaseCtor(h.db.name);
+    const deps = (h.connector as unknown as { deps: ConnectorDeps }).deps;
+    const restarted = new TelegramConnector({ ...deps, approvals: new ApprovalStore(restartedDb) });
+    const entered = latch();
+    const lost = latch();
     h.api.sendRichMessage = async (...args) => {
       await sent(...args);
+      entered.resolve();
+      if (h.inviati.filter((call) => call.method === 'sendMessage').length === 1) await lost.promise;
       throw new TelegramError(0, 'response lost after send');
     };
+    const first = h.connector.approval(request, where);
+    const firstOutcome = Promise.allSettled([first]);
     try {
-      await expect(
-        h.connector.approval(
-          { capability: 'sys.shell', prompt: 'Approva questa azione?', taint: 0 },
-          { surface: 'telegram', turnId, replyTo: { chatId: OWNER, messageId: 5 }, approvalId },
-        ),
-      ).resolves.toBe('asked');
+      await entered.promise;
+      // A different connection observes the barrier before the first send returns.
+      await expect(restarted.approval(request, where)).resolves.toBe('asked');
+      lost.resolve();
+      await expect(first).resolves.toBe('asked');
+      await expect(h.connector.approval(request, where)).resolves.toBe('asked');
+      await expect(restarted.approval(request, where)).resolves.toBe('asked');
       const questions = h.inviati.filter((call) => call.method === 'sendMessage');
       expect(questions).toHaveLength(1);
       expect(questions[0]?.keyboard).toBeDefined();
@@ -283,7 +301,51 @@ describe('un pulsante premuto dall owner', () => {
         ),
       ).toBe(true);
     } finally {
+      lost.resolve();
+      await firstOutcome;
       await stream?.stop?.();
+      restartedDb.close();
+      h.db.close();
+      rmSync(h.home, { recursive: true, force: true });
+    }
+  });
+
+  it('sends the result on a new message when the approval receipt edit outlives stop', async () => {
+    vi.useFakeTimers();
+    const h = harness();
+    const replyTo = { chatId: OWNER, messageId: 5 };
+    const { turnId, approvalId } = turnoInAttesa(h, replyTo);
+    const stream = h.connector.resumeStream(h.turns.get(turnId)!)!;
+    const late = latch();
+    try {
+      await expect(h.connector.approval(
+        { capability: 'sys.shell', prompt: 'Approva questa azione?', taint: 0 },
+        { surface: 'telegram', turnId, replyTo, approvalId },
+      )).resolves.toBe('asked');
+      const question = h.inviati.find((call) => call.method === 'sendMessage')!;
+      await deliver(h, [premuto(`ok:${approvalId}`)]);
+      const edit = h.api.editMessageRichText.bind(h.api);
+      const receipt = vi.fn(async (...args: Parameters<typeof edit>) => {
+        if (!JSON.stringify(args[2]).includes('FINAL RESULT')) await late.promise;
+        return edit(...args);
+      });
+      h.api.editMessageRichText = receipt;
+
+      const stopping = stream.stop?.();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await stopping;
+      expect(receipt).toHaveBeenCalledWith(OWNER, question.messageId, expect.anything(), expect.anything());
+      await h.connector.deliverTo(turnId, replyTo, 'FINAL RESULT');
+      late.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+
+      const result = h.inviati.find((call) => call.text?.includes('FINAL RESULT'));
+      expect(result).toMatchObject({ method: 'sendMessage' });
+      expect(result?.messageId).not.toBe(question.messageId);
+      expect(h.inviati.at(-1)).toMatchObject({ method: 'editMessageText', messageId: question.messageId, text: expect.stringContaining('consentito') });
+    } finally {
+      late.resolve();
+      vi.useRealTimers();
     }
   });
 

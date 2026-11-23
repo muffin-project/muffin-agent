@@ -106,9 +106,14 @@ export type Transcript = {
    * `true` quando la domanda è stata presa; `false` quando nessun messaggio
    * vivo può ospitarla (trascrizione spenta o già fallita) e il chiamante deve
    * ripiegare sul messaggio autonomo — la garanzia che la domanda esista
-   * sempre, anche dove il messaggio del turno non c'è.
+    * sempre, anche dove il messaggio del turno non c'è. `uncertain` leaves
+    * the existing approval actionable without posting a fallback keyboard.
    */
-  ask(input: { request: ApprovalRequest; approvalId: string }): Promise<boolean | 'uncertain'>;
+  ask(input: {
+    request: ApprovalRequest;
+    approvalId: string;
+    begin?: () => boolean;
+  }): Promise<boolean | 'uncertain'>;
   /**
    * The turn's own words are still arriving and have not hit a `boundary`
    * yet — could still turn into preamble (`spoke()`), could still be the
@@ -233,7 +238,7 @@ export function startTranscript(
   let stopped = false;
   /** Set on the first failed send/edit. Never cleared. */
   let disabled = false;
-  let approvalSendUncertain = false;
+  let uncertainApprovalId: string | undefined;
   /** What the turn is doing when no step is running: `sto pensando`, `sto scrivendo la risposta`. */
   let status: string | null = null;
   /**
@@ -320,7 +325,7 @@ export function startTranscript(
         // message — and re-sending here would duplicate the transcript. This
         // mirrors `delivery.ts`, which records `possibly_sent` and does not
         // retry. The caller disables the transcript on the rethrow.
-        if (!(error instanceof TelegramError && error.status > 0)) throw error;
+        if (disabled || !(error instanceof TelegramError && error.status > 0)) throw error;
         richTransport = false;
         log(
           `telegram: trasporto rich rifiutato, torno a legacy — ${error instanceof Error ? error.message : String(error)}`,
@@ -432,7 +437,7 @@ export function startTranscript(
         return;
       }
       disabled = true;
-      approvalSendUncertain = error instanceof TelegramError && error.status === 0;
+      if (!(error instanceof TelegramError && error.status > 0)) uncertainApprovalId = inAttesa?.approvalId;
       log(
         `telegram: trascrizione del turno sospesa — ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -855,7 +860,7 @@ export function startTranscript(
       }
     },
 
-    async ask({ request, approvalId }) {
+    async ask({ request, approvalId, begin }) {
       if (stopped || disabled) return false;
       let seg = current();
       let esistente: { seg: Segment; step: Step } | undefined;
@@ -876,11 +881,13 @@ export function startTranscript(
         // A long question belongs to the standalone approver, which splits
         // it and adds buttons only to the last part. Never truncate an ASK.
         if (!fits({ ...seg, steps: [] }, step)) return false;
+        if (begin?.() === false) return 'uncertain';
         addStep(step);
         // `addStep` può aver ruotato il segmento (overflow): la domanda vive
         // dove è stata scritta davvero.
         seg = current();
       } else {
+        if (begin?.() === false) return 'uncertain';
         seg = esistente.seg;
       }
       // La tastiera non vive su un'anteprima effimera: da qui in poi il turno
@@ -908,7 +915,7 @@ export function startTranscript(
         // Nessun messaggio vivo: il chiamante ripiega sul messaggio autonomo.
         const i = pendingAsks.indexOf(pending);
         if (i !== -1) pendingAsks.splice(i, 1);
-        return approvalSendUncertain ? 'uncertain' : false;
+        return uncertainApprovalId === approvalId ? 'uncertain' : false;
       }
       // La tastiera si (ri)attacca quando nessun edit è partito — testo
       // identico, cioè il re-ask della stessa capability dopo una decisione:
@@ -928,7 +935,9 @@ export function startTranscript(
             );
             const i = pendingAsks.indexOf(pending);
             if (i !== -1) pendingAsks.splice(i, 1);
-            return error instanceof TelegramError && error.status === 0 ? 'uncertain' : false;
+            if (error instanceof TelegramError && error.status > 0) return false;
+            disabled = true;
+            return 'uncertain';
           }
         }
       }
@@ -1072,14 +1081,21 @@ export function startTranscript(
       // bounded — past `STOP_WAIT_MS` the transcript stays as last shown
       // rather than holding the answer back (the same trade `progress.ts`
       // made for its cleanup).
-      const done = enqueue(() => syncAll(true));
+      let timeout: NodeJS.Timeout | undefined;
       try {
-        await Promise.race([
-          done,
-          new Promise<void>((resolve) => setTimeout(resolve, STOP_WAIT_MS)),
+        const drained = await Promise.race([
+          enqueue(() => syncAll(true)).then(() => true),
+          new Promise<false>((resolve) => {
+            timeout = setTimeout(() => resolve(false), STOP_WAIT_MS);
+          }),
         ]);
+        // An in-flight edit can still land after this budget. The result must
+        // not reuse its message ID, even if the edit eventually succeeds.
+        if (!drained) disabled = true;
       } catch {
-        // `sendSegment` already swallows and disables; nothing to add.
+        disabled = true;
+      } finally {
+        clearTimeout(timeout);
       }
     },
   };

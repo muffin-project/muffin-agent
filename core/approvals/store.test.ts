@@ -260,6 +260,26 @@ describe('#784 — la domanda registra dove si è mostrata', () => {
     expect(s.withdrawnQuestionMessages('t1')).toEqual([]);
   });
 
+  it('adds the Telegram keyboard attempt to an installed database without losing confirmed IDs', () => {
+    const db = new DatabaseCtor(':memory:');
+    const prior = new ApprovalStore(db);
+    const id = chiedi(prior);
+    prior.noteQuestionMessage(id, 700);
+    db.exec('ALTER TABLE approvals DROP COLUMN telegram_question_pending');
+
+    const migrated = new ApprovalStore(db);
+    expect(migrated.beginTelegramQuestion(id, 'wrong-turn')).toBe(false);
+    expect(migrated.beginTelegramQuestion(id, 't1')).toBe(true);
+    expect(migrated.beginTelegramQuestion(id, 't1')).toBe(false);
+    expect(migrated.get(id)).toMatchObject({ telegramQuestionPending: true, questionMessageIds: [700] });
+
+    migrated.rejectTelegramQuestion(id);
+    expect(migrated.beginTelegramQuestion(id, 't1')).toBe(true);
+    migrated.noteQuestionMessage(id, 701);
+    expect(migrated.get(id)).toMatchObject({ telegramQuestionPending: false, questionMessageIds: [700, 701] });
+    db.close();
+  });
+
   it('kill-restart al livello onesto: chiudere l’handle e riaprire non perde le bolle', () => {
     const home = mkdtempSync(join(tmpdir(), 'muffin-784-'));
     const file = join(home, 'approvals.db');

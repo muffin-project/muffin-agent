@@ -1,5 +1,5 @@
 import type { ApprovalRequest, Approver } from '../../agent/loop.js';
-import type { InlineButton, TelegramApi, TelegramApiLike } from './api.js';
+import { TelegramError, type InlineButton, type TelegramApi, type TelegramApiLike } from './api.js';
 import { present, presentationOfHtml } from './present.js';
 import { escapeHtml } from './render.js';
 
@@ -111,13 +111,15 @@ export type DomandaMostrata = (mostrata: { approvalId: string; messageId: number
 export function approvatoreTelegram(
   api: TelegramApi | TelegramApiLike,
   onAsked?: DomandaMostrata,
+  attempt?: { begin: () => boolean; reject: () => void },
 ): Approver {
   return async (request, where) => {
     const chatId = where.replyTo?.['chatId'];
     // Nessun indirizzo durevole vuol dire nessun posto dove far comparire la
     // domanda. Non si inventa la chat dell'owner: un turno il cui indirizzo non
     // sappiamo leggere è un turno di cui non sappiamo a chi stiamo parlando.
-    if (typeof chatId !== 'number' || where.approvalId === undefined) return 'unavailable';
+    const { approvalId } = where;
+    if (typeof chatId !== 'number' || approvalId === undefined) return 'unavailable';
 
     // Il topic del forum, quando la domanda nasce dentro uno: la bolla di
     // ripiego è un pezzo del turno come gli altri, e senza il thread finirebbe
@@ -130,25 +132,41 @@ export function approvatoreTelegram(
     // La politica è la stessa delle altre uscite fuori-turno (`present`):
     // ricca se entra, legacy a pezzi sotto il limite, con la tastiera
     // sull'ultimo pezzo — la domanda è l'ultima cosa che si legge.
-    const inviati: number[] = [];
-    await present(
-      api,
-      { chatId, ...topic, keyboard: askKeyboard(request.capability, where.approvalId) },
-      presentationOfHtml(askHtml(request)),
-      (messageId) => {
-        inviati.push(messageId);
-      },
-    );
-    // La tastiera sta sull'ultimo pezzo: quello è il messaggio da spegnere
-    // alla chiusura terminale. La registrazione non può rompere la domanda:
-    // è già partita, e un gancio che lancia non deve trasformarla in errore.
-    const ultimo = inviati.at(-1);
-    if (ultimo !== undefined) {
-      try {
-        onAsked?.({ approvalId: where.approvalId, messageId: ultimo });
-      } catch {
-        /* la domanda è partita; la registrazione è contabilità */
-      }
+    let mayHaveKeyboard = false;
+    try {
+      await present(
+        api,
+        {
+          chatId,
+          ...topic,
+          keyboard: askKeyboard(request.capability, approvalId),
+          sendWithKeyboard: async (send) => {
+            if (attempt?.begin() === false) {
+              mayHaveKeyboard = true;
+              throw new Error('Telegram approval keyboard write already pending');
+            }
+            let receipt: { message_id: number };
+            try {
+              receipt = await send();
+            } catch (error) {
+              if (error instanceof TelegramError && error.status > 0) attempt?.reject();
+              else mayHaveKeyboard = true;
+              throw error;
+            }
+            try {
+              onAsked?.({ approvalId, messageId: receipt.message_id });
+            } catch {
+              // The keyboard already landed; do not turn bookkeeping into failure.
+            }
+            return receipt;
+          },
+        },
+        presentationOfHtml(askHtml(request)),
+      );
+    } catch (error) {
+      // A lost prefix has no buttons. A lost keyboard receipt may still be
+      // followed by a callback, so the existing approval must stay actionable.
+      if (!mayHaveKeyboard) throw error;
     }
     return 'asked';
   };

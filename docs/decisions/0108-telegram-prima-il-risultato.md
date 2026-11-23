@@ -15,8 +15,10 @@ ordinarie, preservando l'approvazione concreta di ADR-0093.
   nel topic d'origine. Nessuna bolla durevole dedicata all'attività.
 - Una richiesta di approvazione è un messaggio reale con azione, risorsa e
   pulsanti. Il risultato può aggiornare quello stesso messaggio, lasciando
-  la ricevuta sotto la risposta. Una risposta di rete ambigua non autorizza
-  l'invio di una seconda tastiera.
+  la ricevuta sotto la risposta. Se l'edit della ricevuta può essere ancora
+  in volo, il risultato va su un messaggio nuovo. Una risposta di rete ambigua
+  non autorizza l'invio di una seconda tastiera per lo stesso ID, anche dopo
+  un riavvio.
 
 Questa scelta riguarda la presentazione. Il routing, la policy, la consegna
 journaled, il formato dei piani congelati e la ripresa restano gli stessi.

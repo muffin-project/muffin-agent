@@ -115,6 +115,30 @@ describe('askHtml / askPlain · le stesse parole, due rese', () => {
 });
 
 describe('approvatoreTelegram · il ripiego, quando nessuna trascrizione può ospitarla', () => {
+  it.each(['first chunk', 'keyboard chunk'] as const)('keeps a split ask actionable only on loss of the %s', async (loss) => {
+    const { api, calls } = recordingApi();
+    const send = api.sendMessage.bind(api);
+    const requestTooLong = { ...request, resource: 'x'.repeat(9000) };
+    const confirmed: number[] = [];
+    api.sendMessage = async (...args) => {
+      const receipt = await send(...args);
+      if (loss === 'first chunk' || args[2]?.keyboard !== undefined) {
+        throw new TelegramError(0, 'response lost after send');
+      }
+      return receipt;
+    };
+    const result = approvatoreTelegram(api, (m) => confirmed.push(m.messageId))(requestTooLong, where);
+    if (loss === 'first chunk') {
+      await expect(result).rejects.toThrow('response lost after send');
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.keyboard).toBeUndefined();
+    } else {
+      await expect(result).resolves.toBe('asked');
+      expect(calls.filter((c) => c.keyboard !== undefined)).toEqual([calls.at(-1)]);
+    }
+    expect(confirmed).toEqual([]);
+  });
+
   it('manda la domanda intera e mette la tastiera sull’ultimo pezzo', async () => {
     const { api, calls } = recordingApi();
     const esito = await approvatoreTelegram(api)(request, where);

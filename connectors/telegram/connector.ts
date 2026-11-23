@@ -100,7 +100,7 @@ type ApprovalDecide = (
 ) => 'ok' | 'already' | 'unknown' | 'withdrawn';
 type ApprovalGet = (
   id: string,
-) => { id: string; turnId: string; capability: string; resource: string | null } | null;
+) => { id: string; turnId: string; capability: string; resource: string | null; telegramQuestionPending: boolean } | null;
 type ApprovalOpenRows = (turnId: string) => { id: string }[];
 /**
  * Solo i due metodi che la chiusura orfana usa (#784): registrare dove una
@@ -287,6 +287,8 @@ export type ConnectorDeps = {
     get: ApprovalGet;
     openRows: ApprovalOpenRows;
     noteQuestionMessage: ApprovalNoteQuestion;
+    beginTelegramQuestion: (id: string, turnId: string) => boolean;
+    rejectTelegramQuestion: (id: string) => void;
     withdrawnQuestionMessages: ApprovalWithdrawnQuestions;
   };
   /**
@@ -1161,6 +1163,7 @@ export class TelegramConnector {
   private noteTranscriptHandoff(turnId: string, transcript: Transcript): void {
     const handoff = transcript.handoff();
     if (handoff) this.transcriptHandoff.set(turnId, handoff);
+    else this.transcriptHandoff.delete(turnId);
   }
 
   constructor(private readonly deps: ConnectorDeps) {
@@ -1801,23 +1804,37 @@ export class TelegramConnector {
     where: ApprovalWhere,
   ): Promise<Awaited<ReturnType<Approver>>> {
     const chatId = where.replyTo?.['chatId'];
-    const transcript = typeof chatId === 'number' ? this.transcriptVivi.get(chatId) : undefined;
-    if (transcript !== undefined && where.approvalId !== undefined) {
-      const presa = await transcript.ask({ request, approvalId: where.approvalId });
+    const { approvalId, turnId } = where;
+    const approvals = this.deps.approvals;
+    if (typeof chatId !== 'number' || approvalId === undefined || approvals === undefined) return 'unavailable';
+    const row = approvals.get(approvalId);
+    if (row === null || row.turnId !== turnId) return 'unavailable';
+    if (row.telegramQuestionPending) return 'asked';
+    const attempt = {
+      begin: () => approvals.beginTelegramQuestion(approvalId, turnId),
+      reject: () => approvals.rejectTelegramQuestion(approvalId),
+    };
+    const transcript = this.transcriptVivi.get(chatId);
+    if (transcript !== undefined) {
+      let began = false;
+      const presa = await transcript.ask({ request, approvalId, begin: () => (began = attempt.begin()) });
       // Telegram may already have posted the question. Wait for its callback
       // on the existing approval row; do not post a second keyboard.
       if (presa === 'uncertain') return 'asked';
       if (presa) {
-        this.approvalSulTurno.add(where.approvalId);
-        this.transcriptInSospeso.set(where.turnId, transcript);
+        this.approvalSulTurno.add(approvalId);
+        this.transcriptInSospeso.set(turnId, transcript);
         return 'asked';
       }
+      if (began) attempt.reject();
     }
     // La domanda esce come messaggio autonomo: la registrazione di dove si è
     // mostrata è il gancio, con la stessa protezione di quello della
     // trascrizione (una registrazione non rompe una domanda già partita).
-    return approvatoreTelegram(this.deps.api, (mostrata) =>
-      this.notaDomanda(mostrata.approvalId, mostrata.messageId),
+    return approvatoreTelegram(
+      this.deps.api,
+      (mostrata) => this.notaDomanda(mostrata.approvalId, mostrata.messageId),
+      attempt,
     )(request, where);
   }
 
