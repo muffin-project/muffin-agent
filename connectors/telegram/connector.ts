@@ -2240,10 +2240,7 @@ export class TelegramConnector {
       if (!incoming) continue;
       const { principal } = principalFor(incoming, this.deps.config.ownerUserId);
       if (principal.kind !== 'owner') continue;
-      if (
-        sembraComando(incoming.text) &&
-        CONTROLLO.has(comandoPerNoi(incoming.text, this.meUsername))
-      ) {
+      if (CONTROLLO.has(comandoPerNoi(incoming.text, this.meUsername))) {
         this.gestiti.add(incoming.updateId);
         controlli.push(incoming);
       }
@@ -2311,7 +2308,7 @@ export class TelegramConnector {
       if (incoming.isPrivate && this.staleOwnerDM(incoming.chatId, incoming.fromId)) continue;
       const { principal } = principalFor(incoming, this.deps.config.ownerUserId);
       if (principal.kind !== 'owner') continue;
-      if (sembraComando(incoming.text)) continue;
+      if (comandoPerNoi(incoming.text, this.meUsername) !== '') continue;
       await this.avvisa(incoming);
     }
   }
