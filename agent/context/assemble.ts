@@ -233,6 +233,8 @@ export type IstanzaFacts = {
   jobAttivi: number;
   /** `null` quando il root of trust è integro — stessa condizione di `sys_inspect`, non un errore. */
   safeMode: { reason: string } | null;
+  /** Boot diagnosis when the configured web search tool could not be registered. */
+  webSearchUnavailable?: string;
 };
 
 /**
@@ -388,6 +390,11 @@ function istanzaRighe(f: IstanzaFacts): string[] {
   return [
     `- Cartella di lavoro: ${f.cwd} — ${f.voci.length} element${f.voci.length === 1 ? 'o' : 'i'} di primo livello: ${elenco}.`,
     `- Istanza: ${f.provider} · ${f.jobAttivi} job attiv${f.jobAttivi === 1 ? 'o' : 'i'} · ${rot}.`,
+    ...(f.webSearchUnavailable === undefined
+      ? []
+      : [
+          `- Ricerca web indisponibile (${f.webSearchUnavailable}). La lettura di URL noti segue le regole di accesso del turno.`,
+        ]),
   ];
 }
 

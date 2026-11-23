@@ -1469,6 +1469,7 @@ export function buildRuntime(
     provider: `main ${inferenceProvider(config, 'main').kind} · light ${inferenceProvider(config, 'light').kind}`,
     jobAttivi: jobs.list().filter((j) => j.active).length,
     safeMode: safeMode ? { reason: safeMode.reason } : null,
+    ...(searchDiagnosis.gap === null ? {} : { webSearchUnavailable: searchDiagnosis.gap.reason }),
   });
 
   const runtime: Runtime = {
