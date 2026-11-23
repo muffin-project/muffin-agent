@@ -674,6 +674,62 @@ describe('muffin model', () => {
     expect(out.join('\n')).toContain('1536');
   });
 
+  it('switches only the embedding lane to the OpenAI API after a synthetic probe', async () => {
+    const h = home();
+    const before = {
+      ...loadConfig(h),
+      embedder: { kind: 'ollama' as const, model: 'qwen3-embedding:0.6b', dimensions: 1024 },
+    };
+    saveConfig(before, h);
+    writeSecret('openai_api_key', 'sk-embedding-fake', h, 'home');
+    const fetch = vi.fn(async () =>
+      Response.json({ data: [{ embedding: Array.from({ length: 1536 }, () => 0.125) }] }),
+    );
+    vi.stubGlobal('fetch', fetch);
+    try {
+      const { sink } = raccogli();
+      expect(await cmdModel(h, ['embed', '--openai'], { out: sink })).toBe(0);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledWith(
+        'https://api.openai.com/v1/embeddings',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({ authorization: 'Bearer sk-embedding-fake' }),
+          body: JSON.stringify({ model: 'text-embedding-3-small', input: ['muffin'] }),
+        }),
+      );
+      expect(loadConfig(h)).toEqual({
+        ...before,
+        embedder: {
+          kind: 'openai-compat',
+          model: 'text-embedding-3-small',
+          dimensions: 1536,
+          apiKeyRef: 'secret://openai_api_key',
+        },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps the existing embedder when OpenAI refuses the synthetic probe', async () => {
+    const h = home();
+    const before = loadConfig(h);
+    writeSecret('openai_api_key', 'sk-embedding-fake', h, 'home');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(null, { status: 401 })),
+    );
+    try {
+      const { out, sink } = raccogli();
+      expect(await cmdModel(h, ['embed', '--openai'], { out: sink })).toBe(1);
+      expect(out.join('\n')).toContain('HTTP 401');
+      expect(loadConfig(h)).toEqual(before);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('probes the Ollama model dimensions without a fake expected size', async () => {
     const endpoint = await embeddingEndpoint(1024);
     try {

@@ -74,3 +74,20 @@ probe or a real turn. ChatGPT selection verifies its actual model route first.
 Muffin never switches to another paid provider automatically. ChatGPT-plan usage
 is managed in [ChatGPT Settings](https://chatgpt.com/settings/usage), separately
 from Muffin's API-dollar estimates.
+
+## Embeddings without Ollama
+
+```sh
+muffin secret set openai_api_key
+muffin model embed --openai
+muffin gateway restart
+muffin doctor
+```
+
+Use a platform API key issued by OpenAI. This selects `text-embedding-3-small`
+for embeddings. The command sends one synthetic input to verify the key and
+measure vector dimensions before saving. After restarting, Muffin sends memory
+text for indexing and semantic search queries to the OpenAI API. The local
+database keeps its source text and rebuilds vectors for the new model as
+consolidation runs. API usage is charged to the key's API organization, including
+any eligible [subscription API credits](https://help.openai.com/en/articles/20001626).
