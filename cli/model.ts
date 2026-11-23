@@ -8,6 +8,7 @@ import { isOpenRouterFreeRoute, priceOf } from '../core/budget/pricing.js';
 import { ChatGPTConnection } from '../core/config/chatgpt-oauth.js';
 import {
   type Config,
+  ConfigError,
   type InferenceLane,
   type InferenceProviderConfig,
   inferenceProvider,
@@ -376,8 +377,8 @@ function sameLaneState(a: Config, b: Config, lane: InferenceLane): boolean {
  * toglie: una chiamata e un `vector.length` lo tolgono.
  */
 async function probeDimensions(config: Config, slug: string, home: string): Promise<number> {
-  const scelta = { ...(config.embedder ?? { kind: 'ollama' as const }), model: slug };
-  const embedder = makeEmbedder(scelta, (ref) => readSecret(ref, home));
+  const { fallback: _fallback, ...primary } = config.embedder ?? { kind: 'ollama' as const };
+  const embedder = makeEmbedder({ ...primary, model: slug }, (ref) => readSecret(ref, home));
   if (embedder.probeDimensions === undefined) {
     throw new Error(`l'embedder "${slug}" non può misurare la dimensione del vettore`);
   }
@@ -547,7 +548,8 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
     out('Argomenti in eccesso: specifica un solo modello oppure --list [filtro].');
     return 2;
   }
-  const slug = primo;
+  const directOpenAIEmbeddings = lane === 'embed' && primo === '--openai';
+  const slug = directOpenAIEmbeddings ? 'text-embedding-3-small' : primo;
   const selectedProvider =
     requestedEndpoint !== undefined
       ? endpointConfigFor(laneProvider, requestedEndpoint, requestedKeyRef)
@@ -806,26 +808,34 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
 
   if (slug === undefined || slug.startsWith('-')) {
     out(
-      'uso: muffin model [main|light|embed] <slug> · muffin model [main|light] [--provider <id>|--endpoint <url>] <slug> · muffin model [main|light] --list [filtro] [--provider <id>] · muffin model --select',
+      'uso: muffin model [main|light|embed] <slug> · muffin model embed --openai · muffin model [main|light] [--provider <id>|--endpoint <url>] <slug> · muffin model [main|light] --list [filtro] [--provider <id>] · muffin model --select',
     );
     return 2;
   }
 
   if (lane === 'embed') {
-    // Nessun catalogo da interrogare: OpenRouter instrada chat, non embedding.
-    // Quello che si può fare — ed è di più — è **chiamarlo**: se risponde
-    // esiste, e il vettore che torna dice la dimensione.
+    // The OpenAI shortcut replaces the entire embedding route. The probe sends
+    // a synthetic string and measures dimensions before committing the switch.
+    const selected: NonNullable<Config['embedder']> = directOpenAIEmbeddings
+      ? {
+          kind: 'openai-compat',
+          model: slug,
+          apiKeyRef: 'secret://openai_api_key',
+          dimensions: 1536,
+        }
+      : { ...(config.embedder ?? { kind: 'ollama' }), model: slug };
     let dim: number;
     try {
-      dim = await (deps.probe ?? probeDimensions)(config, slug, home);
+      dim = await (deps.probe ?? probeDimensions)({ ...config, embedder: selected }, slug, home);
     } catch (error) {
       out(
         `l'embedder "${slug}" non ha risposto: ${error instanceof Error ? error.message : String(error)}`,
       );
+      if (error instanceof ConfigError) out(error.remedy);
       out('Niente scritto: un modello che non risponde adesso non indicizzerebbe niente dopo.');
       return 1;
     }
-    const fallbackChoice = config.embedder?.fallback;
+    const fallbackChoice = selected.fallback;
     if (fallbackChoice !== undefined) {
       const fallbackDimensions = makeEmbedder(fallbackChoice, (ref) =>
         readSecret(ref, home),
@@ -839,20 +849,26 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
         return 1;
       }
     }
-    const prima = config.embedder?.dimensions;
-    saveConfig(
-      {
-        ...config,
-        embedder: { ...(config.embedder ?? { kind: 'ollama' }), model: slug, dimensions: dim },
-      },
-      home,
-    );
+    const latest = loadConfig(home);
+    if (JSON.stringify(latest.embedder) !== JSON.stringify(original.embedder)) {
+      out(
+        'La corsia embedding è cambiata durante la verifica. Riprova per usare la nuova configurazione.',
+      );
+      return 1;
+    }
+    const prima =
+      original.embedder?.dimensions ?? (original.embedder === undefined ? 1024 : undefined);
+    saveConfig({ ...latest, embedder: { ...selected, dimensions: dim } }, home);
     out(`embed → ${slug} · ${dim} dimensioni, misurate chiamandolo`);
+    if (directOpenAIEmbeddings) {
+      out('La memoria da indicizzare e le query semantiche saranno inviate all’API OpenAI.');
+    }
     out(
       prima !== undefined && prima !== dim
-        ? `La dimensione cambia (${prima} → ${dim}): l'indice vettoriale si rifà da sé al prossimo consolidamento.`
-        : 'Le righe embeddate col modello di prima vengono buttate e rifatte: due modelli sono due spazi vettoriali.',
+        ? `Dimensioni: ${prima} → ${dim}. L’indice vettoriale sarà ricostruito dai testi conservati.`
+        : 'Se cambia il modello, l’indice vettoriale sarà ricostruito dai testi conservati.',
     );
+    out('Riavvia il gateway per applicare il cambio a un’istanza in esecuzione.');
     return 0;
   }
 
