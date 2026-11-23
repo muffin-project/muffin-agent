@@ -434,7 +434,13 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
       const guastoInCoda = guasti.get(recordedMethod)?.shift();
       if (guastoInCoda) {
         res.writeHead(guastoInCoda.status, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, description: guastoInCoda.description }));
+        res.end(
+          JSON.stringify({
+            ok: false,
+            error_code: guastoInCoda.status,
+            description: guastoInCoda.description,
+          }),
+        );
         return;
       }
       if (recordedMethod === 'sendMessage' && nextSendResponse !== undefined) {

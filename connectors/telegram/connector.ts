@@ -102,9 +102,13 @@ type ApprovalDecide = (
   now: Date,
   by?: 'owner' | 'delegation',
 ) => 'ok' | 'already' | 'unknown' | 'withdrawn';
-type ApprovalGet = (
-  id: string,
-) => { id: string; turnId: string; capability: string; resource: string | null } | null;
+type ApprovalGet = (id: string) => {
+  id: string;
+  turnId: string;
+  capability: string;
+  resource: string | null;
+  telegramQuestionPending: boolean;
+} | null;
 type ApprovalOpenRows = (turnId: string) => { id: string }[];
 /**
  * Solo i due metodi che la chiusura orfana usa (#784): registrare dove una
@@ -291,6 +295,8 @@ export type ConnectorDeps = {
     get: ApprovalGet;
     openRows: ApprovalOpenRows;
     noteQuestionMessage: ApprovalNoteQuestion;
+    beginTelegramQuestion: (id: string, turnId: string) => boolean;
+    rejectTelegramQuestion: (id: string) => void;
     withdrawnQuestionMessages: ApprovalWithdrawnQuestions;
   };
   /**
@@ -1146,14 +1152,8 @@ export class TelegramConnector {
   private readonly approvalSulTurno = new Set<string>();
 
   /**
-   * What a just-finished turn's answer must account for: the process it
-   * showed and, when there is one, the real message it should extend.
-   *
-   * In a group `messageId` is that message (the tool trail is persistent) and
-   * the answer **edits** it, through the durable, crash-recoverable
-   * write-ahead every delivery goes through. In a DM it is `null`: the process
-   * only ever lived in the ephemeral draft, and the answer is a fresh rich
-   * send whose `details` block carries `process`. Written by
+   * The approval message a just-finished turn can reuse. An ordinary turn
+   * has no entry. Written by
    * `noteTranscriptHandoff` the moment a transcript closes for good (never for
    * a turn that is merely pausing — see the two call sites), read and deleted
    * the one time `deliverTo` builds a plan for that turn.
@@ -1165,12 +1165,13 @@ export class TelegramConnector {
    */
   private readonly transcriptHandoff = new Map<
     string,
-    { messageId: number | null; process: string[]; processHtml: string }
+    NonNullable<ReturnType<Transcript['handoff']>>
   >();
 
   private noteTranscriptHandoff(turnId: string, transcript: Transcript): void {
     const handoff = transcript.handoff();
     if (handoff) this.transcriptHandoff.set(turnId, handoff);
+    else this.transcriptHandoff.delete(turnId);
   }
 
   constructor(private readonly deps: ConnectorDeps) {
@@ -1818,19 +1819,16 @@ export class TelegramConnector {
     const handoff = this.transcriptHandoff.get(turnId);
     if (handoff) this.transcriptHandoff.delete(turnId);
 
-    const processHtml = handoff?.processHtml ?? '';
-    // A handoff with a real message (a group with no draft) edits that bubble;
-    // an ephemeral one (a DM) has nothing to edit, so this is a fresh send.
-    const editId =
-      handoff !== undefined && handoff.messageId !== null ? handoff.messageId : editMessageId;
+    // Only an approval message is handed off to the result writer.
+    const editId = handoff?.messageId ?? editMessageId;
     // Una chat privata è la stanza con la bozza: lì il turno ha una sola forma,
     // i blocchi, e il finale la ripete — mai il vecchio cambio forma.
     const isPrivate = isDirectChat(chatId);
 
     // The unsplit HTML both lanes start from: `splitHtml` is the legacy plan
     // (and the rich fallback); the rich lane carries `combined` whole.
-    const combined =
-      processHtml === '' ? toTelegramHtml(text) : `${processHtml}\n\n${toTelegramHtml(text)}`;
+    const answer = toTelegramHtml(text);
+    const combined = handoff ? `${answer}\n\n<b>Approvazioni</b>\n${handoff.approvalHtml}` : answer;
     const parts = splitHtml(combined);
 
     const legacy: TelegramDeliveryPlanPart[] = parts.map((html, i) => {
@@ -1847,15 +1845,10 @@ export class TelegramConnector {
       };
     });
 
-    // In a DM the turn's one message is always blocks — the same shape the
-    // draft showed (process in `details`, answer as native blocks), whether the
-    // turn had tools or not. Da quando una domanda di approvazione apre il
-    // messaggio del turno, anche la consegna in DM è un **edit** di quel
-    // messaggio: stessa forma a blocchi, processo ripiegato nel `details`, una
-    // sola bolla per il turno. Un gruppo tiene l'edit-merge qui sotto (i suoi
-    // passi sono una traccia silenziosa e la risposta estende quella bolla).
+    // In DMs, the answer uses the same blocks as the draft. A hosted approval
+    // adds its receipt beneath the answer and reuses the message ID.
     if (isPrivate) {
-      const turn = turnRichMessage({ process: handoff?.process ?? [], answer: text });
+      const turn = turnRichMessage(text, handoff?.approvals);
       const first = legacy[0];
       if (turn !== null && first !== undefined && richFitsHard(turn) === null) {
         return deliverTelegram(
@@ -2098,27 +2091,44 @@ export class TelegramConnector {
     where: ApprovalWhere,
   ): Promise<Awaited<ReturnType<Approver>>> {
     const chatId = where.replyTo?.['chatId'];
-    const record = this.deps.loop.turns.get(where.turnId);
-    if (
-      record?.ownerQuestionFinal &&
-      (typeof chatId !== 'number' || this.workChat(record) !== chatId)
-    ) {
+    const { approvalId, turnId } = where;
+    const approvals = this.deps.approvals;
+    if (typeof chatId !== 'number' || approvalId === undefined || approvals === undefined)
       return 'unavailable';
-    }
-    const transcript = typeof chatId === 'number' ? this.transcriptVivi.get(chatId) : undefined;
-    if (transcript !== undefined && where.approvalId !== undefined) {
-      const presa = await transcript.ask({ request, approvalId: where.approvalId });
+    const record = this.deps.loop.turns.get(turnId);
+    if (record?.ownerQuestionFinal && this.workChat(record) !== chatId) return 'unavailable';
+    const row = approvals.get(approvalId);
+    if (row === null || row.turnId !== turnId) return 'unavailable';
+    if (row.telegramQuestionPending) return 'asked';
+    const attempt = {
+      begin: () => approvals.beginTelegramQuestion(approvalId, turnId),
+      reject: () => approvals.rejectTelegramQuestion(approvalId),
+    };
+    const transcript = this.transcriptVivi.get(chatId);
+    if (transcript !== undefined) {
+      let began = false;
+      const presa = await transcript.ask({
+        request,
+        approvalId,
+        begin: () => (began = attempt.begin()),
+      });
+      // Telegram may already have posted the question. Wait for its callback
+      // on the existing approval row; do not post a second keyboard.
+      if (presa === 'uncertain') return 'asked';
       if (presa) {
-        this.approvalSulTurno.add(where.approvalId);
-        this.transcriptInSospeso.set(where.turnId, transcript);
+        this.approvalSulTurno.add(approvalId);
+        this.transcriptInSospeso.set(turnId, transcript);
         return 'asked';
       }
+      if (began) attempt.reject();
     }
     // La domanda esce come messaggio autonomo: la registrazione di dove si è
     // mostrata è il gancio, con la stessa protezione di quello della
     // trascrizione (una registrazione non rompe una domanda già partita).
-    return approvatoreTelegram(this.deps.api, (mostrata) =>
-      this.notaDomanda(mostrata.approvalId, mostrata.messageId),
+    return approvatoreTelegram(
+      this.deps.api,
+      (mostrata) => this.notaDomanda(mostrata.approvalId, mostrata.messageId),
+      attempt,
     )(request, where);
   }
 

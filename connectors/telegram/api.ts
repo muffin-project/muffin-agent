@@ -267,13 +267,43 @@ export class TelegramApi implements TelegramApiLike {
 
     let body:
       | { ok: true; result: T }
-      | { ok: false; description: string; parameters?: { retry_after?: number } };
+      | {
+          ok: false;
+          description: string;
+          error_code?: number;
+          parameters?: { retry_after?: number };
+        };
     try {
       body = (await response.json()) as typeof body;
     } catch {
       // Headers without a readable Bot API result do not prove whether a
       // mutating request landed. Status 0 is the connector's "unknown" class.
       throw new TelegramError(0, 'risposta Telegram non leggibile');
+    }
+
+    if (!retryAmbiguous) {
+      // JSON alone proves neither success nor rejection. Only a valid 4xx
+      // rejection may trigger a retry or let a caller fall back to another send.
+      if (body?.ok === true && response.ok && body.result != null) {
+        const result = body.result;
+        if (
+          (method !== 'sendMessage' && method !== 'sendRichMessage') ||
+          (typeof result === 'object' &&
+            'message_id' in result &&
+            typeof result.message_id === 'number' &&
+            Number.isInteger(result.message_id))
+        ) {
+          return result;
+        }
+      }
+      if (
+        body?.ok !== false ||
+        response.status < 400 ||
+        typeof body.description !== 'string' ||
+        (response.status === 429 && body.error_code !== 429)
+      ) {
+        throw new TelegramError(0, 'risposta Telegram non valida');
+      }
     }
 
     if (body.ok) return body.result;

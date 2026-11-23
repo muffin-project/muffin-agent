@@ -27,7 +27,9 @@ describe('TelegramApi — a fetch failure never carries the token forward', () =
     // The adversarial fake: an error message that already carries the token,
     // exactly what a chattier future `fetch` could hand back given that the
     // token rides in the URL this call just built.
-    const leaky = new TypeError(`fetch failed: could not reach https://api.telegram.org/bot${TOKEN}/getMe`);
+    const leaky = new TypeError(
+      `fetch failed: could not reach https://api.telegram.org/bot${TOKEN}/getMe`,
+    );
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {
@@ -52,7 +54,9 @@ describe('TelegramApi — a fetch failure never carries the token forward', () =
   }, 10_000);
 
   it('upload(): the same adversarial fetch failure, for the multipart path', async () => {
-    const leaky = new TypeError(`fetch failed: could not reach https://api.telegram.org/bot${TOKEN}/sendPhoto`);
+    const leaky = new TypeError(
+      `fetch failed: could not reach https://api.telegram.org/bot${TOKEN}/sendPhoto`,
+    );
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {
@@ -81,7 +85,9 @@ describe('TelegramApi — a fetch failure never carries the token forward', () =
    */
   it('call(): il codice della causa arriva fino all errore lanciato', async () => {
     const caduto = new TypeError('fetch failed');
-    (caduto as { cause?: unknown }).cause = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+    (caduto as { cause?: unknown }).cause = Object.assign(new Error('read ECONNRESET'), {
+      code: 'ECONNRESET',
+    });
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {
@@ -120,7 +126,9 @@ describe('TelegramApi — a fetch failure never carries the token forward', () =
         // The URL is exactly where the token belongs on the wire — this test
         // is not about hiding it from Telegram, only from our own error path.
         expect(String(input)).toBe(`https://api.telegram.org/bot${TOKEN}/getMe`);
-        return new Response(JSON.stringify({ ok: true, result: { id: 1, username: 'muffin_bot' } }));
+        return new Response(
+          JSON.stringify({ ok: true, result: { id: 1, username: 'muffin_bot' } }),
+        );
       }),
     );
     const api = new TelegramApi(TOKEN);
@@ -189,6 +197,101 @@ describe('TelegramApi — visible sends never retry an ambiguous transport failu
         [`https://api.telegram.org/bot${TOKEN}/getUpdates`, 42],
         [`https://api.telegram.org/bot${TOKEN}/getUpdates`, 42],
       ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { status: 200, body: null },
+    { status: 200, body: { ok: 'false', description: 'Bad Request' } },
+    { status: 200, body: { ok: false, description: 'Bad Request' } },
+    { status: 200, body: { ok: true } },
+    { status: 200, body: { ok: true, result: {} } },
+    { status: 429, body: { ok: false, description: 'Too Many Requests' } },
+  ])(
+    'treats a malformed send response ($status, $body) as unconfirmed',
+    async ({ status, body }) => {
+      vi.useFakeTimers();
+      try {
+        const fetch = vi.fn(async () => Response.json(body, { status }));
+        vi.stubGlobal('fetch', fetch);
+
+        const result = new TelegramApi(TOKEN)
+          .sendMessage(42, 'one visible message')
+          .catch((error: unknown) => error);
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(await result).toBeInstanceOf(TelegramError);
+        expect(await result).toMatchObject({ status: 0 });
+        expect(fetch).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('still retries a confirmed rate-limit rejection once, after retry_after', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetch = vi
+        .fn()
+        .mockResolvedValueOnce(
+          Response.json(
+            {
+              ok: false,
+              error_code: 429,
+              description: 'Too Many Requests',
+              parameters: { retry_after: 2 },
+            },
+            { status: 429 },
+          ),
+        )
+        .mockResolvedValueOnce(Response.json({ ok: true, result: { message_id: 42 } }));
+      vi.stubGlobal('fetch', fetch);
+
+      const checked = expect(
+        new TelegramApi(TOKEN).sendMessage(42, 'one visible message'),
+      ).resolves.toEqual({ message_id: 42 });
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(fetch).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
+      await checked;
+      expect(fetch).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    (api: TelegramApi) => api.sendMessage(42, 'answer', { singleAttempt: true }),
+    (api: TelegramApi) => api.sendRichMessage(42, { html: 'answer' }, { singleAttempt: true }),
+    (api: TelegramApi) => api.editMessageText(42, 1, 'answer', { singleAttempt: true }),
+    (api: TelegramApi) =>
+      api.editMessageRichText(42, 1, { html: 'answer' }, { singleAttempt: true }),
+  ])('does not replay a guarded write after a confirmed 429 (case %#)', async (write) => {
+    vi.useFakeTimers();
+    try {
+      const fetch = vi.fn(async () =>
+        Response.json(
+          {
+            ok: false,
+            error_code: 429,
+            description: 'Too Many Requests',
+            parameters: { retry_after: 1 },
+          },
+          { status: 429 },
+        ),
+      );
+      vi.stubGlobal('fetch', fetch);
+
+      const checked = expect(write(new TelegramApi(TOKEN))).rejects.toMatchObject({ status: 429 });
+      await vi.advanceTimersByTimeAsync(2_000);
+      await checked;
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(fetch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ redirect: 'error' }),
+      );
     } finally {
       vi.useRealTimers();
     }

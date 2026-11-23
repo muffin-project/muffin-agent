@@ -1,6 +1,12 @@
-import { TelegramError, type InlineButton, type TelegramApiLike } from './api.js';
+import { type InlineButton, type TelegramApiLike, TelegramError } from './api.js';
 import { splitHtml, toTelegramHtml } from './render.js';
-import { richFitsHard, richFromHtml, countRich, RICH_COMPAT_CHARS, type OutboundRich } from './rich.js';
+import {
+  countRich,
+  type OutboundRich,
+  RICH_COMPAT_CHARS,
+  richFitsHard,
+  richFromHtml,
+} from './rich.js';
 
 /**
  * La presentazione di un messaggio owner-visible **fuori dal turno**.
@@ -73,6 +79,10 @@ export type PresentTarget = {
   editMessageId?: number;
   /** Tastiera inline: sul messaggio ricco, o sull'ultimo pezzo legacy. */
   keyboard?: InlineButton[][];
+  /** Wrap only the send that carries the keyboard, before chunk errors are decorated. */
+  sendWithKeyboard?: (
+    send: () => Promise<{ message_id: number }>,
+  ) => Promise<{ message_id: number }>;
 };
 
 /**
@@ -91,11 +101,7 @@ function nonModificato(error: unknown): boolean {
  * risale: il messaggio potrebbe essere già arrivato, e ritentarlo qui sarebbe
  * il doppione che `effect()` esiste per evitare.
  *
- * `onSent` riceve l'id di ogni messaggio **nuovo** che parte davvero (mai gli
- * edit, che riusano un messaggio esistente): la domanda di approvazione di
- * ripiego lo usa per registrare dove si è mostrata (#784). Opzionale e fuori
- * dal tipo di ritorno — che resta la famiglia — così i producer che non hanno
- * niente da registrare non cambiano.
+ * `onSent` receives the ID of every confirmed new message, never an edit.
  */
 export async function present(
   api: TelegramApiLike,
@@ -105,16 +111,31 @@ export async function present(
 ): Promise<'rich' | 'legacy'> {
   if (p.fallback.length === 0) return 'legacy';
   const topic = target.threadId === undefined ? {} : { threadId: target.threadId };
+  const send = (
+    keyboard: InlineButton[][] | undefined,
+    write: () => Promise<{ message_id: number }>,
+  ) =>
+    keyboard !== undefined && target.sendWithKeyboard !== undefined
+      ? target.sendWithKeyboard(write)
+      : write();
   if (p.rich !== null) {
     try {
       if (target.editMessageId !== undefined) {
-        await api.editMessageRichText(target.chatId, target.editMessageId, p.rich, target.keyboard === undefined ? {} : { keyboard: target.keyboard });
+        await api.editMessageRichText(
+          target.chatId,
+          target.editMessageId,
+          p.rich,
+          target.keyboard === undefined ? {} : { keyboard: target.keyboard },
+        );
       } else {
-        const mandato = await api.sendRichMessage(target.chatId, p.rich, {
-          ...topic,
-          ...(target.replyTo === undefined ? {} : { replyTo: target.replyTo }),
-          ...(target.keyboard === undefined ? {} : { keyboard: target.keyboard }),
-        });
+        const rich = p.rich;
+        const mandato = await send(target.keyboard, () =>
+          api.sendRichMessage(target.chatId, rich, {
+            ...topic,
+            ...(target.replyTo === undefined ? {} : { replyTo: target.replyTo }),
+            ...(target.keyboard === undefined ? {} : { keyboard: target.keyboard }),
+          }),
+        );
         onSent?.(mandato.message_id);
       }
       return 'rich';
@@ -132,16 +153,27 @@ export async function present(
     const ultimo = i === pezzi.length - 1;
     // La tastiera sta sul messaggio che la porta: quello editato, o l'ultimo
     // pezzo di una send. `keyboard: []` è la rimozione esplicita.
-    const keyboard = target.editMessageId !== undefined ? (primo ? target.keyboard : undefined) : ultimo ? target.keyboard : undefined;
+    const keyboard =
+      target.editMessageId !== undefined
+        ? primo
+          ? target.keyboard
+          : undefined
+        : ultimo
+          ? target.keyboard
+          : undefined;
     const options = {
-      ...(primo && target.editMessageId === undefined && target.replyTo !== undefined ? { replyTo: target.replyTo } : {}),
+      ...(primo && target.editMessageId === undefined && target.replyTo !== undefined
+        ? { replyTo: target.replyTo }
+        : {}),
       ...(keyboard === undefined ? {} : { keyboard }),
     };
     try {
       if (primo && target.editMessageId !== undefined) {
         await api.editMessageText(target.chatId, target.editMessageId, html, options);
       } else {
-        const mandato = await api.sendMessage(target.chatId, html, { ...topic, ...options });
+        const mandato = await send(keyboard, () =>
+          api.sendMessage(target.chatId, html, { ...topic, ...options }),
+        );
         onSent?.(mandato.message_id);
       }
     } catch (error) {

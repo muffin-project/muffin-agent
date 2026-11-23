@@ -1,14 +1,22 @@
-import DatabaseCtor from 'better-sqlite3';
-import { closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  ftruncateSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, it } from 'vitest';
-import { paths } from '../../../core/config/config.js';
-import { seal } from '../../../core/rot/verify.js';
 import { buildRuntime } from '../../../agent/runtime.js';
 import { readDocument } from '../../../agent/tools/document.js';
 import { vaultPathPer } from '../../../agent/tools/vault-save.js';
-import { shellNonDisponibileQui } from '../sandbox-host.js';
+import { paths } from '../../../core/config/config.js';
+import { seal } from '../../../core/rot/verify.js';
 import { install, until } from '../harness.js';
+import { shellNonDisponibileQui } from '../sandbox-host.js';
 import { scenario } from '../scenario.js';
 import { startFakeTelegram } from '../telegram.js';
 
@@ -42,12 +50,17 @@ describe('acceptance · F1 · gate di gruppo: nessuna menzione, nessun turno', (
       const tg = await startFakeTelegram();
       const GROUP = -100_701;
       const SOMEONE = 7001;
-      const inst = await install({ main: [{ text: RISPOSTA_MENZIONE }], env: { MUFFIN_GATEWAY_TICK_MS: '200' } });
+      const inst = await install({
+        main: [{ text: RISPOSTA_MENZIONE }],
+        env: { MUFFIN_GATEWAY_TICK_MS: '200' },
+      });
       try {
         const tok = await inst.muffin(['secret', 'set', 'telegram_token'], '123456:fake-f1-gate');
-        if (tok.code !== 0) throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
+        if (tok.code !== 0)
+          throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
         const enable = await inst.muffin(['surface', 'enable', 'telegram', '--api-base', tg.url]);
-        if (enable.code !== 0) throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
+        if (enable.code !== 0)
+          throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
 
         const gw = await inst.gateway();
         await gw.waitFor(/muffin gateway/, 20_000);
@@ -75,10 +88,14 @@ describe('acceptance · F1 · gate di gruppo: nessuna menzione, nessun turno', (
             // atteso: nessuna chiamata al provider entro il tetto.
           }
           if (apertoSenzaMenzione) {
-            throw new Error('un messaggio senza menzione ha aperto un turno: il provider è stato chiamato');
+            throw new Error(
+              'un messaggio senza menzione ha aperto un turno: il provider è stato chiamato',
+            );
           }
           if (tg.messages().length > 0) {
-            throw new Error(`un messaggio senza menzione ha prodotto una risposta: ${JSON.stringify(tg.messages())}`);
+            throw new Error(
+              `un messaggio senza menzione ha prodotto una risposta: ${JSON.stringify(tg.messages())}`,
+            );
           }
 
           tg.deliver({
@@ -96,12 +113,18 @@ describe('acceptance · F1 · gate di gruppo: nessuna menzione, nessun turno', (
         }
 
         if (inst.provider.main().length !== 1) {
-          throw new Error(`atteso esattamente una chiamata al provider, viste ${inst.provider.main().length}`);
+          throw new Error(
+            `atteso esattamente una chiamata al provider, viste ${inst.provider.main().length}`,
+          );
         }
         if (tg.messages().length !== 1) {
-          throw new Error(`atteso esattamente un messaggio inviato nel gruppo, visti ${tg.messages().length}`);
+          throw new Error(
+            `atteso esattamente un messaggio inviato nel gruppo, visti ${tg.messages().length}`,
+          );
         }
-        const turni = inst.db((db) => db.prepare(`SELECT COUNT(*) AS n FROM turns`).get() as { n: number });
+        const turni = inst.db(
+          (db) => db.prepare(`SELECT COUNT(*) AS n FROM turns`).get() as { n: number },
+        );
         if (turni.n !== 1) {
           throw new Error(`atteso esattamente un turno nel database, visti ${turni.n}`);
         }
@@ -139,9 +162,11 @@ describe('acceptance · F3 · topic di forum: due sotto-conversazioni, non un in
       });
       try {
         const tok = await inst.muffin(['secret', 'set', 'telegram_token'], '123456:fake-f3-topic');
-        if (tok.code !== 0) throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
+        if (tok.code !== 0)
+          throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
         const enable = await inst.muffin(['surface', 'enable', 'telegram', '--api-base', tg.url]);
-        if (enable.code !== 0) throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
+        if (enable.code !== 0)
+          throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
 
         const gw = await inst.gateway();
         await gw.waitFor(/muffin gateway/, 20_000);
@@ -180,7 +205,8 @@ describe('acceptance · F3 · topic di forum: due sotto-conversazioni, non un in
         const fileBug = join(inst.home, 'sessions', `telegram:${GROUP}#${TOPIC_BUG}.jsonl`);
         const fileSpesa = join(inst.home, 'sessions', `telegram:${GROUP}#${TOPIC_SPESA}.jsonl`);
         if (!existsSync(fileBug)) throw new Error(`nessuna sessione per il topic bug: ${fileBug}`);
-        if (!existsSync(fileSpesa)) throw new Error(`nessuna sessione per il topic spesa: ${fileSpesa}`);
+        if (!existsSync(fileSpesa))
+          throw new Error(`nessuna sessione per il topic spesa: ${fileSpesa}`);
         if (readFileSync(fileBug, 'utf8').includes(RISPOSTA_SPESA)) {
           throw new Error('la risposta del topic spesa è finita nella sessione del topic bug');
         }
@@ -192,13 +218,28 @@ describe('acceptance · F3 · topic di forum: due sotto-conversazioni, non un in
         // `reply_parameters` mette nel topic solo il messaggio citato, quindi
         // senza `message_thread_id` esplicito su ogni parte la risposta
         // finisce in *General* (topic-di-forum.test.ts la stessa ragione).
-        const sentBug = tg.sent().find((c) => c.method === 'sendMessage' && String(c.payload['text'] ?? '').includes(RISPOSTA_BUG));
-        const sentSpesa = tg.sent().find((c) => c.method === 'sendMessage' && String(c.payload['text'] ?? '').includes(RISPOSTA_SPESA));
+        const sentBug = tg
+          .sent()
+          .find(
+            (c) =>
+              c.method === 'sendMessage' && String(c.payload['text'] ?? '').includes(RISPOSTA_BUG),
+          );
+        const sentSpesa = tg
+          .sent()
+          .find(
+            (c) =>
+              c.method === 'sendMessage' &&
+              String(c.payload['text'] ?? '').includes(RISPOSTA_SPESA),
+          );
         if (sentBug?.payload['message_thread_id'] !== TOPIC_BUG) {
-          throw new Error(`la risposta del bug non porta message_thread_id=${TOPIC_BUG}: ${JSON.stringify(sentBug)}`);
+          throw new Error(
+            `la risposta del bug non porta message_thread_id=${TOPIC_BUG}: ${JSON.stringify(sentBug)}`,
+          );
         }
         if (sentSpesa?.payload['message_thread_id'] !== TOPIC_SPESA) {
-          throw new Error(`la risposta della spesa non porta message_thread_id=${TOPIC_SPESA}: ${JSON.stringify(sentSpesa)}`);
+          throw new Error(
+            `la risposta della spesa non porta message_thread_id=${TOPIC_SPESA}: ${JSON.stringify(sentSpesa)}`,
+          );
         }
       } finally {
         await inst.cleanup();
@@ -230,137 +271,148 @@ describe('acceptance · #744 · un turno con tool in un topic resta nel topic su
    * non può raggiungerla. La metà allegato è provata a livello di superficie
    * (`topic-di-forum.test.ts`) e di multipart (`send.test.ts`).
    */
-  it(
-    '#744 topic: typing, traccia del tool e risposta escono nel topic, mai in *General*',
-    async () => {
-      const tg = await startFakeTelegram();
-      const GROUP = -100_744;
-      const MEMBER = 7441;
-      const TOPIC = 744;
-      const RISPOSTA = 'fatto: ho cercato e non c era niente di nuovo';
-      const inst = await install({
-        main: [
-          { tool: { name: 'memory_search', args: { query: 'appunti di ieri' } } },
-          { text: RISPOSTA },
-        ],
-        env: { MUFFIN_GATEWAY_TICK_MS: '200' },
-      });
+  it('#744 topic: typing and one answer stay in the original topic, with no durable progress', async () => {
+    const tg = await startFakeTelegram();
+    const GROUP = -100_744;
+    const MEMBER = 7441;
+    const TOPIC = 744;
+    const RISPOSTA = 'fatto: ho cercato e non c era niente di nuovo';
+    const inst = await install({
+      main: [
+        { tool: { name: 'memory_search', args: { query: 'appunti di ieri' } } },
+        { text: RISPOSTA },
+      ],
+      env: { MUFFIN_GATEWAY_TICK_MS: '200' },
+    });
+    try {
+      const tok = await inst.muffin(['secret', 'set', 'telegram_token'], '123456:fake-744-address');
+      if (tok.code !== 0)
+        throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
+      const enable = await inst.muffin(['surface', 'enable', 'telegram', '--api-base', tg.url]);
+      if (enable.code !== 0)
+        throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
+
+      const gw = await inst.gateway();
+      await gw.waitFor(/muffin gateway/, 20_000);
       try {
-        const tok = await inst.muffin(['secret', 'set', 'telegram_token'], '123456:fake-744-address');
-        if (tok.code !== 0) throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
-        const enable = await inst.muffin(['surface', 'enable', 'telegram', '--api-base', tg.url]);
-        if (enable.code !== 0) throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
-
-        const gw = await inst.gateway();
-        await gw.waitFor(/muffin gateway/, 20_000);
-        try {
-          tg.deliver({
-            message: {
-              message_id: 74401,
-              date: Math.floor(Date.now() / 1000),
-              chat: { id: GROUP, type: 'supergroup', title: 'forum 744', is_forum: true },
-              from: { id: MEMBER, is_bot: false, first_name: 'Membro' },
-              message_thread_id: TOPIC,
-              is_topic_message: true,
-              text: '@muffin_test_bot cerca i miei appunti di ieri',
-            },
-          });
-          await until(
-            () =>
-              tg
-                .sent()
-                .some(
-                  (c) =>
-                    (c.method === 'sendMessage' || c.method === 'editMessageText' || c.method === 'editMessageRichText') &&
-                    String(c.payload['text'] ?? '').includes(RISPOSTA),
-                ),
-            30_000,
-          );
-        } finally {
-          await gw.stop();
-        }
-
-        // (1) L'identità durevole del turno nomina il topic, non solo il
-        // gruppo: è la riga che `send_file` e le riprese leggono.
-        const turnRow = inst.db(
-          (db) =>
-            db.prepare(`SELECT session_id, reply_to FROM turns ORDER BY created_at DESC LIMIT 1`).get() as
-              | { session_id: string; reply_to: string }
-              | undefined,
+        tg.deliver({
+          message: {
+            message_id: 74401,
+            date: Math.floor(Date.now() / 1000),
+            chat: { id: GROUP, type: 'supergroup', title: 'forum 744', is_forum: true },
+            from: { id: MEMBER, is_bot: false, first_name: 'Membro' },
+            message_thread_id: TOPIC,
+            is_topic_message: true,
+            text: '@muffin_test_bot cerca i miei appunti di ieri',
+          },
+        });
+        await until(
+          () =>
+            tg
+              .sent()
+              .some(
+                (c) =>
+                  (c.method === 'sendMessage' ||
+                    c.method === 'editMessageText' ||
+                    c.method === 'editMessageRichText') &&
+                  String(c.payload['text'] ?? '').includes(RISPOSTA),
+              ),
+          30_000,
         );
-        if (!turnRow) throw new Error('nessun turno dopo il messaggio nel topic');
-        if (turnRow.session_id !== `telegram:${GROUP}#${TOPIC}`) {
-          throw new Error(`session_id atteso "telegram:${GROUP}#${TOPIC}", trovato ${JSON.stringify(turnRow.session_id)}`);
-        }
-        const replyTo = JSON.parse(turnRow.reply_to) as Record<string, unknown>;
-        if (replyTo['threadId'] !== TOPIC) {
-          throw new Error(`replyTo senza threadId=${TOPIC}: ${turnRow.reply_to}`);
-        }
-        if (replyTo['channel'] !== `telegram:${GROUP}#${TOPIC}`) {
-          throw new Error(`replyTo.channel non nomina il topic: ${turnRow.reply_to}`);
-        }
+      } finally {
+        await gw.stop();
+      }
 
-        // (2) Ogni pezzo indirizzato al gruppo porta il topic. Il negativo —
-        // «nessun pezzo in *General*» — è la metà che il difetto produceva.
-        //
-        // Create e typing portano `message_thread_id`; gli **edit** no, e non
-        // per omissione: `editMessageText` non ha quel parametro nel Bot API —
-        // indirizza il messaggio per id, e quel messaggio è già nel topic. La
-        // prova che un edit resta nel topic è che tocca un id **nato** lì.
-        const alGruppo = tg.sent().filter((c) => Number(c.payload['chat_id'] ?? 0) === GROUP);
-        if (alGruppo.length === 0) throw new Error('nessun pezzo è uscito verso il gruppo: lo scenario non ha provato niente');
-        const natiNelTopic = new Set<number>();
-        for (const c of alGruppo) {
-          const creazione =
-            c.method === 'sendMessage' ||
-            c.method === 'sendRichMessage' ||
-            c.method === 'sendDocument' ||
-            c.method === 'sendMessageDraft';
-          if (creazione || c.method === 'sendChatAction') {
-            if (Number(c.payload['message_thread_id']) !== TOPIC) {
-              throw new Error(
-                `un pezzo del turno è uscito in *General* (message_thread_id assente o sbagliato): ${JSON.stringify(c)}`,
-              );
-            }
-            if (creazione && c.messageId !== undefined) natiNelTopic.add(c.messageId);
-          }
-        }
-        for (const c of alGruppo) {
-          if (!c.method.startsWith('edit')) continue;
-          const id = Number(c.payload['message_id'] ?? 0);
-          if (!natiNelTopic.has(id)) {
+      // (1) L'identità durevole del turno nomina il topic, non solo il
+      // gruppo: è la riga che `send_file` e le riprese leggono.
+      const turnRow = inst.db(
+        (db) =>
+          db
+            .prepare(`SELECT session_id, reply_to FROM turns ORDER BY created_at DESC LIMIT 1`)
+            .get() as { session_id: string; reply_to: string } | undefined,
+      );
+      if (!turnRow) throw new Error('nessun turno dopo il messaggio nel topic');
+      if (turnRow.session_id !== `telegram:${GROUP}#${TOPIC}`) {
+        throw new Error(
+          `session_id atteso "telegram:${GROUP}#${TOPIC}", trovato ${JSON.stringify(turnRow.session_id)}`,
+        );
+      }
+      const replyTo = JSON.parse(turnRow.reply_to) as Record<string, unknown>;
+      if (replyTo['threadId'] !== TOPIC) {
+        throw new Error(`replyTo senza threadId=${TOPIC}: ${turnRow.reply_to}`);
+      }
+      if (replyTo['channel'] !== `telegram:${GROUP}#${TOPIC}`) {
+        throw new Error(`replyTo.channel non nomina il topic: ${turnRow.reply_to}`);
+      }
+
+      // (2) Ogni pezzo indirizzato al gruppo porta il topic. Il negativo —
+      // «nessun pezzo in *General*» — è la metà che il difetto produceva.
+      //
+      // Create e typing portano `message_thread_id`; gli **edit** no, e non
+      // per omissione: `editMessageText` non ha quel parametro nel Bot API —
+      // indirizza il messaggio per id, e quel messaggio è già nel topic. La
+      // prova che un edit resta nel topic è che tocca un id **nato** lì.
+      const alGruppo = tg.sent().filter((c) => Number(c.payload['chat_id'] ?? 0) === GROUP);
+      if (alGruppo.length === 0)
+        throw new Error('nessun pezzo è uscito verso il gruppo: lo scenario non ha provato niente');
+      const natiNelTopic = new Set<number>();
+      for (const c of alGruppo) {
+        const creazione =
+          c.method === 'sendMessage' ||
+          c.method === 'sendRichMessage' ||
+          c.method === 'sendDocument' ||
+          c.method === 'sendMessageDraft';
+        if (creazione || c.method === 'sendChatAction') {
+          if (Number(c.payload['message_thread_id']) !== TOPIC) {
             throw new Error(
-              `un edit tocca un messaggio che non è nato nel topic (id ${id}): ${JSON.stringify(c)} — i nati: ${JSON.stringify([...natiNelTopic])}`,
+              `un pezzo del turno è uscito in *General* (message_thread_id assente o sbagliato): ${JSON.stringify(c)}`,
             );
           }
+          if (creazione && c.messageId !== undefined) natiNelTopic.add(c.messageId);
         }
-
-        // (3) Le tre categorie ci sono davvero — un «ogni pezzo» senza pezzi
-        // sarebbe verde per costruzione.
-        const azioni = alGruppo.filter((c) => c.method === 'sendChatAction');
-        if (!azioni.some((c) => Number(c.payload['message_thread_id']) === TOPIC)) {
-          throw new Error(`il «sta scrivendo…» non è mai passato dal topic: ${JSON.stringify(tg.sent(), null, 2)}`);
-        }
-        const traccia = alGruppo.filter((c) => String(c.payload['text'] ?? '').includes('cerco in memoria'));
-        if (traccia.length === 0) {
-          throw new Error(`la traccia del tool non è mai comparsa: ${JSON.stringify(alGruppo, null, 2)}`);
-        }
-        const risposta = alGruppo.filter((c) => String(c.payload['text'] ?? '').includes(RISPOSTA));
-        if (risposta.length === 0) {
-          throw new Error(`la risposta finale non è mai comparsa nel gruppo: ${JSON.stringify(alGruppo, null, 2)}`);
-        }
-        // E nessuna anteprima effimera: in un gruppo `assertNegotiable` la
-        // rifiuta, quindi una bozza qui sarebbe un secondo meccanismo vivo.
-        if (tg.sent().some((c) => c.method === 'sendMessageDraft')) {
-          throw new Error(`una bozza effimera è comparsa in un gruppo: ${JSON.stringify(tg.sent(), null, 2)}`);
-        }
-      } finally {
-        await inst.cleanup();
-        await tg.close();
       }
-    },
-    240_000,
-  );
+      for (const c of alGruppo) {
+        if (!c.method.startsWith('edit')) continue;
+        const id = Number(c.payload['message_id'] ?? 0);
+        if (!natiNelTopic.has(id)) {
+          throw new Error(
+            `un edit tocca un messaggio che non è nato nel topic (id ${id}): ${JSON.stringify(c)} — i nati: ${JSON.stringify([...natiNelTopic])}`,
+          );
+        }
+      }
+
+      // (3) Typing is live presence; the only durable message is the result.
+      const azioni = alGruppo.filter((c) => c.method === 'sendChatAction');
+      if (!azioni.some((c) => Number(c.payload['message_thread_id']) === TOPIC)) {
+        throw new Error(
+          `il «sta scrivendo…» non è mai passato dal topic: ${JSON.stringify(tg.sent(), null, 2)}`,
+        );
+      }
+      const messages = alGruppo.filter(
+        (c) => c.method === 'sendMessage' || c.method === 'sendRichMessage',
+      );
+      if (
+        messages.length !== 1 ||
+        !JSON.stringify(messages[0]?.payload).includes(RISPOSTA) ||
+        /Processo|cerco in memoria/.test(JSON.stringify(messages)) ||
+        alGruppo.some((c) => c.method.startsWith('edit'))
+      ) {
+        throw new Error(
+          `expected one answer and no progress messages in the topic: ${JSON.stringify(alGruppo)}`,
+        );
+      }
+      // E nessuna anteprima effimera: in un gruppo `assertNegotiable` la
+      // rifiuta, quindi una bozza qui sarebbe un secondo meccanismo vivo.
+      if (tg.sent().some((c) => c.method === 'sendMessageDraft')) {
+        throw new Error(
+          `una bozza effimera è comparsa in un gruppo: ${JSON.stringify(tg.sent(), null, 2)}`,
+        );
+      }
+    } finally {
+      await inst.cleanup();
+      await tg.close();
+    }
+  }, 240_000);
 });
 
 describe('acceptance · #744 · un allegato indirizzato a un topic esce nel topic', () => {
@@ -381,126 +433,145 @@ describe('acceptance · #744 · un allegato indirizzato a un topic esce nel topi
    * `deliverFile`/`sendDocument`/`deliver` senza il thread → il pezzo esce
    * con `message_thread_id` assente, e i tre assert sotto lo vedono.
    */
-  it(
-    '#744 job: il documento e la notifica oversize escono nel topic, e la consegna del testo pure',
-    async () => {
-      const tg = await startFakeTelegram();
-      const GROUP = -100_745;
-      const TOPIC = 745;
-      const FILE = 'report.txt';
-      const CONTENUTO = 'resoconto acceptance #744 (job) — '.repeat(20);
-      const RISPOSTA = 'fatto: report mandato, il grande non ci sta';
-      const inst = await install({
-        main: [
-          { tool: { name: 'send_file', args: { path: FILE, caption: 'ecco il report' } } },
-          { tool: { name: 'send_file', args: { path: 'big.bin' } } },
-          { text: RISPOSTA },
-        ],
-        env: { MUFFIN_GATEWAY_TICK_MS: '200' },
-      });
+  it('#744 job: il documento e la notifica oversize escono nel topic, e la consegna del testo pure', async () => {
+    const tg = await startFakeTelegram();
+    const GROUP = -100_745;
+    const TOPIC = 745;
+    const FILE = 'report.txt';
+    const CONTENUTO = 'resoconto acceptance #744 (job) — '.repeat(20);
+    const RISPOSTA = 'fatto: report mandato, il grande non ci sta';
+    const inst = await install({
+      main: [
+        { tool: { name: 'send_file', args: { path: FILE, caption: 'ecco il report' } } },
+        { tool: { name: 'send_file', args: { path: 'big.bin' } } },
+        { text: RISPOSTA },
+      ],
+      env: { MUFFIN_GATEWAY_TICK_MS: '200' },
+    });
+    try {
+      const tok = await inst.muffin(['secret', 'set', 'telegram_token'], '123456:fake-744-job');
+      if (tok.code !== 0)
+        throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
+      const enable = await inst.muffin(['surface', 'enable', 'telegram', '--api-base', tg.url]);
+      if (enable.code !== 0)
+        throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
+
+      // I due file: uno vero e uno oltre i 50MB di `sendDocument` — la
+      // seconda uscita di `deliverFile` è la notifica, e anche quella deve
+      // restare nel topic. `ftruncate` evita di allocare 50MB per un numero.
+      const vaultRoot = paths(inst.home).vault;
+      mkdirSync(vaultRoot, { recursive: true });
+      writeFileSync(join(vaultRoot, FILE), CONTENUTO, 'utf8');
+      const oversize = join(vaultRoot, 'big.bin');
+      const fd = openSync(oversize, 'w');
+      ftruncateSync(fd, 50 * 1024 * 1024 + 1);
+      closeSync(fd);
+
+      const added = await inst.muffin([
+        'jobs',
+        'add',
+        '--cron',
+        '* * * * *',
+        '--channel',
+        `telegram:${GROUP}#${TOPIC}`,
+        'mandami il report come allegato',
+      ]);
+      if (added.code !== 0) throw new Error(`jobs add: exit ${added.code}\n${added.err}`);
+      const jobId = inst.db(
+        (db) => (db.prepare(`SELECT id FROM jobs`).get() as { id: string } | undefined)?.id,
+      );
+      if (!jobId) throw new Error('nessuna riga jobs dopo `jobs add`');
+      // Il prossimo scatto del cron è al minuto: retrodatato prima del boot,
+      // così il primo tick lo vede dovuto. `inst.db` è in sola lettura.
+      const db = new DatabaseCtor(join(inst.home, 'muffin.db'));
       try {
-        const tok = await inst.muffin(['secret', 'set', 'telegram_token'], '123456:fake-744-job');
-        if (tok.code !== 0) throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
-        const enable = await inst.muffin(['surface', 'enable', 'telegram', '--api-base', tg.url]);
-        if (enable.code !== 0) throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
-
-        // I due file: uno vero e uno oltre i 50MB di `sendDocument` — la
-        // seconda uscita di `deliverFile` è la notifica, e anche quella deve
-        // restare nel topic. `ftruncate` evita di allocare 50MB per un numero.
-        const vaultRoot = paths(inst.home).vault;
-        mkdirSync(vaultRoot, { recursive: true });
-        writeFileSync(join(vaultRoot, FILE), CONTENUTO, 'utf8');
-        const oversize = join(vaultRoot, 'big.bin');
-        const fd = openSync(oversize, 'w');
-        ftruncateSync(fd, 50 * 1024 * 1024 + 1);
-        closeSync(fd);
-
-        const added = await inst.muffin([
-          'jobs', 'add',
-          '--cron', '* * * * *',
-          '--channel', `telegram:${GROUP}#${TOPIC}`,
-          'mandami il report come allegato',
-        ]);
-        if (added.code !== 0) throw new Error(`jobs add: exit ${added.code}\n${added.err}`);
-        const jobId = inst.db((db) => (db.prepare(`SELECT id FROM jobs`).get() as { id: string } | undefined)?.id);
-        if (!jobId) throw new Error('nessuna riga jobs dopo `jobs add`');
-        // Il prossimo scatto del cron è al minuto: retrodatato prima del boot,
-        // così il primo tick lo vede dovuto. `inst.db` è in sola lettura.
-        const db = new DatabaseCtor(join(inst.home, 'muffin.db'));
-        try {
-          db.prepare(`UPDATE jobs SET next_fire_at = ? WHERE id = ?`).run(new Date(Date.now() - 60_000).toISOString(), jobId);
-        } finally {
-          db.close();
-        }
-
-        const gw = await inst.gateway();
-        await gw.waitFor(/muffin gateway/, 20_000);
-        try {
-          await until(
-            () =>
-              tg.sent().some(
-                (c) => c.method === 'sendMessage' && String(c.payload['text'] ?? '').includes(RISPOSTA),
-              ),
-            30_000,
-          );
-        } finally {
-          await gw.stop();
-        }
-
-        // (1) Il documento vero, nel topic.
-        const docs = tg.documents();
-        if (docs.length !== 1) {
-          throw new Error(`atteso esattamente 1 sendDocument, trovati ${docs.length}: ${JSON.stringify(tg.sent(), null, 2)}`);
-        }
-        const docCall = tg.sent().find((c) => c.method === 'sendDocument');
-        if (Number(docCall?.payload['chat_id'] ?? 0) !== GROUP) {
-          throw new Error(`sendDocument sulla stanza sbagliata: ${JSON.stringify(docCall)}`);
-        }
-        if (Number(docCall?.payload['message_thread_id']) !== TOPIC) {
-          throw new Error(`sendDocument senza message_thread_id=${TOPIC}: ${JSON.stringify(docCall)}`);
-        }
-        if (docs[0]!.filename !== FILE || docs[0]!.bytes !== Buffer.byteLength(CONTENUTO)) {
-          throw new Error(`documento sbagliato: ${JSON.stringify(docs[0])}`);
-        }
-
-        // (2) La notifica oversize, anche lei nel topic (ed è un `sendMessage`,
-        // non un upload: `big.bin` non deve comparire fra i documenti).
-        const notifica = tg
-          .sent()
-          .find((c) => c.method === 'sendMessage' && String(c.payload['text'] ?? '').includes('big.bin'));
-        if (!notifica) {
-          throw new Error(`nessuna notifica per big.bin: ${JSON.stringify(tg.sent(), null, 2)}`);
-        }
-        if (Number(notifica.payload['message_thread_id']) !== TOPIC) {
-          throw new Error(`la notifica oversize non nomina il topic: ${JSON.stringify(notifica)}`);
-        }
-        if (!String(notifica.payload['text'] ?? '').includes('è pronto ma pesa')) {
-          throw new Error(`la notifica non dice dove sta il file: ${JSON.stringify(notifica.payload['text'])}`);
-        }
-
-        // (3) La consegna del testo del job (`deliver`, non il turno vivo) usa
-        // lo stesso `job.channel`, quindi anche lei porta il topic.
-        const consegna = tg
-          .sent()
-          .find((c) => c.method === 'sendMessage' && String(c.payload['text'] ?? '').includes(RISPOSTA));
-        if (Number(consegna?.payload['message_thread_id']) !== TOPIC) {
-          throw new Error(`la consegna del job non nomina il topic: ${JSON.stringify(consegna)}`);
-        }
-
-        // E niente è uscito verso il gruppo fuori dal topic.
-        for (const c of tg.sent()) {
-          if (Number(c.payload['chat_id'] ?? 0) !== GROUP) continue;
-          if (Number(c.payload['message_thread_id']) !== TOPIC) {
-            throw new Error(`un pezzo del job è uscito in *General*: ${JSON.stringify(c)}`);
-          }
-        }
+        db.prepare(`UPDATE jobs SET next_fire_at = ? WHERE id = ?`).run(
+          new Date(Date.now() - 60_000).toISOString(),
+          jobId,
+        );
       } finally {
-        await inst.cleanup();
-        await tg.close();
+        db.close();
       }
-    },
-    240_000,
-  );
+
+      const gw = await inst.gateway();
+      await gw.waitFor(/muffin gateway/, 20_000);
+      try {
+        await until(
+          () =>
+            tg
+              .sent()
+              .some(
+                (c) =>
+                  c.method === 'sendMessage' && String(c.payload['text'] ?? '').includes(RISPOSTA),
+              ),
+          30_000,
+        );
+      } finally {
+        await gw.stop();
+      }
+
+      // (1) Il documento vero, nel topic.
+      const docs = tg.documents();
+      if (docs.length !== 1) {
+        throw new Error(
+          `atteso esattamente 1 sendDocument, trovati ${docs.length}: ${JSON.stringify(tg.sent(), null, 2)}`,
+        );
+      }
+      const docCall = tg.sent().find((c) => c.method === 'sendDocument');
+      if (Number(docCall?.payload['chat_id'] ?? 0) !== GROUP) {
+        throw new Error(`sendDocument sulla stanza sbagliata: ${JSON.stringify(docCall)}`);
+      }
+      if (Number(docCall?.payload['message_thread_id']) !== TOPIC) {
+        throw new Error(
+          `sendDocument senza message_thread_id=${TOPIC}: ${JSON.stringify(docCall)}`,
+        );
+      }
+      if (docs[0]!.filename !== FILE || docs[0]!.bytes !== Buffer.byteLength(CONTENUTO)) {
+        throw new Error(`documento sbagliato: ${JSON.stringify(docs[0])}`);
+      }
+
+      // (2) La notifica oversize, anche lei nel topic (ed è un `sendMessage`,
+      // non un upload: `big.bin` non deve comparire fra i documenti).
+      const notifica = tg
+        .sent()
+        .find(
+          (c) => c.method === 'sendMessage' && String(c.payload['text'] ?? '').includes('big.bin'),
+        );
+      if (!notifica) {
+        throw new Error(`nessuna notifica per big.bin: ${JSON.stringify(tg.sent(), null, 2)}`);
+      }
+      if (Number(notifica.payload['message_thread_id']) !== TOPIC) {
+        throw new Error(`la notifica oversize non nomina il topic: ${JSON.stringify(notifica)}`);
+      }
+      if (!String(notifica.payload['text'] ?? '').includes('è pronto ma pesa')) {
+        throw new Error(
+          `la notifica non dice dove sta il file: ${JSON.stringify(notifica.payload['text'])}`,
+        );
+      }
+
+      // (3) La consegna del testo del job (`deliver`, non il turno vivo) usa
+      // lo stesso `job.channel`, quindi anche lei porta il topic.
+      const consegna = tg
+        .sent()
+        .find(
+          (c) => c.method === 'sendMessage' && String(c.payload['text'] ?? '').includes(RISPOSTA),
+        );
+      if (Number(consegna?.payload['message_thread_id']) !== TOPIC) {
+        throw new Error(`la consegna del job non nomina il topic: ${JSON.stringify(consegna)}`);
+      }
+
+      // E niente è uscito verso il gruppo fuori dal topic.
+      for (const c of tg.sent()) {
+        if (Number(c.payload['chat_id'] ?? 0) !== GROUP) continue;
+        if (Number(c.payload['message_thread_id']) !== TOPIC) {
+          throw new Error(`un pezzo del job è uscito in *General*: ${JSON.stringify(c)}`);
+        }
+      }
+    } finally {
+      await inst.cleanup();
+      await tg.close();
+    }
+  }, 240_000);
 });
 
 describe('acceptance · F4 · uscita dai gruppi dove il proprio umano non c è', () => {
@@ -527,7 +598,8 @@ describe('acceptance · F4 · uscita dai gruppi dove il proprio umano non c è',
       });
       try {
         const tok = await inst.muffin(['secret', 'set', 'telegram_token'], '123456:fake-f4-uscita');
-        if (tok.code !== 0) throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
+        if (tok.code !== 0)
+          throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
         // `--owner` invece della danza di pairing sul filo: questo scenario
         // non prova il pairing (altri lo fanno già), prova solo cosa succede
         // una volta che l'owner esiste.
@@ -540,7 +612,8 @@ describe('acceptance · F4 · uscita dai gruppi dove il proprio umano non c è',
           '--owner',
           String(OWNER_ID),
         ]);
-        if (enable.code !== 0) throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
+        if (enable.code !== 0)
+          throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
 
         // Lo scriptaggio della domanda che `gestisciInvito` fa: «il mio
         // umano è in questa stanza?» — no.
@@ -554,8 +627,14 @@ describe('acceptance · F4 · uscita dai gruppi dove il proprio umano non c è',
               chat: { id: GROUP, type: 'supergroup', title: TITOLO },
               from: { id: STRANGER, is_bot: false, first_name: 'Estraneo', username: 'estraneo' },
               date: Math.floor(Date.now() / 1000),
-              old_chat_member: { status: 'left', user: { id: 42, is_bot: true, first_name: 'Muffin' } },
-              new_chat_member: { status: 'member', user: { id: 42, is_bot: true, first_name: 'Muffin' } },
+              old_chat_member: {
+                status: 'left',
+                user: { id: 42, is_bot: true, first_name: 'Muffin' },
+              },
+              new_chat_member: {
+                status: 'member',
+                user: { id: 42, is_bot: true, first_name: 'Muffin' },
+              },
             },
           });
 
@@ -568,30 +647,42 @@ describe('acceptance · F4 · uscita dai gruppi dove il proprio umano non c è',
         // saluto nel gruppo, avviso all'owner, uscita — in questo ordine e
         // non un altro, perché dopo `leaveChat` non si può più scrivere nel
         // gruppo.
-        const rilevanti = tg.sent().filter((c) => c.method === 'sendMessage' || c.method === 'leaveChat');
+        const rilevanti = tg
+          .sent()
+          .filter((c) => c.method === 'sendMessage' || c.method === 'leaveChat');
         if (rilevanti.length !== 3) {
-          throw new Error(`attesi esattamente 3 effetti (saluto, avviso, uscita), visti ${rilevanti.length}: ${JSON.stringify(rilevanti)}`);
+          throw new Error(
+            `attesi esattamente 3 effetti (saluto, avviso, uscita), visti ${rilevanti.length}: ${JSON.stringify(rilevanti)}`,
+          );
         }
         const [saluto, avviso, uscita] = rilevanti;
         if (saluto?.method !== 'sendMessage' || Number(saluto.payload['chat_id']) !== GROUP) {
           throw new Error(`il primo effetto non è il saluto nel gruppo: ${JSON.stringify(saluto)}`);
         }
         if (!String(saluto.payload['text'] ?? '').includes('Dove è il mio umano')) {
-          throw new Error(`il saluto nel gruppo non nomina "Dove è il mio umano": ${JSON.stringify(saluto)}`);
+          throw new Error(
+            `il saluto nel gruppo non nomina "Dove è il mio umano": ${JSON.stringify(saluto)}`,
+          );
         }
         if (avviso?.method !== 'sendMessage' || Number(avviso.payload['chat_id']) !== OWNER_ID) {
           throw new Error(`il secondo effetto non è l'avviso all'owner: ${JSON.stringify(avviso)}`);
         }
         if (!String(avviso.payload['text'] ?? '').includes(TITOLO)) {
-          throw new Error(`l'avviso all'owner non nomina il titolo del gruppo: ${JSON.stringify(avviso)}`);
+          throw new Error(
+            `l'avviso all'owner non nomina il titolo del gruppo: ${JSON.stringify(avviso)}`,
+          );
         }
         if (uscita?.method !== 'leaveChat' || Number(uscita.payload['chat_id']) !== GROUP) {
-          throw new Error(`il terzo effetto non è l'uscita dal gruppo giusto: ${JSON.stringify(uscita)}`);
+          throw new Error(
+            `il terzo effetto non è l'uscita dal gruppo giusto: ${JSON.stringify(uscita)}`,
+          );
         }
 
         // Un invito non è una conversazione: il modello non viene mai chiamato.
         if (inst.provider.main().length !== 0) {
-          throw new Error(`il modello è stato chiamato per un invito: ${inst.provider.main().length} chiamate`);
+          throw new Error(
+            `il modello è stato chiamato per un invito: ${inst.provider.main().length} chiamate`,
+          );
         }
 
         // E senza `my_chat_member` in `allowed_updates` l'invito non arriva
@@ -645,9 +736,11 @@ describe('acceptance · F5 · un link copiato non è un link composto, anche in 
       });
       try {
         const tok = await inst.muffin(['secret', 'set', 'telegram_token'], '123456:fake-f5-egress');
-        if (tok.code !== 0) throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
+        if (tok.code !== 0)
+          throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
         const enable = await inst.muffin(['surface', 'enable', 'telegram', '--api-base', tg.url]);
-        if (enable.code !== 0) throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
+        if (enable.code !== 0)
+          throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
 
         const gw = await inst.gateway();
         await gw.waitFor(/muffin gateway/, 20_000);
@@ -682,20 +775,30 @@ describe('acceptance · F5 · un link copiato non è un link composto, anche in 
           );
 
           const negato = inst.db(
-            (db) => db.prepare(`SELECT id, messages FROM turns ORDER BY created_at DESC LIMIT 1`).get() as { id: string; messages: string },
+            (db) =>
+              db
+                .prepare(`SELECT id, messages FROM turns ORDER BY created_at DESC LIMIT 1`)
+                .get() as { id: string; messages: string },
           );
           if (!JSON.stringify(JSON.parse(negato.messages)).includes('resource_denied')) {
-            throw new Error(`il turno non registra un resource_denied per la query inventata: ${negato.messages}`);
+            throw new Error(
+              `il turno non registra un resource_denied per la query inventata: ${negato.messages}`,
+            );
           }
           // Il kernel nega *prima* di chiamare l'handler (agent/loop.ts,
           // `runTool`'s `case 'deny'` ritorna sopra `recordIntent`) — quindi
           // nessuna riga in `turn_tool_calls`, e nessuna rete (fake o reale)
           // è mai stata raggiunta. Stessa prova di D10 per lo stesso motivo.
           const chiamateNegate = inst.db(
-            (db) => db.prepare(`SELECT COUNT(*) AS n FROM turn_tool_calls WHERE tool = 'http_get'`).get() as { n: number },
+            (db) =>
+              db
+                .prepare(`SELECT COUNT(*) AS n FROM turn_tool_calls WHERE tool = 'http_get'`)
+                .get() as { n: number },
           );
           if (chiamateNegate.n !== 0) {
-            throw new Error(`una http_get negata ha comunque scritto in turn_tool_calls: ${chiamateNegate.n} righe`);
+            throw new Error(
+              `una http_get negata ha comunque scritto in turn_tool_calls: ${chiamateNegate.n} righe`,
+            );
           }
 
           // Ora lo stesso membro incolla l'URL per intero, nella stessa
@@ -726,7 +829,11 @@ describe('acceptance · F5 · un link copiato non è un link composto, anche in 
         }
 
         const consentito = inst.db(
-          (db) => db.prepare(`SELECT id, messages FROM turns ORDER BY created_at DESC LIMIT 1`).get() as { id: string; messages: string },
+          (db) =>
+            db.prepare(`SELECT id, messages FROM turns ORDER BY created_at DESC LIMIT 1`).get() as {
+              id: string;
+              messages: string;
+            },
         );
         if (JSON.stringify(JSON.parse(consentito.messages)).includes('resource_denied')) {
           throw new Error(`l'URL citato per intero è stato negato: ${consentito.messages}`);
@@ -734,11 +841,15 @@ describe('acceptance · F5 · un link copiato non è un link composto, anche in 
         const riga = inst.db(
           (db) =>
             db
-              .prepare(`SELECT is_error FROM turn_tool_calls WHERE tool = 'http_get' ORDER BY started_at DESC LIMIT 1`)
+              .prepare(
+                `SELECT is_error FROM turn_tool_calls WHERE tool = 'http_get' ORDER BY started_at DESC LIMIT 1`,
+              )
               .get() as { is_error: number } | undefined,
         );
         if (!riga || riga.is_error !== 0) {
-          throw new Error(`la http_get sull'URL citato non è arrivata all'handler: ${JSON.stringify(riga)}`);
+          throw new Error(
+            `la http_get sull'URL citato non è arrivata all'handler: ${JSON.stringify(riga)}`,
+          );
         }
       } finally {
         await inst.cleanup();
@@ -767,12 +878,20 @@ describe('acceptance · F6 · osservatore spento: non indirizzato non lascia nie
       const GROUP = -100_760;
       const SOMEONE = 7601;
       const FRASE = 'il criceto di Sara è scappato di nuovo stasera';
-      const inst = await install({ main: [{ text: 'mai chiamato' }], env: { MUFFIN_GATEWAY_TICK_MS: '200' } });
+      const inst = await install({
+        main: [{ text: 'mai chiamato' }],
+        env: { MUFFIN_GATEWAY_TICK_MS: '200' },
+      });
       try {
-        const tok = await inst.muffin(['secret', 'set', 'telegram_token'], '123456:fake-f6-ricordo');
-        if (tok.code !== 0) throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
+        const tok = await inst.muffin(
+          ['secret', 'set', 'telegram_token'],
+          '123456:fake-f6-ricordo',
+        );
+        if (tok.code !== 0)
+          throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
         const enable = await inst.muffin(['surface', 'enable', 'telegram', '--api-base', tg.url]);
-        if (enable.code !== 0) throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
+        if (enable.code !== 0)
+          throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
 
         const gw = await inst.gateway();
         await gw.waitFor(/muffin gateway/, 20_000);
@@ -793,9 +912,15 @@ describe('acceptance · F6 · osservatore spento: non indirizzato non lascia nie
             () =>
               inst.db(
                 (db) =>
-                  (db.prepare(`SELECT COUNT(*) AS n FROM telegram_updates WHERE settled_at IS NOT NULL AND payload LIKE '%\"scrubbed\":true%'`).get() as {
-                    n: number;
-                  }).n > 0,
+                  (
+                    db
+                      .prepare(
+                        `SELECT COUNT(*) AS n FROM telegram_updates WHERE settled_at IS NOT NULL AND payload LIKE '%"scrubbed":true%'`,
+                      )
+                      .get() as {
+                      n: number;
+                    }
+                  ).n > 0,
               ),
             20_000,
             200,
@@ -807,11 +932,15 @@ describe('acceptance · F6 · osservatore spento: non indirizzato non lascia nie
         const riga = inst.db(
           (db) =>
             db
-              .prepare(`SELECT update_id, received_at, processed_at, settled_at, payload FROM telegram_updates ORDER BY update_id DESC LIMIT 1`)
+              .prepare(
+                `SELECT update_id, received_at, processed_at, settled_at, payload FROM telegram_updates ORDER BY update_id DESC LIMIT 1`,
+              )
               .get() as Record<string, unknown>,
         );
         if (riga['settled_at'] == null || riga['processed_at'] == null) {
-          throw new Error(`la riga ignorata non e' terminale (settled+processed): ${JSON.stringify(riga)}`);
+          throw new Error(
+            `la riga ignorata non e' terminale (settled+processed): ${JSON.stringify(riga)}`,
+          );
         }
         if (typeof riga['payload'] !== 'string' || riga['payload'].includes('criceto')) {
           throw new Error(`il corpo umano e' ancora nella riga nativa: ${JSON.stringify(riga)}`);
@@ -820,19 +949,31 @@ describe('acceptance · F6 · osservatore spento: non indirizzato non lascia nie
           throw new Error(`lo stub non identifica la sua riga: ${JSON.stringify(riga)}`);
         }
         const pendenti = inst.db(
-          (db) => db.prepare(`SELECT COUNT(*) AS n FROM telegram_updates WHERE processed_at IS NULL`).get() as { n: number },
+          (db) =>
+            db
+              .prepare(`SELECT COUNT(*) AS n FROM telegram_updates WHERE processed_at IS NULL`)
+              .get() as { n: number },
         );
-        if (pendenti.n !== 0) throw new Error(`atteso niente di pendente, viste ${pendenti.n} righe`);
+        if (pendenti.n !== 0)
+          throw new Error(`atteso niente di pendente, viste ${pendenti.n} righe`);
 
-        const ep = inst.db((db) => db.prepare(`SELECT COUNT(*) AS n FROM episodes`).get() as { n: number });
+        const ep = inst.db(
+          (db) => db.prepare(`SELECT COUNT(*) AS n FROM episodes`).get() as { n: number },
+        );
         if (ep.n !== 0) throw new Error(`un messaggio non indirizzato ha scritto ${ep.n} episodi`);
         if (inst.provider.main().length !== 0) {
-          throw new Error(`il provider è stato chiamato per un messaggio non indirizzato: ${inst.provider.main().length} volte`);
+          throw new Error(
+            `il provider è stato chiamato per un messaggio non indirizzato: ${inst.provider.main().length} volte`,
+          );
         }
         if (tg.messages().length !== 0) {
-          throw new Error(`un messaggio non indirizzato ha prodotto una risposta: ${JSON.stringify(tg.messages())}`);
+          throw new Error(
+            `un messaggio non indirizzato ha prodotto una risposta: ${JSON.stringify(tg.messages())}`,
+          );
         }
-        const turni = inst.db((db) => db.prepare(`SELECT COUNT(*) AS n FROM turns`).get() as { n: number });
+        const turni = inst.db(
+          (db) => db.prepare(`SELECT COUNT(*) AS n FROM turns`).get() as { n: number },
+        );
         if (turni.n !== 0) throw new Error(`atteso nessun turno, visti ${turni.n}`);
       } finally {
         await inst.cleanup();
@@ -902,9 +1043,11 @@ describe('acceptance · F7 · una stanza ha le sue capacità, e dentro il suo va
       });
       try {
         const tok = await inst.muffin(['secret', 'set', 'telegram_token'], '123456:fake-f7-grant');
-        if (tok.code !== 0) throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
+        if (tok.code !== 0)
+          throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
         const enable = await inst.muffin(['surface', 'enable', 'telegram', '--api-base', tg.url]);
-        if (enable.code !== 0) throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
+        if (enable.code !== 0)
+          throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
 
         const salvato = vaultPathPer(TENANT, TITOLO);
         const sulDisco = join(paths(inst.home).vault, salvato);
@@ -1036,12 +1179,16 @@ describe('acceptance · F7 · una stanza ha le sue capacità, e dentro il suo va
         // una riga qui sarebbe un divieto travestito.
         const ask = inst.db(
           (db) =>
-            db.prepare(`SELECT COUNT(*) AS n FROM approvals WHERE capability = 'vault.write'`).get() as {
+            db
+              .prepare(`SELECT COUNT(*) AS n FROM approvals WHERE capability = 'vault.write'`)
+              .get() as {
               n: number;
             },
         );
         if (ask.n !== 0) {
-          throw new Error(`un membro ha salvato nel proprio vault e gli e' stato chiesto: ${ask.n} approvazioni`);
+          throw new Error(
+            `un membro ha salvato nel proprio vault e gli e' stato chiesto: ${ask.n} approvazioni`,
+          );
         }
         // La chiamata è arrivata all'handler (il kernel ha detto `draft`, non
         // `deny`): senza questa riga «nessun ask» sarebbe vero anche per un
@@ -1055,7 +1202,9 @@ describe('acceptance · F7 · una stanza ha le sue capacità, e dentro il suo va
               .get() as { is_error: number } | undefined,
         );
         if (!riga || riga.is_error !== 0) {
-          throw new Error(`vault_save non e' arrivata all'handler col grant: ${JSON.stringify(riga)}`);
+          throw new Error(
+            `vault_save non e' arrivata all'handler col grant: ${JSON.stringify(riga)}`,
+          );
         }
 
         // (c) il documento è nel tenant della stanza, e `host` non lo vede.
@@ -1069,10 +1218,14 @@ describe('acceptance · F7 · una stanza ha le sue capacità, e dentro il suo va
         );
         const dellaStanza = perTenant.find((r) => r.tenant === TENANT);
         if (!dellaStanza || dellaStanza.n === 0) {
-          throw new Error(`il salvataggio non e' in memoria del tenant della stanza: ${JSON.stringify(perTenant)}`);
+          throw new Error(
+            `il salvataggio non e' in memoria del tenant della stanza: ${JSON.stringify(perTenant)}`,
+          );
         }
         if (perTenant.some((r) => r.tenant !== TENANT)) {
-          throw new Error(`il salvataggio di una stanza e' finito anche in un altro tenant: ${JSON.stringify(perTenant)}`);
+          throw new Error(
+            `il salvataggio di una stanza e' finito anche in un altro tenant: ${JSON.stringify(perTenant)}`,
+          );
         }
 
         // La stessa cosa dal lato del tool che il modello userebbe:
@@ -1088,13 +1241,21 @@ describe('acceptance · F7 · una stanza ha le sue capacità, e dentro il suo va
           }
         })();
         try {
-          const daStanza = await readDocument(runtime.vault, runtime.memory.store, TENANT, { path: salvato });
+          const daStanza = await readDocument(runtime.vault, runtime.memory.store, TENANT, {
+            path: salvato,
+          });
           if (daStanza.isError === true || !daStanza.content.includes(TESTO)) {
-            throw new Error(`document_read della stanza non ritrova il salvataggio: ${daStanza.content.slice(0, 300)}`);
+            throw new Error(
+              `document_read della stanza non ritrova il salvataggio: ${daStanza.content.slice(0, 300)}`,
+            );
           }
-          const daHost = await readDocument(runtime.vault, runtime.memory.store, 'host', { path: salvato });
+          const daHost = await readDocument(runtime.vault, runtime.memory.store, 'host', {
+            path: salvato,
+          });
           if (daHost.isError !== true || daHost.content.includes(TESTO)) {
-            throw new Error(`il tenant host vede il vault di una stanza: ${daHost.content.slice(0, 300)}`);
+            throw new Error(
+              `il tenant host vede il vault di una stanza: ${daHost.content.slice(0, 300)}`,
+            );
           }
         } finally {
           runtime.close();
@@ -1107,25 +1268,35 @@ describe('acceptance · F7 · una stanza ha le sue capacità, e dentro il suo va
               messages: string;
             },
         );
-        const shellOfferta = inst.provider.main().some((request) => request.tools.includes('shell_run'));
+        const shellOfferta = inst.provider
+          .main()
+          .some((request) => request.tools.includes('shell_run'));
         const shell = inst.db(
           (db) =>
-            db.prepare(`SELECT COUNT(*) AS n FROM turn_tool_calls WHERE tool = 'shell_run'`).get() as { n: number },
+            db
+              .prepare(`SELECT COUNT(*) AS n FROM turn_tool_calls WHERE tool = 'shell_run'`)
+              .get() as { n: number },
         );
         if (shell.n !== 0) {
           throw new Error(`una shell_run negata ha comunque raggiunto l'handler: ${shell.n} righe`);
         }
         if (shellOfferta) {
           if (!JSON.stringify(JSON.parse(ultimo.messages)).includes('principal_forbidden')) {
-            throw new Error(`shell_run doveva restare negata nella stanza con grant: ${ultimo.messages.slice(0, 800)}`);
+            throw new Error(
+              `shell_run doveva restare negata nella stanza con grant: ${ultimo.messages.slice(0, 800)}`,
+            );
           }
         } else {
           // Doctor descrive il boundary dell'owner; la lista tool del membro
           // deve comunque omettere la capability host-only nella stanza.
           const doctor = await inst.muffin(['doctor']);
-          const shellAttiva = doctor.out.split('\n').find((line) => line.startsWith('✓ capacità: shell_run'));
+          const shellAttiva = doctor.out
+            .split('\n')
+            .find((line) => line.startsWith('✓ capacità: shell_run'));
           if (!shellAttiva || !/attivo/.test(shellAttiva)) {
-            throw new Error(`F7 non prova la proiezione tenant: la shell owner non risulta attiva nel doctor:\n${doctor.out}`);
+            throw new Error(
+              `F7 non prova la proiezione tenant: la shell owner non risulta attiva nel doctor:\n${doctor.out}`,
+            );
           }
         }
       } finally {

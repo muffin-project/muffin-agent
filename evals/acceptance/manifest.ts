@@ -213,7 +213,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // own docstring for why that one does not register here).
   verde(
     'B13',
-    'progress telegram: a scripted multi-round turn produces one status message, edited in place (never a second one), throttled, and replaced by the real answer',
+    'progress telegram: a multi-tool turn uses a stoppable draft and delivers one result without a tool log',
   ),
   verde(
     'B14',
