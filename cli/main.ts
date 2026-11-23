@@ -18,7 +18,6 @@ import {
 import { ALL_API_KEY_NAMES, LEGACY_API_KEY_NAME } from '../core/config/providers.js';
 import { checkTemporalWindow, EVERY_INSTANT, normaliseDate } from '../core/memory/recall.js';
 import type { TrustTier } from '../core/policy/types.js';
-import { buildHardenPlan, formatHardenPlan } from '../core/rot/harden.js';
 import { seal, verify } from '../core/rot/verify.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { cmdAdopt } from './adopt.js';
@@ -991,12 +990,7 @@ function cmdRot(argv: string[]): number {
     // The one failure this command was built to produce, and the only one it
     // used to answer with a Node stack trace.
     //
-    // `muffin rot harden` tells the owner, correctly, that after hardening
-    // "`muffin rot reseal` ti servirà un privilegio che oggi non ti serve"
-    // (`core/rot/harden.ts`). Following that advice and forgetting `sudo` is
-    // therefore the expected mistake, not an exotic one — and `main()` has no
-    // top-level catch, so the reward for doing what we asked was a raw
-    // `Error: EACCES` with a stack. Named by the judge on PR #138.
+    // An existing deployment may keep the seal under a separate OS identity.
     try {
       const manifest = seal(paths().home, '1', new Date());
       process.stdout.write(
@@ -1019,18 +1013,15 @@ function cmdRot(argv: string[]): number {
   }
 
   if (sub === 'harden') {
-    // Explains and proposes, never executes — see core/rot/harden.ts. Every
-    // line of the plan goes to stdout ("stdout carries the answer", this
-    // file's own header above), the same as `muffin doctor`: this command's
-    // whole job is the printed report, not a side comment on some other
-    // action.
-    const plan = buildHardenPlan(paths().home, mode);
-    process.stdout.write(formatHardenPlan(plan));
-    if (!plan.owner.known) return 2;
-    return plan.done ? 0 : 1;
+    // Actionable response for old bookmarks; there is no hardening recipe.
+    process.stderr.write(
+      'The manual hardening recipe is retired. OS hardening does not change approvals. ' +
+        'Use `muffin doctor` to inspect this installation.\n',
+    );
+    return 78;
   }
 
-  process.stderr.write(`usage: muffin rot verify | reseal | harden\n`);
+  process.stderr.write(`usage: muffin rot verify | reseal\n`);
   return 78;
 }
 

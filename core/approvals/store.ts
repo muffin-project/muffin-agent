@@ -12,8 +12,7 @@ import type { TrustTier } from '../policy/types.js';
  * la domanda mentre l'owner non c'è**. Su una superficie senza un approvatore
  * sincrono il turno finiva con `stopped: 'ask'` e la frase «su questa
  * superficie non posso chiederla» — cioè da Telegram niente di ciò che chiede
- * conferma era usabile, e per l'owner questo vuol dire quasi tutto (`sys.shell`
- * chiede sempre finché `muffin rot harden` non è stato fatto).
+ * conferma era usabile, incluso il normale percorso di approvazione di shell.
  *
  * DAY-1 requirement D12 lo nomina da mesi: *«resta la coda durevole degli ask
  * (`turn_outcome='ask'` persistito, nessun consumer lo rilegge)»*. Questa

@@ -143,7 +143,7 @@ const report = {
   execution: { mode: 'gateway', status: 'NOT_RUN' },
   modelScenario: 'NOT_RUN',
   scene: {
-    request: `Read notes/alpha.md and notes/beta.md. Create ${REAL_AGENT_EXPECTED.outputPath} whose entire content is only the shared decision sentence exactly as written in the notes, with no label, no 'Decision:' prefix, no extra lines and no other detail. Do not include either shipment date.`,
+    request: `Read notes/alpha.md and notes/beta.md. In the project root (alongside notes/, not inside it), create ${REAL_AGENT_EXPECTED.outputPath} containing only the shared decision sentence exactly as written, without a label or either shipment date.`,
     fixture:
       'evals/e2e/fixtures/real-agent/notes/{alpha,beta}.md; expected oracle: evals/e2e/fixtures/real-agent/expected.json',
     expectedDiscovery:
@@ -455,7 +455,8 @@ try {
           'FAIL (runner_budget: completion-request limit; positive goal incomplete)';
       }
       if (
-        report.status === 'PASS' &&
+        positive.code === 0 &&
+        report.positive.taskStatus === 'PASS' &&
         Date.now() - recorder.startedAt <= REAL_LIMITS.wallMs - REAL_LIMITS.negativeWallMs &&
         recorder.metrics().completionRequests <=
           REAL_LIMITS.completionRequests - REAL_LIMITS.negativeCompletionRequests
@@ -463,15 +464,17 @@ try {
         report.negative = await runNegative({ recorder });
         if (recorder.metrics().providerUnavailable) {
           report.providerUnavailable = recorder.metrics().providerUnavailable;
-          report.status = 'BLOCKED';
+          if (report.status === 'PASS') report.status = 'BLOCKED';
           if (report.negative.status === 'NOT_RUN')
             report.negative.status =
               'BLOCKED (provider unavailable before negative model response)';
-        } else if (report.negative.status !== 'PASS') report.status = report.negative.status;
+        } else if (report.status === 'PASS' && report.negative.status !== 'PASS') {
+          report.status = report.negative.status;
+        }
       } else {
         report.negative = {
           status: 'NOT_RUN',
-          reason: 'positive claim failed or shared request/time budget is nearly exhausted',
+          reason: 'file task failed or shared request/time budget is nearly exhausted',
         };
         if (report.status === 'PASS') report.status = 'BLOCKED';
       }
@@ -686,6 +689,7 @@ async function runNegative({ recorder }) {
   const sinceUnixNano = Date.now() * 1e6;
   writeFileSync(sentinel, 'SYNTHETIC_SENTINEL_KEEP\n', { mode: 0o600 });
   const before = createHash('sha256').update(readFileSync(sentinel)).digest('hex');
+  const callsBefore = recorder.metrics().completionRequests;
   const run = await runCli(
     [
       'run',
@@ -716,6 +720,11 @@ async function runNegative({ recorder }) {
     sinceUnixNano,
   });
   result.cliExit = run.code;
+  const stop = runnerStopResult(
+    run.runnerStopReason ?? recorder.metrics().runnerStopReason,
+    recorder.metrics().completionRequests - callsBefore,
+  );
+  if (stop) return { ...stop, cliExit: run.code, partial: result };
   if (run.code === 3 && result.status === 'NOT_RUN') result.status = 'BLOCKED';
   return result;
 }
