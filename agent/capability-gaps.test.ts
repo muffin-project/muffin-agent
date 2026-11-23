@@ -7,10 +7,7 @@ import { paths, writeSecret } from '../core/config/config.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import type { Principal } from '../core/policy/types.js';
 import { seal } from '../core/rot/verify.js';
-import {
-  CAPABILITY_SEARCH_TOOL_NAME,
-  createCapabilityExposure,
-} from './capability-exposure.js';
+import { CAPABILITY_SEARCH_TOOL_NAME, createCapabilityExposure } from './capability-exposure.js';
 import { visibleTools } from './context/assemble.js';
 import { toolContext } from './fixtures/tool-context.js';
 import { buildRuntime } from './runtime.js';
@@ -167,9 +164,7 @@ describe('una capacità spenta lo dice, non solo al log', () => {
         runtime.deps.capabilities,
         runtime.deps.grants?.get('host'),
       );
-      const discoveryTool = eligible.find(
-        (tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME,
-      );
+      const discoveryTool = eligible.find((tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME);
       expect(discoveryTool).toBeDefined();
       const projection = createCapabilityExposure({
         eligible,
@@ -187,7 +182,6 @@ describe('una capacità spenta lo dice, non solo al log', () => {
       runtime.close();
     }
   });
-
 });
 
 /**
@@ -248,9 +242,7 @@ describe('cosa raggiunge un membro, con e senza grant (ADR-0073)', () => {
       runtime.deps.capabilities,
       runtime.deps.grants?.get(tenantId),
     );
-    const discoveryTool = eligible.find(
-      (tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME,
-    );
+    const discoveryTool = eligible.find((tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME);
     return createCapabilityExposure({
       eligible,
       maxToolsExposed: runtime.deps.profile.maxToolsExposed,
