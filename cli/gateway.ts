@@ -1218,7 +1218,8 @@ export async function cmdGatewayRun(
   };
   const turnLane = new TurnLane({
     turns: runtime.deps.turns,
-    pendingReply: () => runtime.jobFires.pendingTelegramReply(),
+    pendingReply: () =>
+      runtime.jobFires.pendingTelegramReply() ?? runtime.deps.turns.pendingOwnerQuestionFinal()?.id,
     run: makeLaneRunner(
       runtime.deps,
       (turn, text, recovered) => deliverFromLane(turn, text, recovered),

@@ -219,11 +219,12 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
         maxToolsExposed: profile.maxToolsExposed,
         ...(discoveryTool === undefined ? {} : { discoveryTool }),
       });
-      const exposure = ctx.capabilityDiscovery?.snapshot() ?? {
-        visible: initialProjection.exposed.map((tool) => tool.spec.name),
-        pressured: initialProjection.pressured,
-        hiddenCount: initialProjection.hiddenCount,
-      };
+      const exposure = ctx.toolExposure?.() ??
+        ctx.capabilityDiscovery?.snapshot() ?? {
+          visible: initialProjection.exposed.map((tool) => tool.spec.name),
+          pressured: initialProjection.pressured,
+          hiddenCount: initialProjection.hiddenCount,
+        };
       const esposti = [...exposure.visible];
       const spente = sources.capabilityGaps.filter((g) => g.kind === 'disabled');
       const blocchi = sources.promptBlocks[cls] ?? [];

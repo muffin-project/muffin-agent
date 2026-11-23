@@ -1297,7 +1297,8 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
   const base = tg?.apiBase;
   const api = base === undefined ? new TelegramApi(token) : new TelegramApi(token, base);
   const telegramDb = openDb(paths(home).db);
-  const inbox = new UpdateInbox(telegramDb);
+  // Question answers and their inbox consumption commit together.
+  const inbox = new UpdateInbox(runtime.db);
   const delivery = new TelegramDeliveryStore(telegramDb);
   const vaultRoot = paths(home).vault;
   if (!ensurePrivateDir(join(vaultRoot, 'inbox'))) {
@@ -1390,6 +1391,9 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
     },
     log,
   });
+  if (gatewayAtBoot === null && onWork !== undefined) {
+    runtime.deps.sendWorkMessage = connector.sendWorkMessage;
+  }
 
   // Same process, background. A crash of the surface is reported and does not
   // take the REPL down: the terminal is the surface of last resort, and it

@@ -10,6 +10,7 @@ import type {
 } from '@grammyjs/types';
 import { tipoAudio } from '../../agent/audio.js';
 import { COMANDI, type Controlli, sembraComando } from '../../agent/comandi.js';
+import { providerMessages } from '../../agent/loop/provider-checkpoint.js';
 import type {
   ApprovalRequest,
   ApprovalWhere,
@@ -26,6 +27,7 @@ import type { PendingPairing } from '../../core/config/pairing.js';
 import { estraiFotogramma } from '../../core/media/fotogramma.js';
 import { fence } from '../../core/memory/spotlight.js';
 import { sleep } from '../../core/net/sleep.js';
+import { replyCapability } from '../../core/policy/doors.js';
 import type { TrustTier } from '../../core/policy/types.js';
 import { levaDelega } from '../../core/runtime/delega.js';
 import type { SessionStore } from '../../core/session/store.js';
@@ -35,7 +37,9 @@ import {
   type SurfaceIdentity,
   tierOf,
 } from '../../core/surface/types.js';
+import { redactText } from '../../core/tracing/redact.js';
 import type { ModelLane } from '../../core/turns/model-lane.js';
+import type { TurnRecord } from '../../core/turns/store.js';
 import { decodeWaitFor } from '../../core/turns/wait.js';
 import type { Vista } from '../../core/vista/vista.js';
 import { composeTurnText as sharedComposeTurnText } from '../shared/ingress/compose.js';
@@ -1174,6 +1178,207 @@ export class TelegramConnector {
     this.sleep = deps.sleep ?? sleep;
   }
 
+  private workChat(turn: TurnRecord): number | null {
+    let binding: ReturnType<NonNullable<LoopDeps['workMessageOwner']>> | undefined;
+    try {
+      binding = this.deps.loop.workMessageOwner?.();
+    } catch {
+      return null;
+    }
+    const userId = binding?.userId;
+    const chatId = binding?.chatId ?? userId;
+    if (
+      userId === undefined ||
+      chatId !== userId ||
+      !isDirectChat(chatId) ||
+      userId !== this.deps.config.ownerUserId ||
+      chatId !== (this.deps.config.ownerChatId ?? userId) ||
+      turn.surface !== 'telegram' ||
+      turn.tenant !== 'host' ||
+      turn.jobId !== null ||
+      turn.principal.kind !== 'owner' ||
+      turn.principal.connector !== 'telegram' ||
+      turn.principal.externalId !== String(userId) ||
+      turn.replyTo?.chatId !== chatId ||
+      turn.replyTo.channel !== `telegram:${chatId}` ||
+      turn.replyTo.threadId !== undefined
+    )
+      return null;
+    return chatId;
+  }
+
+  /** Separate outbox identity: no access to the final delivery or its handoff. */
+  sendWorkMessage = async (
+    turnId: string,
+    id: string,
+    text: string,
+  ): Promise<TelegramDeliveryOutcome> => {
+    if (this.stopping || !/^[a-f0-9]{64}$/.test(id)) return 'deferred';
+    const turn = this.deps.loop.turns.get(turnId);
+    if (turn === null) return 'deferred';
+    const chatId = this.workChat(turn);
+    if (
+      chatId === null ||
+      this.deps.loop.decide({
+        principal: turn.principal,
+        tenant: turn.tenant,
+        capability: replyCapability.id,
+        resource: { kind: 'none' },
+        args: {},
+        taint: turn.taint,
+      }).effect !== 'allow'
+    )
+      return 'deferred';
+    const html = escapeHtml(redactText(text));
+    // Keep the question in a single addressable bubble even for escaped text.
+    if (html === '' || html.length > 4096) return 'deferred';
+    return deliverTelegram(
+      this.deps.delivery,
+      this.deps.api,
+      `work:${id}`,
+      [
+        {
+          operation: 'send',
+          chatId,
+          threadId: null,
+          replyTo: null,
+          editMessageId: null,
+          html,
+        },
+      ],
+      () => this.now(),
+      0,
+    );
+  };
+
+  private questionText(question: { id: string; question: string }): string {
+    // Telegram includes the original bot message on a native reply. The
+    // reference distinguishes identical questions if the send receipt was lost.
+    return `${question.question}\n\nRispondi a questo messaggio per continuare. · Rif. ${question.id.slice(0, 24)}`;
+  }
+
+  private async publishQuestions(): Promise<void> {
+    if (this.deps.loop.sendWorkMessage !== this.sendWorkMessage || this.stopping) return;
+    for (const turn of this.deps.loop.turns.ownerQuestions()) {
+      const question = decodeWaitFor(turn.waitFor);
+      if (question?.kind !== 'owner_reply' || turn.wakeAt === null || turn.wakeAt <= this.now())
+        continue;
+      if (this.workChat(turn) === null) continue;
+      try {
+        // A pending intent can be replayed. A prior success, refusal or
+        // ambiguous send needs no further request on every poll.
+        const parts = this.deps.delivery.parts(`work:${question.id}`, 0);
+        if (parts.some((part) => part.status === 'rejected')) {
+          this.resumeAfterUnsentQuestion(turn);
+        } else if (parts.length === 0 || parts.some((part) => part.status === 'pending')) {
+          const outcome = await this.sendWorkMessage(
+            turn.id,
+            question.id,
+            this.questionText(question),
+          );
+          if (
+            outcome === 'deferred' &&
+            this.deps.delivery.parts(`work:${question.id}`, 0).length === 0 &&
+            this.workChat(turn) !== null &&
+            !this.stopping
+          )
+            this.resumeAfterUnsentQuestion(turn);
+        }
+      } catch {
+        this.deps.log?.(`telegram: work question ${question.id.slice(0, 12)} was not confirmed`);
+        if (
+          this.deps.delivery
+            .parts(`work:${question.id}`, 0)
+            .some((part) => part.status === 'rejected')
+        ) {
+          this.resumeAfterUnsentQuestion(turn);
+        }
+      }
+    }
+  }
+
+  private resumeAfterUnsentQuestion(turn: TurnRecord): void {
+    if (turn.waitFor === null) return;
+    const resumed = this.deps.loop.turns.answerOwnerQuestion(
+      turn.id,
+      turn.waitFor,
+      [
+        ...providerMessages(turn),
+        {
+          role: 'user',
+          origin: 'harness',
+          content: [
+            {
+              type: 'text',
+              text: 'Your clarification could not be delivered. The owner has not seen it and has not answered. Continue where possible or explain the blocker in the final response.',
+            },
+          ],
+        },
+      ],
+      () => {},
+      new Date(this.now()),
+    );
+    if (resumed) this.deps.onWork?.();
+  }
+
+  private answerQuestion(stored: StoredUpdate, incoming: Incoming, update: Update): boolean {
+    if (
+      this.deps.loop.sendWorkMessage !== this.sendWorkMessage ||
+      this.meId === undefined ||
+      stored.turnId !== null ||
+      !incoming.isPrivate ||
+      incoming.threadId !== undefined ||
+      incoming.forwarded !== undefined ||
+      incoming.attachment !== undefined ||
+      incoming.text.trim() === '' ||
+      incoming.text.trimStart().startsWith('/') ||
+      incoming.fromId !== this.deps.config.ownerUserId
+    )
+      return false;
+    const prompt = update.message?.reply_to_message;
+    if (
+      prompt?.from?.id !== this.meId ||
+      !prompt.from.is_bot ||
+      prompt.chat.id !== incoming.chatId ||
+      !Number.isSafeInteger(prompt.message_id) ||
+      prompt.message_id <= 0
+    )
+      return false;
+    for (const turn of this.deps.loop.turns.ownerQuestions()) {
+      if (turn.waitFor === null || this.workChat(turn) !== incoming.chatId) continue;
+      const question = decodeWaitFor(turn.waitFor);
+      if (question?.kind !== 'owner_reply') continue;
+      const expected = this.questionText(question);
+      const matches = this.deps.delivery
+        .parts(`work:${question.id}`, 0)
+        .some(
+          (part) =>
+            part.chatId === incoming.chatId &&
+            part.threadId === null &&
+            (part.status === 'sent'
+              ? part.telegramMessageId === prompt.message_id
+              : part.status === 'possibly_sent' &&
+                part.html === escapeHtml(expected) &&
+                prompt.text === expected),
+        );
+      if (!matches) continue;
+      const at = this.now();
+      const answered = this.deps.loop.turns.answerOwnerQuestion(
+        turn.id,
+        turn.waitFor,
+        [
+          ...providerMessages(turn),
+          { role: 'user', content: [{ type: 'text', text: incoming.text }] },
+        ],
+        () => this.deps.inbox.consumeWorkAnswer(stored.updateId, at),
+        new Date(at),
+      );
+      if (answered) this.deps.onWork?.();
+      return answered;
+    }
+    return false;
+  }
+
   /**
    * Polls until stopped.
    *
@@ -1283,6 +1488,12 @@ export class TelegramConnector {
           // risposta e' arrivata, e quello che viene dopo — `accept`, `drain` —
           // e' lavoro nostro, non la prova che Telegram risponde.
           this.deps.salute?.connessa('telegram', new Date(this.now()));
+          if (
+            updates.length === 0 &&
+            this.deps.loop.sendWorkMessage === this.sendWorkMessage &&
+            this.deps.loop.turns.ownerQuestions(1).length > 0
+          )
+            this.scheduleDrain();
           if (updates.length > 0) {
             const { stored, duplicates, accepted } = this.deps.inbox.accept(updates, this.now());
             if (duplicates > 0) log(`telegram: ${duplicates} update già visti, ignorati`);
@@ -1527,6 +1738,21 @@ export class TelegramConnector {
     if (typeof chatId !== 'number') {
       throw new Error(`replyTo senza chatId numerico: ${JSON.stringify(replyTo)}`);
     }
+    const record = this.deps.loop.turns.get(turnId);
+    if (
+      record?.ownerQuestionFinal &&
+      (this.workChat(record) !== chatId ||
+        this.deps.loop.decide({
+          principal: record.principal,
+          tenant: record.tenant,
+          capability: replyCapability.id,
+          resource: { kind: 'none' },
+          args: {},
+          taint: record.taint,
+        }).effect !== 'allow')
+    ) {
+      throw new Error('Work reply is no longer authorized for this chat');
+    }
     // #784 — il turno è terminale (la risposta che stiamo per consegnare lo
     // dice): le domande ritirate non hanno più nessuno che le decida, e le
     // loro bolle — mandate magari da un processo morto prima di un riavvio —
@@ -1543,7 +1769,7 @@ export class TelegramConnector {
     // diagnostico la inghiottirebbe: `plan` restituirebbe le parti di prima,
     // tutte `sent`, e la superficie riferirebbe una consegna mai avvenuta
     // (misurato il 28/09 sulla catena reale `riprendi`).
-    const leaseIndex = this.deps.loop.turns.get(turnId)?.leaseIndex ?? 0;
+    const leaseIndex = record?.leaseIndex ?? 0;
     // Sta sulla riga durevole e non su questo stack, perché la ripresa dopo
     // un riavvio legge la riga: senza, un turno ripescato rispondeva in
     // *General* invece che nel topic da cui era partita la domanda.
@@ -1691,6 +1917,20 @@ export class TelegramConnector {
   resumeStream: AttachStream = (record) => {
     const chatId = record.replyTo?.['chatId'];
     if (typeof chatId !== 'number') return undefined;
+    if (record.ownerQuestionFinal) {
+      if (this.workChat(record) !== chatId) return undefined;
+      // This Work already has a conversational message. Keep controls, but
+      // leave presentation to journaled Work messages and the final result.
+      const { lane, release } = this.corsie.attach(this.corsia(chatId));
+      return {
+        signal: lane.controller.signal,
+        steer: () => (this.workChat(record) === chatId ? lane.correzioni.splice(0) : []),
+        stop: async () => {
+          release();
+          this.scheduleDrain();
+        },
+      };
+    }
     const isPrivate = isDirectChat(chatId);
     // Stesso topic della domanda: la riga durevole è l'unica fonte che
     // sopravvive al riavvio da cui questo percorso riparte.
@@ -1789,6 +2029,8 @@ export class TelegramConnector {
         // nuovo. Più stretto, e non peggiore, del buco preesistente che questa
         // mappa aveva già sulla ri-sospensione.
         this.noteTranscriptHandoff(record.id, transcript);
+        if (dopo?.status === 'waiting' && decodeWaitFor(dopo.waitFor)?.kind === 'owner_reply')
+          this.scheduleDrain();
       },
     };
   };
@@ -1815,6 +2057,13 @@ export class TelegramConnector {
     where: ApprovalWhere,
   ): Promise<Awaited<ReturnType<Approver>>> {
     const chatId = where.replyTo?.['chatId'];
+    const record = this.deps.loop.turns.get(where.turnId);
+    if (
+      record?.ownerQuestionFinal &&
+      (typeof chatId !== 'number' || this.workChat(record) !== chatId)
+    ) {
+      return 'unavailable';
+    }
     const transcript = typeof chatId === 'number' ? this.transcriptVivi.get(chatId) : undefined;
     if (transcript !== undefined && where.approvalId !== undefined) {
       const presa = await transcript.ask({ request, approvalId: where.approvalId });
@@ -2159,6 +2408,7 @@ export class TelegramConnector {
   /** Everything not yet answered, oldest first. Also the crash-recovery path. */
   private async drain(): Promise<void> {
     const log = this.deps.log ?? (() => {});
+    await this.publishQuestions();
     for (const stored of this.deps.inbox.pending()) {
       if (this.gestiti.has(stored.updateId)) continue;
       const update = JSON.parse(stored.payload) as Update;
@@ -2228,7 +2478,9 @@ export class TelegramConnector {
       // `markProcessed`, `markFailed` — che è dove stanno le tabelle
       // (§4 invariante 3).
       try {
+        if (this.answerQuestion(stored, incoming, update)) continue;
         await this.resolve(stored, incoming);
+        await this.publishQuestions();
       } catch (error) {
         // Stays pending: it may well work after a restart, and dropping it is
         // the data loss the inbox exists to prevent, arriving by another road.

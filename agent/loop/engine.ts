@@ -1,5 +1,5 @@
 import { recall, recallTaint, renderForPrompt } from '../../core/memory/recall.js';
-import { memoryWriteCapability } from '../../core/policy/doors.js';
+import { memoryWriteCapability, replyCapability } from '../../core/policy/doors.js';
 import type { CapabilityId, Decision, DecisionRequest } from '../../core/policy/types.js';
 import type { SessionRef } from '../../core/session/store.js';
 import type { SpanHandle } from '../../core/tracing/types.js';
@@ -16,6 +16,7 @@ import {
   CAPABILITY_DISCOVERY_GUIDANCE,
   CAPABILITY_SEARCH_TOOL_NAME,
   createCapabilityExposure,
+  DEFAULT_CORE_TOOL_NAMES,
   preloadCapabilitiesForTask,
 } from '../capability-exposure.js';
 import { tenantClass, visibleTools } from '../context/assemble.js';
@@ -28,6 +29,7 @@ import {
   withoutActivityAllowance,
 } from '../providers/activity-allowance.js';
 import { type ContentBlock, type Message, ProviderError } from '../providers/types.js';
+import { WORK_MESSAGE_TOOL_NAME } from '../tools/work-message.js';
 import { buildContext, userAudios, userImages } from './context.js';
 import {
   announceEnd,
@@ -56,6 +58,7 @@ import {
   type TurnInput,
   type TurnResult,
 } from './types.js';
+import { workMessagesAvailable } from './work-message.js';
 
 /**
  * The engine of a turn: the deterministic pre-loop, and the round loop it hands
@@ -385,12 +388,15 @@ async function runClaimedTurn(
   // #469: principal/grant filtering decides which installed capabilities may
   // even enter discovery. The profile ceiling is applied only to the model
   // projection, never to catalogue existence.
+  const canWorkMessage =
+    workMessagesAvailable(deps, input) &&
+    snapshot.check(replyCapability.id, { kind: 'none' }, {}).effect === 'allow';
   const principalVisibleTools = visibleTools(
     deps.tools,
     input.principal,
     deps.capabilities,
     deps.grants?.get(input.tenant),
-  );
+  ).filter((tool) => tool.spec.name !== WORK_MESSAGE_TOOL_NAME || canWorkMessage);
   // #469 judge ADJUST: visibleTools' hostOnly/grants projection was designed
   // for members and deliberately returns the full catalogue for system
   // principals. That is not the kernel's authority: autonomous principals
@@ -424,6 +430,8 @@ async function runClaimedTurn(
   const capabilityExposure = createCapabilityExposure({
     eligible: eligibleTools,
     maxToolsExposed: deps.profile.maxToolsExposed,
+    // Reserve a normal fixed slot, independent of the task wording.
+    ...(canWorkMessage ? { coreNames: [WORK_MESSAGE_TOOL_NAME, ...DEFAULT_CORE_TOOL_NAMES] } : {}),
     ...(discoveryTool === undefined ? {} : { discoveryTool }),
   });
   const preloaded =
@@ -468,6 +476,12 @@ async function runClaimedTurn(
     ...(capabilityExposure.discovery === undefined
       ? {}
       : { capabilityDiscovery: capabilityExposure.discovery }),
+    toolExposure: () =>
+      capabilityExposure.discovery?.snapshot() ?? {
+        visible: exposed.map((tool) => tool.spec.name),
+        pressured: false,
+        hiddenCount: 0,
+      },
     durability: {
       failure: () => run.durabilityFailure,
       fail: (reason) => {
@@ -780,13 +794,17 @@ async function runClaimedTurn(
       const wakeAtMs = wakeAtRaw === null ? Number.NaN : Date.parse(wakeAtRaw);
       const scaduta = Number.isFinite(wakeAtMs) && (wakeAtMs as number) <= adesso;
       const rispostaNelRegistro = deps.approvals?.decidedUnconsumed(record.id) ?? false;
-      const why: WakeReason = aperta
-        ? 'event'
-        : scaduta
-          ? 'timer'
-          : rispostaNelRegistro
-            ? 'answer'
-            : 'early';
+      // Core commits the owner's reply into the same checkpoint and clears
+      // wake_at. A timeout leaves the deadline in place until the claim.
+      const ownerReplied = waitFor?.kind === 'owner_reply' && options.wakeAtAtWake === null;
+      const why: WakeReason =
+        aperta || ownerReplied
+          ? 'event'
+          : scaduta
+            ? 'timer'
+            : rispostaNelRegistro
+              ? 'answer'
+              : 'early';
       turn.setAttributes({ 'muffin.turn.woken_by': why });
       // Harness control (a transition report for this resume), not owner
       // words: a continuation to a new lease archives it instead of replaying

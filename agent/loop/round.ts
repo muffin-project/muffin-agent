@@ -61,6 +61,7 @@ import {
   TOOL_RESULT_BUDGET_CHARS,
   type TurnResult,
 } from './types.js';
+import { sanitizeWorkCall } from './work-message.js';
 
 /**
  * What the provider said before a call failed, on the span that failed.
@@ -1358,12 +1359,13 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     // the model's and the contents are opaque. A `?? []` because an adapter
     // may legitimately have none (openai-compat says so with `[]`), not
     // because absence is expected here.
+    const toolCalls = result.toolCalls.map((call) => sanitizeWorkCall(run, call));
     run.messages.push({
       role: 'assistant',
       content: [
         ...(result.thinking ?? []),
         ...(result.text ? [{ type: 'text' as const, text: result.text }] : []),
-        ...result.toolCalls.map((c) => ({
+        ...toolCalls.map((c) => ({
           type: 'tool_use' as const,
           id: c.id,
           name: c.name,
@@ -1400,7 +1402,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     if (!checkpoint(scope)) return finish(scope, 'error', '');
 
     const results: ContentBlock[] = [];
-    for (const call_ of result.toolCalls) {
+    for (const [index, call_] of toolCalls.entries()) {
       // Checked between tools, not only before the next model call: a Ctrl+C
       // during a run of tool calls used to do nothing visible until the batch
       // finished, which for a slow batch is indistinguishable from being
@@ -1429,7 +1431,12 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       }
       run.toolCallsMade += 1;
       try {
-        const outcome = await runTool(deps, snapshot, turn, call_, input, exposed, toolContext);
+        const outcome = await runTool(deps, snapshot, turn, call_, input, exposed, toolContext, {
+          record,
+          run,
+          size: toolCalls.length,
+          index,
+        });
         results.push(outcome);
         noteSensitiveResourceEcho(call_, outcome);
       } catch (error) {

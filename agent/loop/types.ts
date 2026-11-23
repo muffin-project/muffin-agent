@@ -17,7 +17,10 @@ import type { TurnStopped, TurnStore } from '../../core/turns/store.js';
 import type { TodoStore } from '../../core/turns/todo.js';
 import type { WaitSpec } from '../../core/turns/wait.js';
 import type { UndoJournal } from '../../core/undo/journal.js';
-import type { CapabilityDiscoveryPort } from '../capability-exposure.js';
+import type {
+  CapabilityDiscoveryPort,
+  CapabilityExposureSnapshot,
+} from '../capability-exposure.js';
 import type { IstanzaFacts, SystemPrompts } from '../context/assemble.js';
 import type { Profile, ProfileOrigin } from '../profiles/profile.js';
 import type { AudioBlock, ImageBlock, Provider, ToolSpec } from '../providers/types.js';
@@ -120,11 +123,19 @@ export type ToolContext = {
    * is the same semantics the prior art landed on independently (Hermes parks
    * the *next* turn, ADR-0035's `steer` injects after the next tool call).
    *
-   * Only `wait` calls it. It is on every context rather than injected into one
-   * tool because a tool is registered once at boot and shared by every turn,
-   * so the barrier has to travel with the turn — not with the tool.
+   * The barrier travels with the turn rather than a tool shared between turns.
    */
   suspend: (spec: WaitSpec) => void;
+  /** Trusted, call-local port; never populated from model arguments. */
+  workMessage?: {
+    available: () => boolean;
+    messageId: string;
+    solo: boolean;
+    withinBudget: boolean;
+    questionWakeAt: () => string | null;
+    sanitize: (text: string) => string;
+    send: (text: string) => ReturnType<NonNullable<LoopDeps['sendWorkMessage']>>;
+  };
   /**
    * Turn-local progressive capability projection (#469).
    *
@@ -133,6 +144,8 @@ export type ToolContext = {
    * before the model call; execution still goes through runTool + the kernel.
    */
   capabilityDiscovery?: CapabilityDiscoveryPort | undefined;
+  /** Current model menu, also on the under-cap path where discovery is absent. */
+  toolExposure?: (() => CapabilityExposureSnapshot) | undefined;
   /** Durability guard for this turn: a write failure disables later tools. */
   durability?: {
     failure: () => string | null;
@@ -521,6 +534,16 @@ export type RegisteredTool = {
 };
 
 export type LoopDeps = {
+  /** Telegram gateway's journaled progress delivery, addressed by the canonical turn. */
+  sendWorkMessage?:
+    | ((
+        turnId: string,
+        messageId: string,
+        text: string,
+      ) => Promise<'sent' | 'possibly_sent' | 'deferred'>)
+    | undefined;
+  /** Read the effective owner binding on demand, including a newly paired owner. */
+  workMessageOwner?: (() => { userId?: number; chatId?: number }) | undefined;
   /** Refresh persisted main-model settings immediately before a turn enters execution. */
   prepareTurn?: (() => void) | undefined;
   /** The active runtime facts; entry points snapshot these before running. */

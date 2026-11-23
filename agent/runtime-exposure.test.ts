@@ -7,6 +7,12 @@ import { CAPABILITY_SEARCH_TOOL_NAME, createCapabilityExposure } from './capabil
 import { visibleTools } from './context/assemble.js';
 import { loadProfiles, selectProfile } from './profiles/profile.js';
 import { baseToolOrder, buildRuntime } from './runtime.js';
+import { WORK_MESSAGE_TOOL_NAME } from './tools/work-message.js';
+
+// This fixture simulates the base menu, without a bound Telegram turn.
+function baseMenuName(name: string): boolean {
+  return name !== CAPABILITY_SEARCH_TOOL_NAME && name !== WORK_MESSAGE_TOOL_NAME;
+}
 
 /**
  * Native registration order and the #469 model-visible projection.
@@ -38,7 +44,7 @@ function realRuntime(): {
 function ownerProjection(runtime: ReturnType<typeof buildRuntime>, maxToolsExposed: number) {
   const principal = { kind: 'owner', connector: 'cli', externalId: 'local' } as const;
   const eligible = visibleTools(
-    runtime.deps.tools,
+    runtime.deps.tools.filter((tool) => tool.spec.name !== WORK_MESSAGE_TOOL_NAME),
     principal,
     runtime.deps.capabilities,
     runtime.deps.grants?.get('host'),
@@ -79,11 +85,7 @@ describe('quali tool vede davvero un turno', () => {
   it('l’ordine di registrazione è quello dichiarato, e cambiarlo fallisce qui', () => {
     const rt = realRuntime();
     rt.close();
-    expect(
-      rt.names.filter(
-        (n) => !SANDBOXED.includes(n) && n !== CAPABILITY_SEARCH_TOOL_NAME,
-      ),
-    ).toEqual(REGISTERED);
+    expect(rt.names.filter((n) => !SANDBOXED.includes(n) && baseMenuName(n))).toEqual(REGISTERED);
     expect(rt.names).toContain(CAPABILITY_SEARCH_TOOL_NAME);
   });
 
@@ -102,7 +104,7 @@ describe('quali tool vede davvero un turno', () => {
     // ADR-0074 punto 4 vieta — qui si vede, invece di passare inosservata.
     expect(SANDBOXED.some((n) => rt.names.includes(n))).toBe(conteneva);
     expect(baseToolOrder({ sandboxAvailable: conteneva, searchOn: false })).toEqual(
-      rt.names.filter((name) => name !== CAPABILITY_SEARCH_TOOL_NAME),
+      rt.names.filter(baseMenuName),
     );
   });
 
