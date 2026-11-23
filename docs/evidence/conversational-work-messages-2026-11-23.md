@@ -72,7 +72,11 @@ absolute path through the native reply match. The gateway fixture checks that
 the waiting turn receives the path once and delivers its result. The crash
 and uncertain-receipt cases still exercise ordinary prose replies.
 
-A separate review probe observed that a definitive Telegram 429 during a
-resumed final delivery can leave the turn failed and its journal part pending
-after restart, with the owner binding still valid. Automatic recovery from
-that refusal remains unverified for this implementation.
+A definitive Telegram 429 formerly left the resumed final marked failed and
+stranded its journal part with a valid owner binding. The connector now waits
+the indicated delay and re-enters the frozen final delivery plan once. Rich
+and legacy fallback fixtures observe two identical attempts for the rejected
+part and one confirmed receipt, without repeating the model turn. Revoking
+the binding during the rejected attempt stops the second wire write. A restart
+may resume a pending delivery before the original delay elapses. A second 429
+remains a visible delivery failure.

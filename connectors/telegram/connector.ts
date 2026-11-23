@@ -1846,41 +1846,41 @@ export class TelegramConnector {
       };
     });
 
+    const canAttempt =
+      checkAuthority && ((part: { chatId: number }) => checkAuthority(part.chatId));
+    const send = (plan: TelegramDeliveryPlanPart[]) =>
+      deliverTelegram(
+        this.deps.delivery,
+        this.deps.api,
+        turnId,
+        plan,
+        () => this.now(),
+        leaseIndex,
+        canAttempt,
+      );
+    let plan = legacy;
     // In DMs, the answer uses the same blocks as the draft. A hosted approval
     // adds its receipt beneath the answer and reuses the message ID.
     if (isPrivate) {
       const turn = turnRichMessage(text, handoff?.approvals);
       const first = legacy[0];
       if (turn !== null && first !== undefined && richFitsHard(turn) === null) {
-        return deliverTelegram(
-          this.deps.delivery,
-          this.deps.api,
-          turnId,
-          [{ ...first, kind: 'rich' as const, rich: turn, fallback: legacy }],
-          () => this.now(),
-          leaseIndex,
-          checkAuthority && ((part) => checkAuthority(part.chatId)),
-        );
+        plan = [{ ...first, kind: 'rich', rich: turn, fallback: legacy }];
       }
-      return deliverTelegram(
-        this.deps.delivery,
-        this.deps.api,
-        turnId,
-        legacy,
-        () => this.now(),
-        leaseIndex,
-        checkAuthority && ((part) => checkAuthority(part.chatId)),
-      );
+    } else {
+      plan = this.maybeRich(text, combined, legacy);
     }
-    return deliverTelegram(
-      this.deps.delivery,
-      this.deps.api,
-      turnId,
-      this.maybeRich(text, combined, legacy),
-      () => this.now(),
-      leaseIndex,
-      checkAuthority && ((part) => checkAuthority(part.chatId)),
-    );
+    try {
+      return await send(plan);
+    } catch (error) {
+      if (canAttempt === undefined || !(error instanceof TelegramError) || error.status !== 429)
+        throw error;
+      // Only a definitive rejection is retryable. Re-enter the frozen plan to
+      // skip any delivered parts and check live authority before another write.
+      await this.sleep(((error.retryAfter ?? 1) + 1) * 1000, this.abortController?.signal);
+      if (this.stopping) return 'deferred';
+      return send(plan);
+    }
   }
 
   /**

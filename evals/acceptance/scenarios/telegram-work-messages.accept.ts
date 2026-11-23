@@ -541,6 +541,63 @@ describe('acceptance · Telegram messages during work', () => {
     90_000,
   );
 
+  it.each(['rich', 'legacy fallback'] as const)(
+    'delivers a resumed %s final after a definitive rate limit',
+    async (format) => {
+      const final = 'The selected pickup day is Saturday.';
+      await withTelegram(
+        [
+          {
+            tool: {
+              name: 'work_message',
+              args: { text: 'What day is pickup?', wait_for_reply: true },
+            },
+          },
+          { text: final },
+        ],
+        async (inst, telegram) => {
+          await withGateway(inst, async () => {
+            telegram.deliver(dm(101, OWNER, 101, 'Draft my pickup confirmation.'));
+            await until(
+              () =>
+                turns(inst)[0]?.status === 'waiting' && deliveryParts(inst)[0]?.status === 'sent',
+            );
+            const asked = bubbles(telegram)[0];
+            if (asked?.id === undefined) throw new Error('Question missing its native message ID');
+            const wireBefore = telegram.sent().length;
+            if (format === 'legacy fallback')
+              telegram.guasta('sendMessage', 400, 'RICH_MESSAGE_INVALID');
+            telegram.guasta('sendMessage', 429, 'Too Many Requests');
+            telegram.deliver(
+              dm(102, OWNER, 102, 'Saturday', { messageId: asked.id, text: asked.text }),
+            );
+            await until(
+              () => turns(inst)[0]?.status === 'done' && turns(inst)[0]?.delivery !== 'pending',
+            );
+            expect(turns(inst)[0]?.delivery).toBe('sent');
+            const attempts = telegram
+              .sent()
+              .slice(wireBefore)
+              .filter((call) => call.method === 'sendMessage');
+            expect(attempts).toHaveLength(format === 'rich' ? 2 : 3);
+            const confirmed = attempts.at(-1);
+            expect(confirmed?.payload).toEqual(attempts.at(-2)?.payload);
+            expect(String(confirmed?.payload.text)).toContain(final);
+            const turn = turns(inst)[0];
+            expect(turn).toBeDefined();
+            expect(
+              deliveryParts(inst).filter(
+                (row) => row.turn_id === turn?.id && row.status === 'sent',
+              ),
+            ).toEqual([sentPart(turn?.id ?? '', confirmed?.messageId)]);
+            expect(inst.provider.main()).toHaveLength(2);
+          });
+        },
+      );
+    },
+    60_000,
+  );
+
   it.each(['rich rejection', 'first fallback', 'rate limit'] as const)(
     'stops new final wire attempts when the binding is revoked at %s',
     async (fault) => {
@@ -586,9 +643,7 @@ describe('acceptance · Telegram messages during work', () => {
             await until(
               () => turns(inst)[0]?.status === 'done' && turns(inst)[0]?.delivery !== 'pending',
             );
-            expect(turns(inst)[0]?.delivery).toMatch(
-              rateLimited ? /^failed:Telegram 429/ : /^failed:Work reply is no longer authorized/,
-            );
+            expect(turns(inst)[0]?.delivery).toMatch(/^failed:Work reply is no longer authorized/);
             const wire = telegram
               .sent()
               .slice(wireBefore)
