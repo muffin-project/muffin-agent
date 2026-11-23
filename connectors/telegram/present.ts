@@ -1,6 +1,12 @@
-import { TelegramError, type InlineButton, type TelegramApiLike } from './api.js';
+import { type InlineButton, type TelegramApiLike, TelegramError } from './api.js';
 import { splitHtml, toTelegramHtml } from './render.js';
-import { richFitsHard, richFromHtml, countRich, RICH_COMPAT_CHARS, type OutboundRich } from './rich.js';
+import {
+  countRich,
+  type OutboundRich,
+  RICH_COMPAT_CHARS,
+  richFitsHard,
+  richFromHtml,
+} from './rich.js';
 
 /**
  * La presentazione di un messaggio owner-visible **fuori dal turno**.
@@ -74,7 +80,9 @@ export type PresentTarget = {
   /** Tastiera inline: sul messaggio ricco, o sull'ultimo pezzo legacy. */
   keyboard?: InlineButton[][];
   /** Wrap only the send that carries the keyboard, before chunk errors are decorated. */
-  sendWithKeyboard?: (send: () => Promise<{ message_id: number }>) => Promise<{ message_id: number }>;
+  sendWithKeyboard?: (
+    send: () => Promise<{ message_id: number }>,
+  ) => Promise<{ message_id: number }>;
 };
 
 /**
@@ -106,13 +114,19 @@ export async function present(
   const send = (
     keyboard: InlineButton[][] | undefined,
     write: () => Promise<{ message_id: number }>,
-  ) => keyboard !== undefined && target.sendWithKeyboard !== undefined
-    ? target.sendWithKeyboard(write)
-    : write();
+  ) =>
+    keyboard !== undefined && target.sendWithKeyboard !== undefined
+      ? target.sendWithKeyboard(write)
+      : write();
   if (p.rich !== null) {
     try {
       if (target.editMessageId !== undefined) {
-        await api.editMessageRichText(target.chatId, target.editMessageId, p.rich, target.keyboard === undefined ? {} : { keyboard: target.keyboard });
+        await api.editMessageRichText(
+          target.chatId,
+          target.editMessageId,
+          p.rich,
+          target.keyboard === undefined ? {} : { keyboard: target.keyboard },
+        );
       } else {
         const rich = p.rich;
         const mandato = await send(target.keyboard, () =>
@@ -139,9 +153,18 @@ export async function present(
     const ultimo = i === pezzi.length - 1;
     // La tastiera sta sul messaggio che la porta: quello editato, o l'ultimo
     // pezzo di una send. `keyboard: []` è la rimozione esplicita.
-    const keyboard = target.editMessageId !== undefined ? (primo ? target.keyboard : undefined) : ultimo ? target.keyboard : undefined;
+    const keyboard =
+      target.editMessageId !== undefined
+        ? primo
+          ? target.keyboard
+          : undefined
+        : ultimo
+          ? target.keyboard
+          : undefined;
     const options = {
-      ...(primo && target.editMessageId === undefined && target.replyTo !== undefined ? { replyTo: target.replyTo } : {}),
+      ...(primo && target.editMessageId === undefined && target.replyTo !== undefined
+        ? { replyTo: target.replyTo }
+        : {}),
       ...(keyboard === undefined ? {} : { keyboard }),
     };
     try {

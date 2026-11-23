@@ -106,8 +106,8 @@ export type Transcript = {
    * `true` quando la domanda è stata presa; `false` quando nessun messaggio
    * vivo può ospitarla (trascrizione spenta o già fallita) e il chiamante deve
    * ripiegare sul messaggio autonomo — la garanzia che la domanda esista
-    * sempre, anche dove il messaggio del turno non c'è. `uncertain` leaves
-    * the existing approval actionable without posting a fallback keyboard.
+   * sempre, anche dove il messaggio del turno non c'è. `uncertain` leaves
+   * the existing approval actionable without posting a fallback keyboard.
    */
   ask(input: {
     request: ApprovalRequest;
@@ -437,7 +437,8 @@ export function startTranscript(
         return;
       }
       disabled = true;
-      if (!(error instanceof TelegramError && error.status > 0)) uncertainApprovalId = inAttesa?.approvalId;
+      if (!(error instanceof TelegramError && error.status > 0))
+        uncertainApprovalId = inAttesa?.approvalId;
       log(
         `telegram: trascrizione del turno sospesa — ${error instanceof Error ? error.message : String(error)}`,
       );

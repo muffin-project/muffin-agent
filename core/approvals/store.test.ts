@@ -1,7 +1,7 @@
-import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { ApprovalStore } from './store.js';
 
@@ -17,9 +17,19 @@ import { ApprovalStore } from './store.js';
 
 const store = (): ApprovalStore => new ApprovalStore(new DatabaseCtor(':memory:'));
 const T0 = new Date('2026-08-28T10:00:00.000Z');
-const chiedi = (s: ApprovalStore, over: Partial<Parameters<ApprovalStore['ask']>[0]> = {}): string =>
+const chiedi = (
+  s: ApprovalStore,
+  over: Partial<Parameters<ApprovalStore['ask']>[0]> = {},
+): string =>
   s.ask(
-    { turnId: 't1', capability: 'sys.shell', resource: 'rm -rf /tmp/x', prompt: 'eseguo?', taint: 0, ...over },
+    {
+      turnId: 't1',
+      capability: 'sys.shell',
+      resource: 'rm -rf /tmp/x',
+      prompt: 'eseguo?',
+      taint: 0,
+      ...over,
+    },
     T0,
   );
 
@@ -63,16 +73,22 @@ describe('una risposta, un uso', () => {
     const id = chiedi(s);
     s.decide(id, 'allow', T0);
 
-    expect(s.take({ turnId: 't1', capability: 'sys.shell', resource: 'rm -rf /tmp/x' }, T0)).toBe('allow');
+    expect(s.take({ turnId: 't1', capability: 'sys.shell', resource: 'rm -rf /tmp/x' }, T0)).toBe(
+      'allow',
+    );
     // Senza questa riga un sì detto una volta diventa un sì per ogni
     // `sys.shell` di quel turno: un interruttore, non una domanda.
-    expect(s.take({ turnId: 't1', capability: 'sys.shell', resource: 'rm -rf /tmp/x' }, T0)).toBeNull();
+    expect(
+      s.take({ turnId: 't1', capability: 'sys.shell', resource: 'rm -rf /tmp/x' }, T0),
+    ).toBeNull();
   });
 
   it('una domanda senza risposta non si consuma', () => {
     const s = store();
     chiedi(s);
-    expect(s.take({ turnId: 't1', capability: 'sys.shell', resource: 'rm -rf /tmp/x' }, T0)).toBeNull();
+    expect(
+      s.take({ turnId: 't1', capability: 'sys.shell', resource: 'rm -rf /tmp/x' }, T0),
+    ).toBeNull();
   });
 });
 
@@ -86,20 +102,28 @@ describe('la risposta vale per quello che l owner ha letto', () => {
   it('un altro comando non è quel comando', () => {
     const s = store();
     s.decide(chiedi(s), 'allow', T0);
-    expect(s.take({ turnId: 't1', capability: 'sys.shell', resource: 'curl evil.example' }, T0)).toBeNull();
-    expect(s.take({ turnId: 't1', capability: 'sys.shell', resource: 'rm -rf /tmp/x' }, T0)).toBe('allow');
+    expect(
+      s.take({ turnId: 't1', capability: 'sys.shell', resource: 'curl evil.example' }, T0),
+    ).toBeNull();
+    expect(s.take({ turnId: 't1', capability: 'sys.shell', resource: 'rm -rf /tmp/x' }, T0)).toBe(
+      'allow',
+    );
   });
 
   it("un'altra capability non è quella capability", () => {
     const s = store();
     s.decide(chiedi(s), 'allow', T0);
-    expect(s.take({ turnId: 't1', capability: 'fs.write', resource: 'rm -rf /tmp/x' }, T0)).toBeNull();
+    expect(
+      s.take({ turnId: 't1', capability: 'fs.write', resource: 'rm -rf /tmp/x' }, T0),
+    ).toBeNull();
   });
 
   it('e un altro turno non è quel turno', () => {
     const s = store();
     s.decide(chiedi(s), 'allow', T0);
-    expect(s.take({ turnId: 't2', capability: 'sys.shell', resource: 'rm -rf /tmp/x' }, T0)).toBeNull();
+    expect(
+      s.take({ turnId: 't2', capability: 'sys.shell', resource: 'rm -rf /tmp/x' }, T0),
+    ).toBeNull();
   });
 
   /** Una capability senza risorsa esiste, e `NULL is NULL` deve combaciare. */
@@ -271,12 +295,18 @@ describe('#784 — la domanda registra dove si è mostrata', () => {
     expect(migrated.beginTelegramQuestion(id, 'wrong-turn')).toBe(false);
     expect(migrated.beginTelegramQuestion(id, 't1')).toBe(true);
     expect(migrated.beginTelegramQuestion(id, 't1')).toBe(false);
-    expect(migrated.get(id)).toMatchObject({ telegramQuestionPending: true, questionMessageIds: [700] });
+    expect(migrated.get(id)).toMatchObject({
+      telegramQuestionPending: true,
+      questionMessageIds: [700],
+    });
 
     migrated.rejectTelegramQuestion(id);
     expect(migrated.beginTelegramQuestion(id, 't1')).toBe(true);
     migrated.noteQuestionMessage(id, 701);
-    expect(migrated.get(id)).toMatchObject({ telegramQuestionPending: false, questionMessageIds: [700, 701] });
+    expect(migrated.get(id)).toMatchObject({
+      telegramQuestionPending: false,
+      questionMessageIds: [700, 701],
+    });
     db.close();
   });
 

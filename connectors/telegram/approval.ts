@@ -1,5 +1,5 @@
 import type { ApprovalRequest, Approver } from '../../agent/loop.js';
-import { TelegramError, type InlineButton, type TelegramApi, type TelegramApiLike } from './api.js';
+import { type InlineButton, type TelegramApi, type TelegramApiLike, TelegramError } from './api.js';
 import { present, presentationOfHtml } from './present.js';
 import { escapeHtml } from './render.js';
 

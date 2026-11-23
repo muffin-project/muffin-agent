@@ -1,5 +1,5 @@
-import type DatabaseCtor from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
+import type DatabaseCtor from 'better-sqlite3';
 import { ensureColumn } from '../lock/durable.js';
 import type { TrustTier } from '../policy/types.js';
 
@@ -239,7 +239,9 @@ export class ApprovalStore {
           AND decision IS NOT NULL AND consumed_at IS NULL
         ORDER BY decided_at ASC LIMIT 1`,
     );
-    this.consumeStmt = db.prepare(`UPDATE approvals SET consumed_at = @at WHERE id = @id AND consumed_at IS NULL`);
+    this.consumeStmt = db.prepare(
+      `UPDATE approvals SET consumed_at = @at WHERE id = @id AND consumed_at IS NULL`,
+    );
     this.openStmt = db.prepare(
       `SELECT * FROM approvals WHERE turn_id = ? AND decision IS NULL AND withdrawn_at IS NULL
         ORDER BY asked_at ASC LIMIT 1`,
@@ -272,7 +274,9 @@ export class ApprovalStore {
       `UPDATE approvals SET telegram_question_pending = 1
        WHERE id = ? AND turn_id = ? AND telegram_question_pending = 0`,
     );
-    this.rejectTelegramQuestionStmt = db.prepare(`UPDATE approvals SET telegram_question_pending = 0 WHERE id = ?`);
+    this.rejectTelegramQuestionStmt = db.prepare(
+      `UPDATE approvals SET telegram_question_pending = 0 WHERE id = ?`,
+    );
     this.withdrawnQuestionsStmt = db.prepare(
       `SELECT id, question_message_ids FROM approvals
         WHERE turn_id = ? AND withdrawn_at IS NOT NULL AND question_message_ids IS NOT NULL
@@ -294,7 +298,13 @@ export class ApprovalStore {
    * senza pulsanti, fino alla scadenza (#745).
    */
   ask(
-    req: { turnId: string; capability: string; resource?: string | undefined; prompt: string; taint: TrustTier },
+    req: {
+      turnId: string;
+      capability: string;
+      resource?: string | undefined;
+      prompt: string;
+      taint: TrustTier;
+    },
     now: Date,
   ): string {
     const aperta = this.openForStmt.get({
@@ -407,10 +417,14 @@ export class ApprovalStore {
    * niente id, niente edit, mai un falso.
    */
   withdrawnQuestionMessages(turnId: string): Array<{ id: string; messageId: number }> {
-    const rows = this.withdrawnQuestionsStmt.all(turnId) as { id: string; question_message_ids: string | null }[];
+    const rows = this.withdrawnQuestionsStmt.all(turnId) as {
+      id: string;
+      question_message_ids: string | null;
+    }[];
     const out: Array<{ id: string; messageId: number }> = [];
     for (const r of rows) {
-      for (const messageId of leggiDomande(r.question_message_ids)) out.push({ id: r.id, messageId });
+      for (const messageId of leggiDomande(r.question_message_ids))
+        out.push({ id: r.id, messageId });
     }
     return out;
   }

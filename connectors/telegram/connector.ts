@@ -98,9 +98,13 @@ type ApprovalDecide = (
   now: Date,
   by?: 'owner' | 'delegation',
 ) => 'ok' | 'already' | 'unknown' | 'withdrawn';
-type ApprovalGet = (
-  id: string,
-) => { id: string; turnId: string; capability: string; resource: string | null; telegramQuestionPending: boolean } | null;
+type ApprovalGet = (id: string) => {
+  id: string;
+  turnId: string;
+  capability: string;
+  resource: string | null;
+  telegramQuestionPending: boolean;
+} | null;
 type ApprovalOpenRows = (turnId: string) => { id: string }[];
 /**
  * Solo i due metodi che la chiusura orfana usa (#784): registrare dove una
@@ -1806,7 +1810,8 @@ export class TelegramConnector {
     const chatId = where.replyTo?.['chatId'];
     const { approvalId, turnId } = where;
     const approvals = this.deps.approvals;
-    if (typeof chatId !== 'number' || approvalId === undefined || approvals === undefined) return 'unavailable';
+    if (typeof chatId !== 'number' || approvalId === undefined || approvals === undefined)
+      return 'unavailable';
     const row = approvals.get(approvalId);
     if (row === null || row.turnId !== turnId) return 'unavailable';
     if (row.telegramQuestionPending) return 'asked';
@@ -1817,7 +1822,11 @@ export class TelegramConnector {
     const transcript = this.transcriptVivi.get(chatId);
     if (transcript !== undefined) {
       let began = false;
-      const presa = await transcript.ask({ request, approvalId, begin: () => (began = attempt.begin()) });
+      const presa = await transcript.ask({
+        request,
+        approvalId,
+        begin: () => (began = attempt.begin()),
+      });
       // Telegram may already have posted the question. Wait for its callback
       // on the existing approval row; do not post a second keyboard.
       if (presa === 'uncertain') return 'asked';
