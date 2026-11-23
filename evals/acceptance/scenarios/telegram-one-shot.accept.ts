@@ -1,9 +1,28 @@
+import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { seal } from '../../../core/rot/verify.js';
-import { install, until } from '../harness.js';
-import { privateMessage, startFakeTelegram } from '../telegram.js';
+import { type Install, install, until } from '../harness.js';
+import { type FakeTelegram, privateMessage, startFakeTelegram } from '../telegram.js';
+
+async function pairTelegram(inst: Install, telegram: FakeTelegram, ownerId: number): Promise<void> {
+  // Text-only fixture. Avoid downloading the unrelated speech model at setup.
+  mkdirSync(join(inst.home, 'models'), { recursive: true });
+  writeFileSync(join(inst.home, 'models', 'ggml-base.bin'), 'unused text-only fixture');
+  expect((await inst.muffin(['secret', 'set', 'telegram_token'], '123:fixture-only')).code).toBe(0);
+  const enabled = await inst.muffin([
+    'surface',
+    'enable',
+    'telegram',
+    '--api-base',
+    telegram.url,
+    '--owner',
+    String(ownerId),
+  ]);
+  expect(enabled.code, enabled.err).toBe(0);
+  seal(inst.home, '1', new Date());
+}
 
 describe('acceptance · #598 · deferred work delivery', () => {
   it('refuses deferred delivery over the temporary forwarded CLI connection', async () => {
@@ -31,6 +50,53 @@ describe('acceptance · #598 · deferred work delivery', () => {
     }
   }, 60_000);
 
+  it('does not redirect a resumed terminal request to the default Telegram chat', async () => {
+    const ownerId = 424242;
+    const request = 'Wait for my synthetic dependency, then do the comparison in background.';
+    const result = 'The original conversation cannot receive a later result.';
+    const barrier = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)']);
+    try {
+      if (barrier.pid === undefined) throw new Error('Could not start the fixture dependency');
+      const inst = await install({
+        env: { MUFFIN_GATEWAY_TICK_MS: '200' },
+        main: [
+          { tool: { name: 'wait', args: { seconds: 60, until_process_exits: barrier.pid } } },
+          { tool: { name: 'schedule_once', args: { goal: 'Compare the shipping quotes' } } },
+          { text: result },
+        ],
+      });
+      const telegram = await startFakeTelegram();
+      try {
+        await pairTelegram(inst, telegram, ownerId);
+        const configured = await inst.muffin(['surface', 'default', 'telegram']);
+        expect(configured.code, configured.err).toBe(0);
+        const gateway = await inst.gateway();
+        await gateway.waitFor(/muffin gateway/, 15_000);
+        const reply = await inst.muffin(['run', '--json', '--timeout', '40', request]);
+        expect(reply.code, reply.err).toBe(6);
+        const initial = JSON.parse(reply.out) as { stopped: string; turnId: string };
+        expect(initial.stopped).toBe('suspended');
+        barrier.kill();
+        await until(
+          () =>
+            inst.db((db) =>
+              db.prepare('SELECT status FROM turns WHERE id = ?').pluck().get(initial.turnId),
+            ) === 'done',
+        );
+        expect(inst.db((db) => db.prepare('SELECT * FROM jobs').all())).toHaveLength(0);
+        expect(inst.provider.main()).toHaveLength(3);
+        expect(inst.provider.main()[2]?.transcript).toContain('No job was created.');
+        expect(telegram.messages()).toEqual([]);
+        await gateway.stop();
+      } finally {
+        await inst.cleanup();
+        await telegram.close();
+      }
+    } finally {
+      if (barrier.exitCode === null) barrier.kill();
+    }
+  }, 60_000);
+
   it('survives gateway restart before firing and sends one final receipt to the original chat', async () => {
     const owner = { id: 424242, name: 'Synthetic owner' };
     const filename = 'one-shot-evidence.txt';
@@ -54,23 +120,7 @@ describe('acceptance · #598 · deferred work delivery', () => {
     });
     const telegram = await startFakeTelegram();
     try {
-      // Text-only fixture. Avoid downloading the unrelated speech model at setup.
-      mkdirSync(join(inst.home, 'models'), { recursive: true });
-      writeFileSync(join(inst.home, 'models', 'ggml-base.bin'), 'unused text-only fixture');
-      expect(
-        (await inst.muffin(['secret', 'set', 'telegram_token'], '123:fixture-only')).code,
-      ).toBe(0);
-      const enabled = await inst.muffin([
-        'surface',
-        'enable',
-        'telegram',
-        '--api-base',
-        telegram.url,
-        '--owner',
-        String(owner.id),
-      ]);
-      expect(enabled.code, enabled.err).toBe(0);
-      seal(inst.home, '1', new Date());
+      await pairTelegram(inst, telegram, owner.id);
 
       const gateway = await inst.gateway();
       await gateway.waitFor(/muffin gateway/, 15_000);

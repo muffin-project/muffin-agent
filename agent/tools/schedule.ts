@@ -31,9 +31,9 @@ import type { ToolSpec } from '../providers/types.js';
  *   l'intrinseco esclude per costruzione il caso differito) sulla riga;
  * - il giro futuro parte da quel taint, in quel tenant, attribuito al job
  *   (`agent/scheduler-run.ts` legge la riga invece del letterale 0);
- * - il canale di consegna NON è un argomento: è `ctx.replyChannel` o il
- *   default di superficie. Un destinatario scelto dal modello sarebbe un nuovo
- *   recipient — effetto `outward` — dentro una capability `context`.
+ * - delivery requires the originating conversation's `ctx.replyChannel`.
+ *   Picking a destination would be a new outward effect inside a context
+ *   capability, even if a default surface is configured.
 + *
 + * Contratto di cardinalità: one accepted durable schedule effect → one Job.
 + * Due chiamate distinte con gli stessi argomenti sono due richieste
@@ -170,16 +170,6 @@ export function makeScheduleTool(
     jobs: JobStore;
     /** La zona dell'owner dal RoT sigillato — mai quella del processo. */
     defaultTimezone: string;
-    /**
-     * Dove recapitare quando il turno non ha un canale vivo (CLI in-band).
-     *
-     * Una funzione e non un valore, per la stessa ragione di `CommitmentLaneDeps.channel`:
-     * `surfaces.default` si gira con `muffin surface default` da un altro
-     * processo mentre il gateway resta acceso — un valore letto al boot
-     * obbedirebbe per sempre a un ieri. `config.json` è fuori dal sigillo, una
-     * rilettura non attraversa nessun confine di fiducia.
-     */
-    defaultChannel: string | (() => string);
   },
   mode: 'recurring' | 'once' = 'recurring',
 ): RegisteredTool {
@@ -228,21 +218,16 @@ export function makeScheduleTool(
       // Il canale è dove è nata la conversazione, mai un destinatario scelto
       // dal modello: quello sarebbe un nuovo recipient dentro una capability
       // `context`.
-      const fallback =
-        typeof deps.defaultChannel === 'function' ? deps.defaultChannel() : deps.defaultChannel;
-      const channel =
-        typeof ctx.replyChannel === 'string' && ctx.replyChannel !== ''
-          ? ctx.replyChannel
-          : fallback;
-      if (forwardIdOf(channel) !== null) {
+      const channel = ctx.replyChannel;
+      if (!channel || forwardIdOf(channel) !== null) {
         return {
           content:
-            'This terminal command closes before later results can be delivered. No job was created. Offer to do the work now or ask the owner to start the request from a connected messaging conversation for later delivery.',
+            'This conversation has no address for a later result. No job was created. Offer to do the work now or ask the owner to start the request from a connected messaging conversation for later delivery.',
           isError: true,
           tier: CLEAN,
         };
       }
-      const surface = channel.split(':')[0] ?? fallback;
+      const surface = channel.split(':', 1)[0] ?? channel;
       const timezone = parsed.data.timezone?.trim() || deps.defaultTimezone;
       const jobInput = {
         timezone,
