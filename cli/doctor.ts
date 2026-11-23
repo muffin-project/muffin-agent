@@ -300,8 +300,8 @@ export async function runDoctor(
   const p = paths(home);
   const checks: Check[] = [];
   const ok = (name: string, detail: string) => checks.push({ name, level: 'ok', detail });
-  const warn = (name: string, detail: string, remedy: string) =>
-    checks.push({ name, level: 'warn', detail, remedy });
+  const warn = (name: string, detail: string, remedy?: string) =>
+    checks.push({ name, level: 'warn', detail, ...(remedy === undefined ? {} : { remedy }) });
   const fail = (name: string, detail: string, remedy: string) =>
     checks.push({ name, level: 'fail', detail, remedy });
 
@@ -613,10 +613,8 @@ export async function runDoctor(
   if (config.rot.mode === 'single-user') {
     warn(
       'root of trust mode',
-      'ogni capability che non si annulla (`sys.shell` in testa) ti chiede sempre conferma e non diventa mai un allow ' +
-        'silenzioso: se qualcosa modifica questi file mentre gira come te, Muffin se ne accorge solo dopo, non lo ' +
-        'impedisce prima — è la modalità single-user: le manomissioni sono rilevate, non impedite',
-      '`muffin rot harden` stampa i comandi per rendere vero il blocco su questa macchina, e cosa cambia una volta fatto',
+      'The seal checks for changes; it does not prevent another process running as you ' +
+        'from replacing the rules and their seal (single-user). OS hardening does not change approvals.',
     );
   } else {
     const hardening = hardeningHolds(home);
@@ -624,8 +622,8 @@ export async function runDoctor(
       ok(
         'root of trust mode',
         hardening.caveat
-          ? `hardened: prevention verified now, but narrower than usual — ${hardening.caveat}`
-          : 'hardened: this process cannot write the RoT — prevention, verified now',
+          ? `hardened: file checks passed with a limitation — ${hardening.caveat}`
+          : 'hardened: the checked files passed the OS ownership and write-permission checks',
       );
     } else {
       fail(
@@ -1048,35 +1046,16 @@ export async function runDoctor(
     } else {
       const last = consolidation.last;
       const when = last.ranAt.toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' });
-      // Nothing got through: every episode the extractor attempted failed *and*
-      // the batch added no fact. Three conjuncts, each load-bearing.
-      //
-      // `episodes` counts attempts, not successes (`ingest.ts` §`marked`), which
-      // is what makes it comparable to `errors` at all. A failed extraction is
-      // deliberately left unmarked so the next fire retries it — so a *minority*
-      // of errors is a lane that is healing itself, and escalating that to a
-      // non-zero exit would train the owner to ignore the line. What does not
-      // heal is a batch where nothing came through: those same episodes fail
-      // again next run, and again, forever (`ingest.ts` §`fetched`).
-      //
-      // `facts === 0` is not decoration. The maintenance sweep pushes its own
-      // failure into `report.errors` (`consolidator.ts` §sweep), so a run of one
-      // episode that succeeded and then tripped the sweep would otherwise land
-      // here reading as total failure — a warn over a batch that worked.
-      //
-      // **La soglia è la maggioranza, non la totalità**, e la differenza è
-      // stata misurata sull'installazione dell'owner il 27/08: gli ultimi tre
-      // giri erano 3 errori su 3 episodi, 10 su 11 e 13 su 14, tutti con zero
-      // fatti — la corsia era morta dal cambio di modello del 25/08. Il primo
-      // avvisava; gli altri due leggevano `ok` **verdi**, perché un solo
-      // episodio che non ha lanciato bastava a far fallire `errors >= episodes`
-      // per uno. Il commento sopra dice «una *minoranza* di errori è una corsia
-      // che si sta curando»: 13 su 14 non è una minoranza, quindi era la
-      // soglia a essere sbagliata, non la forma. E `facts === 0` continua a
-      // fare il lavoro che il caso dello sweep chiede — un giro che ha
-      // prodotto un fatto non arriva qui comunque.
-      const nothingGotThrough =
-        last.episodes > 0 && last.facts === 0 && last.errors * 2 > last.episodes;
+      const counts =
+        `${last.episodes} ${last.episodes === 1 ? 'episodio' : 'episodi'} · ` +
+        `${last.facts} ${last.facts === 1 ? 'fatto' : 'fatti'} · ` +
+        `${last.indexed} indicizzati · ${consolidation.runs} run in totale`;
+      // The log combines extraction, judge, indexing and maintenance errors.
+      // The count cannot tell which stage failed or how many episodes failed.
+      const batchErrors =
+        last.errors > 0
+          ? ` · ${last.errors} ${last.errors === 1 ? 'errore' : 'errori'} nel batch (fase non registrata)`
+          : '';
 
       // `ConsolidationOutcome` is a closed union of four (`ran | budget | busy
       // | error`); a `switch` with an exhaustive `default` is what makes a
@@ -1098,54 +1077,19 @@ export async function runDoctor(
           );
           break;
         case 'error':
-          // The batch threw, so `execute` wrote a *blank* row — zero episodi, zero
-          // fatti, and the message only ever went to stderr. Printed through `ok`
-          // (as it was until this branch existed) that row read exactly like the
-          // quiet week above: same shape, same zeroes, green. Telling a dead lane
-          // from a quiet one is the single confusion this whole check exists to
-          // remove, so this is the one outcome that has to be a `fail`.
+          // A thrown run may have made partial progress; the row keeps the counts.
           fail(
             'consolidamento',
-            `ultimo giro ${when} (${last.trigger}) fallito: gli episodi non diventano fatti ` +
-              `e il recall resta solo-keyword · ${consolidation.runs} run in totale`,
-            "run `muffin memory extract`: rifà il giro in primo piano e stampa l'errore, che la riga non conserva",
+            `ultimo giro ${when} (${last.trigger}) fallito · ${counts}${batchErrors}`,
+            'controlla i log del processo che ha eseguito il giro per il dettaglio dell’errore',
           );
           break;
         case 'ran':
         case 'busy': {
-          if (nothingGotThrough) {
-            // Unreachable on `busy`: that outcome never accumulates episodes
-            // (`ingest.ts` returns before touching `pendingEpisodes` once the
-            // lock refuses), so this branch is a `ran`-only concern in
-            // practice even though the case is shared.
-            warn(
-              'consolidamento',
-              `ultimo giro ${when} (${last.trigger}) · ${last.errors} errori su ${last.episodes} episodi: ` +
-                `il giro è andato a vuoto e quegli episodi tornano al prossimo · ${consolidation.runs} run in totale`,
-              'run `muffin memory extract`: rifà il giro in primo piano e stampa ogni errore per esteso',
-            );
-            break;
-          }
-          ok(
-            'consolidamento',
-            `ultimo giro ${when} (${last.trigger}/${last.outcome}) · ${last.episodes} episodi · ` +
-              `${last.facts} fatti · ${consolidation.runs} run in totale` +
-              // Named even when the verdict stays green, which was the defect: a
-              // third of a batch could fail to extract and the owner read a line
-              // with nothing on it but the successes. `muffin memory stats` had
-              // been surfacing its own error count for exactly this reason
-              // (`reviewLine`); this line had not.
-              //
-              // Gated to `ran`: on `busy`, `last.errors` is the lock-refusal
-              // message `ingest.ts` pushes onto `report.errors` when
-              // `acquireIngestLock` refuses, not a per-episode extraction
-              // failure — every `busy` row has `errors >= 1`, so without this
-              // gate a lock refusal always read as "N falliti" on a run that
-              // never attempted a single episode.
-              (last.outcome === 'ran' && last.errors > 0
-                ? ` · ${last.errors} falliti, riprovati al prossimo giro`
-                : ''),
-          );
+          const summary = `ultimo giro ${when} (${last.trigger}/${last.outcome}) · ${counts}`;
+          // The busy count can include the lock refusal itself.
+          if (last.outcome === 'ran' && batchErrors) warn('consolidamento', summary + batchErrors);
+          else ok('consolidamento', summary);
           break;
         }
         default: {
