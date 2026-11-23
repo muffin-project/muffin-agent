@@ -1,7 +1,7 @@
 import type { ApprovalRequest, Approver } from '../../agent/loop.js';
-import { escapeHtml } from './render.js';
-import { present, presentationOfHtml } from './present.js';
 import type { InlineButton, TelegramApi, TelegramApiLike } from './api.js';
+import { present, presentationOfHtml } from './present.js';
+import { escapeHtml } from './render.js';
 
 /**
  * La domanda di approvazione su Telegram: un solo vocabolario per due strade.
@@ -11,8 +11,8 @@ import type { InlineButton, TelegramApi, TelegramApiLike } from './api.js';
  * 2026-09-29 l'owner ha guardato un turno con quattro comandi e ha visto
  * quattro bolle residue sotto la risposta: la domanda è un passo del turno,
  * non un canale collaterale, e quando la trascrizione del turno è viva la
- * domanda vive **sul suo messaggio** (visibile mentre è in attesa, ripiegata
- * nel Processo quando è decisa).
+ * domanda vive **sul suo messaggio** (visibile mentre è in attesa, ricevuta
+ * sotto la risposta quando è decisa).
  *
  * Questo file è il vocabolario condiviso fra le due strade:
  *
@@ -49,7 +49,12 @@ import type { InlineButton, TelegramApi, TelegramApiLike } from './api.js';
  */
 
 /** Le stesse quattro etichette di `cli/surface.ts` (e del messaggio autonomo). */
-const ETICHETTA_TAINT = ['', 'contatto noto', 'gruppo/sconosciuto', 'contenuto esterno (web o tool)'];
+const ETICHETTA_TAINT = [
+  '',
+  'contatto noto',
+  'gruppo/sconosciuto',
+  'contenuto esterno (web o tool)',
+];
 
 /** La domanda in HTML, intera: prompt, descrizione, comando, taint. */
 export function askHtml(request: ApprovalRequest): string {
@@ -73,7 +78,8 @@ export function askHtml(request: ApprovalRequest): string {
 /** La stessa domanda senza markup, per il rendering a blocchi del rich. */
 export function askPlain(request: ApprovalRequest): string {
   const righe = [`⚠ ${request.prompt}`];
-  if (request.description !== undefined && request.description !== '') righe.push(request.description);
+  if (request.description !== undefined && request.description !== '')
+    righe.push(request.description);
   if (request.resource !== undefined && request.resource !== '') righe.push(request.resource);
   if (request.taint > 0) {
     const etichetta = ETICHETTA_TAINT[request.taint];
@@ -102,7 +108,10 @@ export function askKeyboard(capability: string, approvalId: string): InlineButto
  */
 export type DomandaMostrata = (mostrata: { approvalId: string; messageId: number }) => void;
 
-export function approvatoreTelegram(api: TelegramApi | TelegramApiLike, onAsked?: DomandaMostrata): Approver {
+export function approvatoreTelegram(
+  api: TelegramApi | TelegramApiLike,
+  onAsked?: DomandaMostrata,
+): Approver {
   return async (request, where) => {
     const chatId = where.replyTo?.['chatId'];
     // Nessun indirizzo durevole vuol dire nessun posto dove far comparire la

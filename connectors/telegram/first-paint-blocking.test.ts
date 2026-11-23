@@ -1,46 +1,23 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
 import type { Update } from '@grammyjs/types';
-import { runInit } from '../../cli/init.js';
-import { buildRuntime } from '../../agent/runtime.js';
+import { describe, expect, it, vi } from 'vitest';
 import type { LoopDeps } from '../../agent/loop.js';
 import type { ChatResult, Provider } from '../../agent/providers/types.js';
-import { TelegramConnector, type TelegramConfig } from './connector.js';
+import { buildRuntime } from '../../agent/runtime.js';
+import { runInit } from '../../cli/init.js';
 import { ModelLane } from '../../core/turns/model-lane.js';
-import type { TelegramApiLike } from './api.js';
+import type { DraftOptions, TelegramApiLike } from './api.js';
+import { type TelegramConfig, TelegramConnector } from './connector.js';
 import { TelegramDeliveryStore } from './delivery.js';
 import { UpdateInbox } from './updates.js';
 
-/**
- * FIRST-TOOL FALSIFIER (owner, 2026-09-18): the frozen-timer test proved a
- * timer dependency, but the owner watched ~70 s of nothing with real timers.
- * The stronger property — the one that explains 70 s and not just 0 ms —
- * is ordering, not timing:
- *
- *   `api.sendMessage` for the FIRST `tool_start` must be INVOKED before
- *   execution enters a potentially synchronous/blocking tool handler.
- *
- * `runTool` (`agent/loop/tool-call.ts`) emits `tool_start` synchronously and
- * invokes the handler in the same stack, immediately after `onProgress`
- * returns. Anything the transcript defers past `report()`'s own stack —
- * a `setTimeout` of any length, even 0, or a `.then()` microtask — has not
- * run when a blocking handler takes the event loop, so the first visible
- * progress dies for exactly as long as the tool runs. A microtask-only fix
- * would pass a microtask-awaiting test and still fail the owner.
- *
- * This file proves the property through the production path
- * (`drain()` → `runTurn` → `runTool` → `transcript.report`), with a tool
- * whose handler monopolises the event loop on entry (deterministic
- * busy-spin, not a 70-second test) plus a deferred gate. No fake timers, no
- * sleeps, no second tool, no second model event. On the pre-fix transcript
- * it fails deterministically (0 sends at handler entry); after the fix the
- * send is already started when the handler is entered.
- */
-
 const OWNER = 4242;
 const USAGE = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 };
+const TOOL = 'first_tool_probe';
+const QUERY = 'private tool query fixture';
+const TOOL_RESULT = 'internal tool result fixture';
 
 const privateMsg = (id: number): Update =>
   ({
@@ -54,9 +31,15 @@ const privateMsg = (id: number): Update =>
     },
   }) as unknown as Update;
 
-describe('first paint beats a blocking first tool handler', () => {
-  it('shows preparation before recall and the running step before the first tool can block', async () => {
-    type Call = { method: string; text?: string; rich?: unknown; messageId?: number };
+describe('DM status before the first answer', () => {
+  it('shows stoppable status before recall and through a real tool call without exposing its details', async () => {
+    type Call = {
+      method: string;
+      text?: string;
+      rich?: unknown;
+      draftOptions?: DraftOptions;
+      messageId?: number;
+    };
     const calls: Call[] = [];
     let nextMessageId = 900;
     const api = {
@@ -69,8 +52,6 @@ describe('first paint beats a blocking first tool handler', () => {
         calls.push({ method: 'editMessageText', text: html, messageId });
         return true;
       },
-      // The final answer merges into the same message as a rich edit (Bot API
-      // 10.3); the fake records it so the merge is still observed.
       sendRichMessage: async (chatId: number, rich: unknown) => {
         const messageId = nextMessageId++;
         calls.push({ method: 'sendRichMessage', rich, messageId });
@@ -81,46 +62,54 @@ describe('first paint beats a blocking first tool handler', () => {
         return true;
       },
       sendChatAction: async () => true,
-      // Option B: the transcript's process surface in a DM is the ephemeral
-      // draft, so the first paint is a draft and must be recorded to observe
-      // the invariant.
-      sendMessageDraft: async (_chatId: number, _draftId: number, text: string) => {
-        calls.push({ method: 'sendMessageDraft', text });
+      sendMessageDraft: async (
+        _chatId: number,
+        _draftId: number,
+        text: string,
+        draftOptions: DraftOptions,
+      ) => {
+        calls.push({ method: 'sendMessageDraft', text, draftOptions });
         return true;
       },
-      sendRichMessageDraft: async (_chatId: number, _draftId: number, rich: unknown) => {
-        calls.push({ method: 'sendRichMessageDraft', rich });
+      sendRichMessageDraft: async (
+        _chatId: number,
+        _draftId: number,
+        rich: unknown,
+        draftOptions: DraftOptions,
+      ) => {
+        calls.push({ method: 'sendRichMessageDraft', rich, draftOptions });
+        return true;
+      },
+      editMessageReplyMarkup: async () => {
+        calls.push({ method: 'editMessageReplyMarkup' });
+        return true;
+      },
+      deleteMessage: async () => {
+        calls.push({ method: 'deleteMessage' });
         return true;
       },
     } as unknown as TelegramApiLike;
+    const drafts = () => calls.filter((c) => c.method.endsWith('Draft'));
+    const payload = (c: Call | undefined) => c?.text ?? JSON.stringify(c?.rich ?? '');
+    const durableCalls = () => calls.filter((c) => !c.method.endsWith('Draft'));
 
-    // The handler records, on its very first synchronous line, how many
-    // persistent sends had already STARTED — then blocks the loop on purpose.
-    const enteredWithSends: number[] = [];
-    let enteredResolve!: () => void;
-    const entered = new Promise<void>((resolve) => {
-      enteredResolve = resolve;
-    });
     let releaseTool!: () => void;
     const gate = new Promise<void>((resolve) => {
       releaseTool = resolve;
     });
-    const blockingTool: any = {
-      spec: { name: 'sonda_bloccante_xyz', description: 'probe', inputSchema: { type: 'object' } as any },
-      capability: 'probe.bloccante',
-      handler: async () => {
-        enteredWithSends.push(calls.length);
-        enteredResolve();
-        // Deterministic blocking seam: a synchronous monopolisation of the
-        // event loop. Short on purpose — the assertion above does not depend
-        // on its length; it stands for the owner's 70-second search.
-        const until = Date.now() + 30;
-        while (Date.now() < until) {
-          // busy-spin: no timers, no I/O, no yield
-        }
-        await gate;
-        return { content: 'risultato sonda', tier: 0 as const };
+    const handler = vi.fn(async (_args: unknown) => {
+      await gate;
+      return { content: TOOL_RESULT, tier: 0 as const };
+    });
+    const blockingTool: LoopDeps['tools'][number] = {
+      spec: {
+        name: TOOL,
+        description: 'probe',
+        inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
       },
+      capability: 'probe.blocking',
+      throwTier: 0,
+      handler,
     };
 
     // No streaming or preamble: only status drafts appear before the tool.
@@ -136,13 +125,19 @@ describe('first paint beats a blocking first tool handler', () => {
           await modelGate;
           return {
             text: '',
-            toolCalls: [{ id: 'c1', name: 'sonda_bloccante_xyz', args: {} }],
+            toolCalls: [{ id: 'c1', name: TOOL, args: { query: QUERY } }],
             stopReason: 'tool_use',
             usage: USAGE,
             model: 'test-model',
           };
         }
-        return { text: 'fatto.', toolCalls: [], stopReason: 'end', usage: USAGE, model: 'test-model' };
+        return {
+          text: 'fatto.',
+          toolCalls: [],
+          stopReason: 'end',
+          usage: USAGE,
+          model: 'test-model',
+        };
       },
     };
 
@@ -160,16 +155,19 @@ describe('first paint beats a blocking first tool handler', () => {
       await recallGate;
       return [];
     });
-    (runtime.deps as any).tools = [...(runtime.deps as any).tools, blockingTool];
-    (runtime.deps as any).decide = () => ({ effect: 'allow' as const });
-    const loop: LoopDeps = { ...(runtime.deps as any), provider };
-    const inbox = new UpdateInbox((runtime as any).db);
+    const loop: LoopDeps = {
+      ...runtime.deps,
+      tools: [...runtime.deps.tools, blockingTool],
+      decide: () => ({ effect: 'allow' }),
+      provider,
+    };
+    const inbox = new UpdateInbox(runtime.db);
     const connector = new TelegramConnector({
       loop,
-      sessions: (runtime.deps as any).sessions,
+      sessions: runtime.deps.sessions,
       lane: new ModelLane(),
       inbox,
-      delivery: new TelegramDeliveryStore((runtime as any).db),
+      delivery: new TelegramDeliveryStore(runtime.db),
       api,
       config: { token: 't', ownerUserId: OWNER, ownerChatId: OWNER } as TelegramConfig,
     });
@@ -181,34 +179,32 @@ describe('first paint beats a blocking first tool handler', () => {
       draining = (connector as unknown as { drain: () => Promise<void> }).drain();
       await vi.waitFor(() => expect(recallSearch).toHaveBeenCalledOnce());
       expect(n).toBe(0);
-      const draftText = () =>
-        calls.filter((c) => c.method === 'sendRichMessageDraft').map((c) => JSON.stringify(c.rich));
-      expect(draftText().at(0) ?? '').toContain('preparo il contesto');
-      expect(draftText().join('')).not.toContain('aspetto il modello');
-      expect(calls.some((c) => c.method === 'sendMessage' || c.method === 'sendRichMessage')).toBe(false);
+      expect(payload(drafts()[0])).toContain('preparo il contesto');
+      expect(durableCalls()).toEqual([]);
       releaseRecall();
-      await vi.waitFor(() => expect(draftText().at(-1) ?? '').toContain('aspetto il modello'));
+      await vi.waitFor(() => expect(payload(drafts().at(-1))).toContain('sto lavorando'));
       expect(n).toBe(1);
       releaseModel();
-      await entered;
-      // THE invariant: started synchronously from the first durable progress
-      // fact, before tool execution could monopolise the event loop.
-      expect(enteredWithSends[0]).toBeGreaterThanOrEqual(1);
-      // The step's own preview is already on the wire (the status preview may
-      // have come first): the running step is visible before the handler blocks.
-      expect(
-        calls.some((c) => c.method === 'sendRichMessageDraft' && JSON.stringify(c.rich).includes('⏳')),
-      ).toBe(true);
+      await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+      expect(handler.mock.calls[0]?.[0]).toEqual({ query: QUERY });
+      await vi.waitFor(() => expect(payload(drafts().at(-1))).toContain('sto lavorando'), {
+        timeout: 3_000,
+      });
+      expect(durableCalls()).toEqual([]);
       releaseTool();
       await draining;
-      // …and the turn ends as exactly one durable message: a fresh rich send
-      // whose `details` block collapses the process and whose answer follows.
-      const sends = calls.filter((c) => c.method === 'sendMessage' || c.method === 'sendRichMessage');
-      expect(sends).toHaveLength(1);
-      const finalText = JSON.stringify(sends[0]!.rich);
-      // One rich message carries BOTH: the settled process and the answer.
-      expect(finalText).toContain('sonda_bloccante_xyz');
-      expect(finalText).toContain('fatto.');
+
+      expect(durableCalls()).toMatchObject([
+        { method: expect.stringMatching(/^send(Rich)?Message$/) },
+      ]);
+      expect(payload(durableCalls()[0])).toContain('fatto.');
+      for (const draft of drafts()) {
+        expect(draft.draftOptions?.canStop).toBe(true);
+        expect(draft.draftOptions?.keepOnStop).not.toBe(true);
+      }
+      const wire = calls.map(payload).join('\n');
+      for (const detail of [TOOL, QUERY, TOOL_RESULT, 'Processo', '⏳'])
+        expect(wire).not.toContain(detail);
     } finally {
       releaseRecall();
       releaseModel();
