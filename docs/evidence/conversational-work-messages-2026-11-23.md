@@ -43,3 +43,36 @@ question; other messages remain independent. Same-origin delivery uses the
 existing `surface.reply` policy and the current owner binding. Prompt
 wording, update usefulness, and native client rendering still need a live
 trial; these runs used synthetic data, no model or Telegram credentials.
+
+## Owner binding while Work continues
+
+The gateway fixture revokes the owner binding after a delivered interim note
+and before the model returns. The earlier delivery receipt stays valid. Any
+new preview or final to the former owner loses its authorization.
+
+| Design | Consequence |
+| --- | --- |
+| Check at ingress or when sending the interim message | An admitted turn can produce more output after a binding changes. |
+| Add markers to every Work output path | Previews, approvals, results and retries would need separate marker handling. |
+| Check the private destination at the Bot API boundary | New sends, edits, drafts, retries and document uploads share the live binding. A dispatched request can still settle its receipt. |
+
+Use the destination check alongside the turn's policy. Telegram documents the
+[chat destination](https://core.telegram.org/bots/api#sendmessage) as part of
+the send operation. [CaMeL](https://arxiv.org/abs/2503.18813) is prior art for
+checking effect authority independently of the data the model sees. A private
+write after revocation, a lost receipt from a prior dispatch, or a regression
+in authorized pairing or group routing falsifies the change.
+
+## Native replies containing paths
+
+The confirmed-receipt case now answers the clarification with `/stop/archive`.
+The original gateway consumed that text without resuming the Work. The new
+check reserves complete known command tokens for control, then routes the
+absolute path through the native reply match. The gateway fixture checks that
+the waiting turn receives the path once and delivers its result. The crash
+and uncertain-receipt cases still exercise ordinary prose replies.
+
+A separate review probe observed that a definitive Telegram 429 during a
+resumed final delivery can leave the turn failed and its journal part pending
+after restart, with the owner binding still valid. Automatic recovery from
+that refusal remains unverified for this implementation.

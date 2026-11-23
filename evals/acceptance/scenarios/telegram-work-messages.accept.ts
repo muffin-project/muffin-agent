@@ -178,6 +178,45 @@ function sentPart(key: string, messageId: number | undefined) {
 }
 
 describe('acceptance · Telegram messages during work', () => {
+  it('stops owner-chat writes after an interim update when the binding is revoked', async () => {
+    const note = 'I have compared the two shipping quotes.';
+    const final = 'The final comparison is ready.';
+    let revoke: (() => void) | undefined;
+    await withTelegram(
+      [
+        { tool: { name: 'work_message', args: { text: note } } },
+        {
+          get text() {
+            revoke?.();
+            return final;
+          },
+          delayMs: 200,
+        },
+      ],
+      async (inst, telegram) => {
+        let wireBefore: number | undefined;
+        revoke = () => {
+          wireBefore = telegram.sent().length;
+          writeFileSync(join(inst.home, 'rot', 'owner.json'), '{}\n');
+        };
+        await withGateway(inst, async () => {
+          telegram.deliver(
+            dm(101, OWNER, 101, 'Compare the shipping quotes and send me the result.'),
+          );
+          await until(
+            () => turns(inst)[0]?.status === 'done' && turns(inst)[0]?.delivery !== 'pending',
+          );
+          expect(wireBefore).toBeDefined();
+          expect(telegram.sent().slice(wireBefore)).toEqual([]);
+          expect(bubbles(telegram)).toEqual([
+            { id: expect.any(Number), chatId: OWNER, text: note },
+          ]);
+          expect(turns(inst)[0]?.delivery).toMatch(/^failed:/);
+        });
+      },
+    );
+  });
+
   it('sends a useful interim note and finishes from the one owner message', async () => {
     const request =
       'Which of these quotes is cheaper delivered: Oak at $80 plus $25 shipping, or Elm at $100 with shipping included?';
@@ -249,10 +288,13 @@ describe('acceptance · Telegram messages during work', () => {
       const filename = 'pickup-notes.txt';
       const request = `Can you draft a pickup confirmation from ${filename}?`;
       const location = 'North counter';
-      const question = 'Which day should I put in the pickup confirmation?';
-      const answer = 'Saturday, 12 December';
+      const question =
+        receipt === 'confirmed'
+          ? 'Which directory should I list for your pickup records?'
+          : 'Which day should I put in the pickup confirmation?';
+      const answer = receipt === 'confirmed' ? '/stop/archive' : 'Saturday, 12 December';
       const wrongAnswer = 'Sunday, 13 December';
-      const final = `Your pickup is confirmed for ${answer} at the ${location}.`;
+      const final = `Pickup confirmation for the ${location}: ${answer}.`;
       await withTelegram(
         [
           { tool: { name: 'fs_read', args: { path: filename } } },

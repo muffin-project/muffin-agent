@@ -1308,7 +1308,10 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
     return null;
   }
   const base = tg?.apiBase;
-  const api = base === undefined ? new TelegramApi(token) : new TelegramApi(token, base);
+  const api = new TelegramApi(token, base, (chatId) => {
+    const owner = runtime.deps.workMessageOwner?.();
+    return owner?.userId === chatId && (owner.chatId ?? owner.userId) === chatId;
+  });
   // Question answers and their inbox consumption commit together.
   const inbox = new UpdateInbox(runtime.db);
   const delivery = ctx.telegramDelivery();

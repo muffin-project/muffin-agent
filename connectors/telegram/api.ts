@@ -1,6 +1,7 @@
 import type { Message, Update, User } from '@grammyjs/types';
 import { causaDiRete } from '../../core/net/causa.js';
 import { sleep } from '../../core/net/sleep.js';
+import { isDirectChat } from './negoziazione.js';
 import { type OutboundRich, richFitsHard } from './rich.js';
 
 /**
@@ -177,7 +178,28 @@ export class TelegramApi implements TelegramApiLike {
   constructor(
     private readonly token: string,
     private readonly baseUrl = 'https://api.telegram.org',
+    private readonly authorizePrivateChat?: (chatId: number) => boolean,
   ) {}
+
+  private checkPrivateDestination(value: unknown): boolean {
+    const chatId = typeof value === 'string' ? Number(value) : value;
+    if (
+      this.authorizePrivateChat === undefined ||
+      typeof chatId !== 'number' ||
+      !Number.isSafeInteger(chatId) ||
+      !isDirectChat(chatId)
+    )
+      return false;
+
+    let authorized = false;
+    try {
+      authorized = this.authorizePrivateChat(chatId);
+    } catch {
+      // A binding that cannot be read cannot authorize another write.
+    }
+    if (!authorized) throw new TelegramError(403, 'local owner binding refused this private chat');
+    return true;
+  }
 
   /**
    * One call, one retry on a 429 or a 5xx.
@@ -220,13 +242,15 @@ export class TelegramApi implements TelegramApiLike {
     signal?: AbortSignal,
     singleAttempt = false,
   ): Promise<T> {
+    // Re-read the binding for every request, including retries after an await.
+    const verifiedPrivateChat = this.checkPrivateDestination(payload['chat_id']);
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}/bot${this.token}/${method}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
-        ...(singleAttempt ? { redirect: 'error' as const } : {}),
+        ...(singleAttempt || verifiedPrivateChat ? { redirect: 'error' as const } : {}),
         signal:
           signal === undefined
             ? AbortSignal.timeout(REQUEST_TIMEOUT_MS)
@@ -331,11 +355,13 @@ export class TelegramApi implements TelegramApiLike {
    * layer gets to make.
    */
   async upload<T>(method: string, body: FormData): Promise<T> {
+    const verifiedPrivateChat = this.checkPrivateDestination(body.get('chat_id'));
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}/bot${this.token}/${method}`, {
         method: 'POST',
         body,
+        ...(verifiedPrivateChat ? { redirect: 'error' as const } : {}),
         signal: AbortSignal.timeout(120_000),
       });
     } catch (error) {

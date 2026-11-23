@@ -22,6 +22,53 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('TelegramApi private destination binding', () => {
+  it('checks the binding again after waiting out a draft rate limit', async () => {
+    vi.useFakeTimers();
+    try {
+      let bound = true;
+      const fetch = vi.fn(async () => {
+        bound = false;
+        return Response.json(
+          { ok: false, description: 'Too Many Requests', parameters: { retry_after: 0 } },
+          { status: 429 },
+        );
+      });
+      vi.stubGlobal('fetch', fetch);
+      const authorize = vi.fn((chatId: number) => chatId === 42 && bound);
+      const api = new TelegramApi(TOKEN, undefined, authorize);
+
+      const refused = expect(api.sendMessageDraft(42, 1, 'Preview')).rejects.toMatchObject({
+        status: 403,
+      });
+      await vi.advanceTimersByTimeAsync(1_001);
+      await refused;
+      expect(authorize.mock.calls).toEqual([[42], [42]]);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('checks a multipart private chat id and leaves group routing to the connector', async () => {
+    let bound = true;
+    const fetch = vi.fn(async () => Response.json({ ok: true, result: { message_id: 1 } }));
+    vi.stubGlobal('fetch', fetch);
+    const authorize = vi.fn((chatId: number) => chatId === 42 && bound);
+    const api = new TelegramApi(TOKEN, undefined, authorize);
+    const body = new FormData();
+    body.set('chat_id', '42');
+    body.set('document', new Blob(['synthetic']), 'note.txt');
+
+    await api.upload('sendDocument', body);
+    bound = false;
+    await expect(api.upload('sendDocument', body)).rejects.toMatchObject({ status: 403 });
+    await api.sendMessage(-42, 'Group result');
+    expect(authorize.mock.calls).toEqual([[42], [42]]);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('TelegramApi — a fetch failure never carries the token forward', () => {
   it('call(): a fetch rejection whose own message contains the token is not repeated in the thrown error', async () => {
     // The adversarial fake: an error message that already carries the token,

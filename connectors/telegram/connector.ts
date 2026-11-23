@@ -9,7 +9,7 @@ import type {
   Update,
 } from '@grammyjs/types';
 import { tipoAudio } from '../../agent/audio.js';
-import { COMANDI, type Controlli, sembraComando } from '../../agent/comandi.js';
+import { COMANDI, type Controlli } from '../../agent/comandi.js';
 import { providerMessages } from '../../agent/loop/provider-checkpoint.js';
 import type {
   ApprovalRequest,
@@ -545,7 +545,7 @@ export function apreUnTurno(i: {
  * accettabile — un turno in piu' in un gruppo lo vedono tutti.
  */
 function comandoPerNoi(testo: string, meUsername: string | undefined): string {
-  const m = /^\/([a-z]+)(?:@([A-Za-z0-9_]+))?/i.exec(testo.trim());
+  const m = /^\/([a-z]+)(?:@([A-Za-z0-9_]+))?(?=\s|$)/i.exec(testo.trim());
   const nome = m?.[1]?.toLowerCase() ?? '';
   if (nome === '') return '';
   const bersaglio = m?.[2];
@@ -1359,10 +1359,11 @@ export class TelegramConnector {
       incoming.forwarded !== undefined ||
       incoming.attachment !== undefined ||
       incoming.text.trim() === '' ||
-      incoming.text.trimStart().startsWith('/') ||
       incoming.fromId !== incoming.chatId
     )
       return false;
+    const command = comandoPerNoi(incoming.text, this.meUsername);
+    if (COMANDI.some(({ nome, soloTerminale }) => nome === command && !soloTerminale)) return false;
     const prompt = update.message?.reply_to_message;
     if (
       prompt?.from?.id !== this.meId ||
@@ -3346,7 +3347,7 @@ export class TelegramConnector {
    * modello come una frase qualunque, che è quello che è.
    */
   private async tryCommand(incoming: Incoming): Promise<boolean> {
-    if (!this.deps.comandi || !sembraComando(incoming.text)) return false;
+    if (!this.deps.comandi || comandoPerNoi(incoming.text, this.meUsername) === '') return false;
     const { principal, sessionKey } = principalFor(incoming, this.deps.config.ownerUserId);
 
     // Stessa chiave del turno qui sopra, e dalla stessa funzione: `/new` deve
