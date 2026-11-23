@@ -304,7 +304,9 @@ function harness(options: {
     doorRefusal,
     refusalLabel: (refusal) => (refusal.effect === 'deny' ? refusal.code : refusal.effect),
     memoryDoorOpen: () => true,
-    execution: options.execution ?? new ExecutionBudget({ modelCallDeadlineMs: 90_000, turnWallDeadlineMs: 180_000 }),
+    execution:
+      options.execution ??
+      new ExecutionBudget({ modelCallDeadlineMs: 90_000, turnWallDeadlineMs: 180_000 }),
   };
   return { scope, deps, turns, record, span, run, id, home };
 }
@@ -520,7 +522,13 @@ describe('un solo fallback, mai un secondo tentativo in streaming', () => {
     // sleep riceve: senza evento, due minuti di jitter sono muti.
     const retries = progress.filter((e) => e.type === 'model_retry');
     expect(retries).toEqual([
-      { type: 'model_retry', class: 'transport', attempt: 1, max: MAX_TRANSPORT_RETRIES, inMs: expect.any(Number) },
+      {
+        type: 'model_retry',
+        class: 'transport',
+        attempt: 1,
+        max: MAX_TRANSPORT_RETRIES,
+        inMs: expect.any(Number),
+      },
     ]);
   });
 
@@ -583,7 +591,10 @@ describe('un solo fallback, mai un secondo tentativo in streaming', () => {
 
     expect(tentativiHttp).toBe(2);
     expect(richieste).toHaveLength(2);
-    expect(richieste.map((request) => request.model)).toEqual(['openrouter/free', 'openrouter/free']);
+    expect(richieste.map((request) => request.model)).toEqual([
+      'openrouter/free',
+      'openrouter/free',
+    ]);
     expect(typeof richieste[0]?.session_id).toBe('string');
     expect(richieste[1]?.session_id).toBe(richieste[0]?.session_id);
     expect(result).toMatchObject({ stopped: 'answered', text: 'recuperato', iterations: 2 });
@@ -721,8 +732,14 @@ describe('il gate di completezza legge i contatori di vita del turno (#603)', ()
     const first = 'Ho letto il file con fs_read: ecco cosa contiene.';
     const provider = scriptedProvider({
       stream: [
-        [{ type: 'text_delta', text: first }, { type: 'done', result: reply(first) }],
-        [{ type: 'text_delta', text: 'seconda risposta' }, { type: 'done', result: reply('seconda risposta') }],
+        [
+          { type: 'text_delta', text: first },
+          { type: 'done', result: reply(first) },
+        ],
+        [
+          { type: 'text_delta', text: 'seconda risposta' },
+          { type: 'done', result: reply('seconda risposta') },
+        ],
       ],
     });
     const h = harness({ provider, tools: [tool], decls: [decl], onDelta: (d) => deltas.push(d) });
@@ -749,7 +766,12 @@ describe('il gate di completezza legge i contatori di vita del turno (#603)', ()
     const deltas: TurnDelta[] = [];
     const first = 'Ho usato fs_write per salvarlo.';
     const provider = scriptedProvider({
-      stream: [[{ type: 'text_delta', text: first }, { type: 'done', result: reply(first) }]],
+      stream: [
+        [
+          { type: 'text_delta', text: first },
+          { type: 'done', result: reply(first) },
+        ],
+      ],
     });
     const h = harness({ provider, tools: [tool], decls: [decl], onDelta: (d) => deltas.push(d) });
 
@@ -776,7 +798,11 @@ describe('execution budget', () => {
     };
     const h = harness({
       provider,
-      execution: new ExecutionBudget({ modelCallDeadlineMs: 100, turnWallDeadlineMs: 200, activeModelBudgetMs: 0 }),
+      execution: new ExecutionBudget({
+        modelCallDeadlineMs: 100,
+        turnWallDeadlineMs: 200,
+        activeModelBudgetMs: 0,
+      }),
     });
 
     const result = await runRounds(h.scope);
@@ -794,7 +820,11 @@ describe('execution budget', () => {
       async chat(call) {
         calls += 1;
         await new Promise<never>((_, reject) => {
-          call.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+          call.signal?.addEventListener(
+            'abort',
+            () => reject(new DOMException('aborted', 'AbortError')),
+            { once: true },
+          );
         });
         throw new Error('unreachable');
       },
@@ -802,7 +832,13 @@ describe('execution budget', () => {
     const h = harness({
       provider,
       profile: { ...CONSERVATIVE, recovery: ['retryOnce'] },
-      execution: new ExecutionBudget({ modelCallDeadlineMs: 10, turnWallDeadlineMs: 200, stallTimeoutMs: 20 }),
+      // The model deadline is under test; the wall deadline must leave room
+      // for four aborts even when the test runner is sharing the host.
+      execution: new ExecutionBudget({
+        modelCallDeadlineMs: 10,
+        turnWallDeadlineMs: 5_000,
+        stallTimeoutMs: 20,
+      }),
     });
 
     const result = await runRounds(h.scope);
@@ -844,7 +880,11 @@ describe('execution budget', () => {
     const h = harness({
       provider,
       profile: { ...CONSERVATIVE, recovery: ['retryOnce'] },
-      execution: new ExecutionBudget({ modelCallDeadlineMs: 10, turnWallDeadlineMs: 200, stallTimeoutMs: 20 }),
+      execution: new ExecutionBudget({
+        modelCallDeadlineMs: 10,
+        turnWallDeadlineMs: 5_000,
+        stallTimeoutMs: 20,
+      }),
     });
 
     const result = await runRounds(h.scope);
@@ -876,7 +916,11 @@ describe('execution budget', () => {
         calls += 1;
         if (calls < 3) {
           await new Promise<never>((_, reject) => {
-            call.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+            call.signal?.addEventListener(
+              'abort',
+              () => reject(new DOMException('aborted', 'AbortError')),
+              { once: true },
+            );
           });
           throw new Error('unreachable');
         }
@@ -885,7 +929,11 @@ describe('execution budget', () => {
     };
     const h = harness({
       provider,
-      execution: new ExecutionBudget({ modelCallDeadlineMs: 10, turnWallDeadlineMs: 500, stallTimeoutMs: 20 }),
+      execution: new ExecutionBudget({
+        modelCallDeadlineMs: 10,
+        turnWallDeadlineMs: 500,
+        stallTimeoutMs: 20,
+      }),
     });
 
     const result = await runRounds(h.scope);
@@ -918,7 +966,11 @@ describe('execution budget', () => {
     const h = harness({
       provider,
       profile: { ...CONSERVATIVE, recovery: ['retryOnce'] },
-      execution: new ExecutionBudget({ modelCallDeadlineMs: 20, turnWallDeadlineMs: 500, stallTimeoutMs: 20 }),
+      execution: new ExecutionBudget({
+        modelCallDeadlineMs: 20,
+        turnWallDeadlineMs: 500,
+        stallTimeoutMs: 20,
+      }),
     });
 
     const result = await runRounds(h.scope);
@@ -1003,7 +1055,9 @@ describe('la telemetria di first activity arriva sullo span (#497)', () => {
                   const encoder = new TextEncoder();
                   const emit = (type: string, fields: Record<string, unknown>) => {
                     controller.enqueue(
-                      encoder.encode(`event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`),
+                      encoder.encode(
+                        `event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`,
+                      ),
                     );
                   };
                   setTimeout(() => emit('response.output_text.delta', { delta: ' ' }), 10);
@@ -1015,12 +1069,14 @@ describe('la telemetria di first activity arriva sullo span (#497)', () => {
                         id: 'resp_fixture',
                         model,
                         status: 'completed',
-                        output: [{
-                          type: 'message',
-                          role: 'assistant',
-                          status: 'completed',
-                          content: [{ type: 'output_text', text }],
-                        }],
+                        output: [
+                          {
+                            type: 'message',
+                            role: 'assistant',
+                            status: 'completed',
+                            content: [{ type: 'output_text', text }],
+                          },
+                        ],
                       },
                     });
                     controller.close();
@@ -1049,7 +1105,12 @@ describe('la telemetria di first activity arriva sullo span (#497)', () => {
 
   it('uno stream con delta registra first/last activity e ttft', async () => {
     const provider = scriptedProvider({
-      stream: [[{ type: 'text_delta', text: 'ciao' }, { type: 'done', result: reply('ciao') }]],
+      stream: [
+        [
+          { type: 'text_delta', text: 'ciao' },
+          { type: 'done', result: reply('ciao') },
+        ],
+      ],
     });
     // Con onDelta la corsia chiede lo stream: senza, andrebbe di chat() e non
     // ci sarebbe nessuna activity da registrare (vedi il test sotto).
@@ -1105,7 +1166,9 @@ describe('verità del fallimento provider/risultato (P0-A)', () => {
   });
 
   it('stop=error + zero token + nessuna attività non consuma la cascata semantica', async () => {
-    const provider = scriptedProvider({ chat: [stall(), stall(), stall(), stall(), stall(), stall()] });
+    const provider = scriptedProvider({
+      chat: [stall(), stall(), stall(), stall(), stall(), stall()],
+    });
     const progress: TurnEvent[] = [];
     const h = harness({ provider, onProgress: (e) => progress.push(e) });
 
@@ -1126,9 +1189,27 @@ describe('verità del fallimento provider/risultato (P0-A)', () => {
     // Ogni re-drive è visibile mentre accade: quale budget, quale tentativo,
     // quale attesa — mai una pausa muta.
     expect(progress.filter((e) => e.type === 'model_retry')).toEqual([
-      { type: 'model_retry', class: 'provider_empty', attempt: 1, max: 3, inMs: expect.any(Number) },
-      { type: 'model_retry', class: 'provider_empty', attempt: 2, max: 3, inMs: expect.any(Number) },
-      { type: 'model_retry', class: 'provider_empty', attempt: 3, max: 3, inMs: expect.any(Number) },
+      {
+        type: 'model_retry',
+        class: 'provider_empty',
+        attempt: 1,
+        max: 3,
+        inMs: expect.any(Number),
+      },
+      {
+        type: 'model_retry',
+        class: 'provider_empty',
+        attempt: 2,
+        max: 3,
+        inMs: expect.any(Number),
+      },
+      {
+        type: 'model_retry',
+        class: 'provider_empty',
+        attempt: 3,
+        max: 3,
+        inMs: expect.any(Number),
+      },
     ]);
   });
 
@@ -1137,7 +1218,10 @@ describe('verità del fallimento provider/risultato (P0-A)', () => {
     const provider = scriptedProvider({ chat: [stall(), stall(), stall(), stall()] });
     const h = harness({
       provider,
-      profile: { ...CONSERVATIVE, recovery: ['nudge', 'reinjectTools', 'retryOnce', 'strictJson', 'requireTool'] },
+      profile: {
+        ...CONSERVATIVE,
+        recovery: ['nudge', 'reinjectTools', 'retryOnce', 'strictJson', 'requireTool'],
+      },
       tools: [tool],
       decls: [decl],
     });
@@ -1161,7 +1245,9 @@ describe('verità del fallimento provider/risultato (P0-A)', () => {
    * `providerIgnore`.
    */
   it('dopo una risposta vuota il re-drive ignora il provider che non ha risposto', async () => {
-    const provider = scriptedProvider({ chat: [{ ...stall(), upstream: 'Reka' }, reply('eccomi')] });
+    const provider = scriptedProvider({
+      chat: [{ ...stall(), upstream: 'Reka' }, reply('eccomi')],
+    });
     const h = harness({ provider });
 
     const result = await runRounds(h.scope);
@@ -1236,7 +1322,13 @@ describe('verità del fallimento provider/risultato (P0-A)', () => {
   });
 
   it('un vuoto genuino (stop=end con token) resta della cascata', async () => {
-    const genuino: ChatResult = { text: null, toolCalls: [], stopReason: 'end', usage, model: 'test' };
+    const genuino: ChatResult = {
+      text: null,
+      toolCalls: [],
+      stopReason: 'end',
+      usage,
+      model: 'test',
+    };
     const provider = scriptedProvider({ chat: [genuino, reply('eccomi')] });
     const h = harness({ provider });
 
@@ -1261,7 +1353,9 @@ describe('verità del fallimento provider/risultato (P0-A)', () => {
       .filter((l) => l.trim() !== '')
       .map((l) => JSON.parse(l) as { name: string; attributes: Record<string, unknown> });
     const chiamata = righe.filter((r) => r.name === 'muffin.chat_call').at(-1)!;
-    expect(chiamata.attributes['muffin.chat_call.finish_reason']).toBe('ragione-futura-sconosciuta');
+    expect(chiamata.attributes['muffin.chat_call.finish_reason']).toBe(
+      'ragione-futura-sconosciuta',
+    );
     expect(chiamata.attributes['muffin.stop_reason']).toBe('end');
   });
 
@@ -1301,14 +1395,28 @@ describe('la compattazione segue il budget del profilo', () => {
   function transcriptSporco(): Message[] {
     return [
       { role: 'user', content: [{ type: 'text', text: 'ciao' }] },
-      { role: 'assistant', content: [{ type: 'tool_use', id: 'vecchio', name: 'fs_read', input: {} }] },
-      { role: 'user', content: [{ type: 'tool_result', toolCallId: 'vecchio', content: big(12_000) }] },
-      { role: 'assistant', content: [{ type: 'tool_use', id: 'nuovo', name: 'fs_read', input: {} }] },
-      { role: 'user', content: [{ type: 'tool_result', toolCallId: 'nuovo', content: big(12_000) }] },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'vecchio', name: 'fs_read', input: {} }],
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool_result', toolCallId: 'vecchio', content: big(12_000) }],
+      },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'nuovo', name: 'fs_read', input: {} }],
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool_result', toolCallId: 'nuovo', content: big(12_000) }],
+      },
     ];
   }
   function risultatiInviati(provider: { chatCalls: ChatCall[] }): string[] {
-    return provider.chatCalls[0]!.messages.flatMap((m) => m.content).flatMap((b) => (b.type === 'tool_result' ? [b.content] : []));
+    return provider.chatCalls[0]!.messages.flatMap((m) => m.content).flatMap((b) =>
+      b.type === 'tool_result' ? [b.content] : [],
+    );
   }
 
   it('un budget stretto compatta il vecchio e tiene il recente', async () => {
