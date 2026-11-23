@@ -423,7 +423,7 @@ describe('un pulsante premuto dall owner', () => {
         const button = keyboards[0]?.[0]?.[0]?.callback_data;
         if (button !== `ok:${approvalId}`)
           throw new Error('The original message is missing its approval button');
-        await deliver({ ...h, connector }, [
+        const callback = deliver({ ...h, connector }, [
           premuto(button, OWNER, 1, {
             message_id: messageId,
             date: 0,
@@ -431,15 +431,22 @@ describe('un pulsante premuto dall owner', () => {
             text: request.prompt,
           }),
         ]);
+        await vi.advanceTimersByTimeAsync(2_000);
+        await callback;
         expect(h.approvals.get(approvalId)?.decision).toBe('allow');
         expect(h.turns.get(turnId)?.status).toBe('runnable');
         expect(keyboards).toHaveLength(1);
       } finally {
-        await stream?.stop?.();
-        vi.useRealTimers();
-        vi.unstubAllGlobals();
-        h.db.close();
-        rmSync(h.home, { recursive: true, force: true });
+        try {
+          const stopping = stream?.stop?.();
+          await vi.advanceTimersByTimeAsync(2_000);
+          await stopping;
+        } finally {
+          vi.useRealTimers();
+          vi.unstubAllGlobals();
+          h.db.close();
+          rmSync(h.home, { recursive: true, force: true });
+        }
       }
     },
   );
