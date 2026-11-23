@@ -1,6 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
-import { TelegramError, type TelegramApiLike } from './api.js';
+import { TelegramApi, type TelegramApiLike, TelegramError } from './api.js';
 import {
   deliverTelegram,
   type TelegramDeliveryPlanPart,
@@ -243,6 +243,34 @@ describe('rich delivery · ambiguous failure never duplicates', () => {
     expect(calls.filter((c) => c.method === 'sendRichMessage')).toHaveLength(1);
     expect(calls.some((c) => c.method === 'sendMessage')).toBe(false);
     expect(store.parts('turn-ambiguous')).toMatchObject([{ kind: 'rich', status: 'possibly_sent' }]);
+  });
+
+  it('records a readable 502 after a rich send as uncertain, without retry or legacy fallback', async () => {
+    const db = new DatabaseCtor(':memory:');
+    const store = new TelegramDeliveryStore(db);
+    const api = new TelegramApi('123:fixture-only');
+    const request = richRequest(TABLE);
+    const send = () => deliverTelegram(store, api, 'turn-502', request, at, 0);
+    const wire = vi
+      .fn<(url: string) => Promise<Response>>()
+      .mockResolvedValueOnce(Response.json({ ok: false, description: 'Bad Gateway' }, { status: 502 }))
+      .mockImplementation(async () => Response.json({ ok: true, result: { message_id: 99 } }));
+    vi.stubGlobal('fetch', wire);
+    vi.useFakeTimers();
+    try {
+      const pending = send();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(pending).resolves.toBe('possibly_sent');
+      await expect(send()).resolves.toBe('possibly_sent');
+      expect(wire.mock.calls.map(([url]) => new URL(url).pathname.split('/').at(-1))).toEqual([
+        'sendRichMessage',
+      ]);
+      expect(store.parts('turn-502')).toMatchObject([{ kind: 'rich', status: 'possibly_sent' }]);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+      db.close();
+    }
   });
 });
 

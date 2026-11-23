@@ -136,6 +136,7 @@ type PortConnectContext = {
   readonly lines: string[];
   /** La ModelLane dell'execution owner — da `connectSurfaces`, mai ricostruita qui dentro. */
   readonly lane: ModelLane;
+  readonly telegramDelivery: () => TelegramDeliveryStore;
 };
 
 type PortConnection = {
@@ -957,6 +958,9 @@ export function connectSurfaces(
   const adesso = (): Date => new Date();
   const stops: ((budgetMs: number) => Promise<void>)[] = [];
   const surfaces: Surface[] = [cliSurface(cliWrite)];
+  let telegramJournal: TelegramDeliveryStore | undefined;
+  const telegramDelivery = (): TelegramDeliveryStore =>
+    (telegramJournal ??= new TelegramDeliveryStore(runtime.db));
   /**
    * How a turn the **lane** finished gets back to whoever asked for it.
    *
@@ -1010,6 +1014,7 @@ export function connectSurfaces(
         onWork,
         lines,
         lane,
+        telegramDelivery,
       });
       // La porta è abilitata ma non può partire, e l'ha già detto con la sua
       // frase e la sua caduta: niente da registrare.
@@ -1136,7 +1141,15 @@ export function connectSurfaces(
         return;
       }
       const door = doors.get(turn.surface);
-      if (!door) throw new Error(`superficie "${turn.surface}" non connessa in questo processo`);
+      if (!door) {
+        // A revoked binding can keep the connector offline altogether. The
+        // journal can still settle a known result without a Telegram client.
+        if (recovered && turn.surface === TELEGRAM_ID && turn.ownerQuestionFinal) {
+          const receipt = telegramDelivery().recordedOutcome(turn.id, turn.leaseIndex);
+          if (receipt !== undefined) return receipt === 'sent' ? undefined : receipt;
+        }
+        throw new Error(`superficie "${turn.surface}" non connessa in questo processo`);
+      }
       if (turn.replyTo === null)
         throw new Error(`turno ${turn.id.slice(0, 12)} senza indirizzo di risposta`);
       return door(turn.id, turn.replyTo, text);
@@ -1296,10 +1309,9 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
   }
   const base = tg?.apiBase;
   const api = base === undefined ? new TelegramApi(token) : new TelegramApi(token, base);
-  const telegramDb = openDb(paths(home).db);
   // Question answers and their inbox consumption commit together.
   const inbox = new UpdateInbox(runtime.db);
-  const delivery = new TelegramDeliveryStore(telegramDb);
+  const delivery = ctx.telegramDelivery();
   const vaultRoot = paths(home).vault;
   if (!ensurePrivateDir(join(vaultRoot, 'inbox'))) {
     salute.caduta(

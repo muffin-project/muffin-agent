@@ -63,6 +63,31 @@ describe('TelegramDeliveryStore — write ahead and crash recovery', () => {
     expect(store.parts('turn-race')[0]?.attemptId).toBe('winner');
   });
 
+  it('only reconciles a terminal receipt from the current lease', () => {
+    const db = new DatabaseCtor(':memory:');
+    try {
+      const store = new TelegramDeliveryStore(db);
+      const id = 'turn-resumed';
+      store.plan(id, [sendPart('diagnostic', 0)], at(), 0);
+      store.claim(id, 0, 'diagnostic', at());
+      store.sent(id, 0, 'diagnostic', 1, at());
+      expect(store.recordedOutcome(id, 0)).toBe('sent');
+      expect(store.recordedOutcome(id, 1)).toBeUndefined();
+
+      const [first, last] = store.plan(id, [sendPart('first', 0), sendPart('last', 1)], at(), 1);
+      if (!first || !last) throw new Error('Expected two parts on the resumed lease');
+      store.claim(id, first.partIndex, 'first', at());
+      store.sent(id, first.partIndex, 'first', 2, at());
+      expect(store.recordedOutcome(id, 1)).toBeUndefined();
+
+      store.claim(id, last.partIndex, 'last', at());
+      expect(store.recordedOutcome(id, 1)).toBeUndefined();
+      expect(new TelegramDeliveryStore(db).recordedOutcome(id, 1)).toBe('possibly_sent');
+    } finally {
+      db.close();
+    }
+  });
+
   it('recovery keeps the first frozen wire plan byte-for-byte', () => {
     const db = new DatabaseCtor(':memory:');
     const store = new TelegramDeliveryStore(db);

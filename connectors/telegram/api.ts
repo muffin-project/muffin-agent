@@ -154,23 +154,22 @@ export class TelegramApi implements TelegramApiLike {
    * `REQUEST_TIMEOUT_MS` this same call already carries.
    */
   async call<T>(method: string, payload: Record<string, unknown> = {}, attempt = 0, signal?: AbortSignal): Promise<T> {
-    return this.request<T>(method, payload, true, true, attempt, signal);
+    return this.request<T>(method, payload, true, attempt, signal);
   }
 
   /**
-   * One HTTP attempt for a user-visible effect. The Bot API exposes no client
-   * idempotency token, so a transport failure after acceptance is ambiguous and
-   * retrying it here can create a second visible message.
+   * Never retry an ambiguous user-visible effect. The Bot API exposes no client
+   * idempotency token, so a transport failure or a 5xx after acceptance could
+   * turn a retry into a second visible message.
    */
   private effect<T>(method: string, payload: Record<string, unknown>): Promise<T> {
-    return this.request<T>(method, payload, false, true, 0);
+    return this.request<T>(method, payload, false, 0);
   }
 
   private async request<T>(
     method: string,
     payload: Record<string, unknown>,
-    retryTransport: boolean,
-    retryRejected: boolean,
+    retryAmbiguous: boolean,
     attempt: number,
     signal?: AbortSignal,
   ): Promise<T> {
@@ -191,9 +190,9 @@ export class TelegramApi implements TelegramApiLike {
       // Reads retry one network failure. User-visible effects deliberately do
       // not: after an unreadable response the remote side may have accepted
       // the request, and a second send can become a second visible message.
-      if (retryTransport && attempt === 0) {
+      if (retryAmbiguous && attempt === 0) {
         await sleep(1000);
-        return this.request<T>(method, payload, retryTransport, retryRejected, 1, signal);
+        return this.request<T>(method, payload, retryAmbiguous, 1, signal);
       }
       // Mai `.message`, e non per prudenza astratta: l'URL su cui questa
       // `fetch` e' appena fallita porta il bot token nel path (Telegram, a
@@ -210,6 +209,11 @@ export class TelegramApi implements TelegramApiLike {
       throw new TelegramError(0, causaDiRete(error));
     }
 
+    // Even a readable server error does not prove that an effect was rejected.
+    if (!retryAmbiguous && response.status >= 500) {
+      throw new TelegramError(0, `Telegram HTTP ${response.status}: effect not confirmed`);
+    }
+
     let body:
       | { ok: true; result: T }
       | { ok: false; description: string; parameters?: { retry_after?: number } };
@@ -224,11 +228,11 @@ export class TelegramApi implements TelegramApiLike {
     if (body.ok) return body.result;
 
     const retryAfter = body.parameters?.retry_after;
-    if (retryRejected && attempt === 0 && (response.status === 429 || response.status >= 500)) {
+    if (attempt === 0 && (response.status === 429 || response.status >= 500)) {
       // Plus a second: `retry_after` is when the window opens, not when it is
       // safe to be inside it.
       await sleep((retryAfter ?? 1) * 1000 + 1000);
-      return this.request<T>(method, payload, retryTransport, retryRejected, 1);
+      return this.request<T>(method, payload, retryAmbiguous, 1);
     }
     throw new TelegramError(response.status, body.description, retryAfter);
   }

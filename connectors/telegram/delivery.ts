@@ -252,6 +252,18 @@ export class TelegramDeliveryStore {
     }));
   }
 
+  /** A whole-plan receipt that can be reconciled without authorizing a new effect. */
+  recordedOutcome(turnId: string, leaseIndex: number): 'sent' | 'possibly_sent' | undefined {
+    const parts = this.parts(turnId, leaseIndex);
+    if (parts.length === 0) return undefined;
+    const next = parts.find(
+      (part) => part.status !== 'sent' && !(part.kind === 'rich' && part.status === 'rejected'),
+    );
+    if (next === undefined) return 'sent';
+    if (next.status === 'possibly_sent') return 'possibly_sent';
+    return undefined;
+  }
+
   /**
    * A deterministic rich rejection, expanded atomically: the rich row goes
    * `rejected` and its frozen legacy chunks become pending rows BEHIND it,
@@ -388,7 +400,7 @@ export class TelegramDeliveryStore {
  *   the client-side protocol guard in `api.ts`): nothing was displayed, so
  *   the frozen legacy chunks expand into pending rows behind the rejected
  *   rich row and delivery continues with them — no loss, no giant send;
- * - ambiguous transport failure (status 0, unreadable response): Telegram
+ * - ambiguous failure (status 0, including HTTP 5xx on an effect): Telegram
  *   may already have accepted the message, so the row goes `possibly_sent`
  *   and the suffix stops. NO fallback is sent: a fallback now would be the
  *   duplicate Hermes measured (retry after an accepted-but-unanswered

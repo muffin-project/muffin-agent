@@ -140,4 +140,57 @@ describe('TelegramApi — visible sends never retry an ambiguous transport failu
     await expect(api.sendMessage(42, 'una sola volta')).rejects.toBeInstanceOf(TelegramError);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
+
+  it('does not repeat a send when acceptance is followed by a readable HTTP 502', async () => {
+    vi.useFakeTimers();
+    try {
+      const accepted: string[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (_url: string, init: { body: string }) => {
+          const payload = JSON.parse(init.body);
+          accepted.push(payload.text);
+          if (accepted.length === 1) {
+            return Response.json({ ok: false, description: 'Bad Gateway' }, { status: 502 });
+          }
+          return Response.json({ ok: true, result: { message_id: accepted.length } });
+        }),
+      );
+      const pending = new TelegramApi(TOKEN).sendMessage(42, 'one visible message');
+      const checked = pending.then(
+        () => null,
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(accepted).toEqual(['one visible message']);
+      expect(await checked).toMatchObject({ status: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still retries getUpdates once after a readable HTTP 502', async () => {
+    vi.useFakeTimers();
+    try {
+      const update = { update_id: 42 };
+      const fetch = vi
+        .fn<(url: string, init: { body: string }) => Promise<Response>>()
+        .mockResolvedValueOnce(
+          Response.json({ ok: false, description: 'Bad Gateway' }, { status: 502 }),
+        )
+        .mockResolvedValueOnce(Response.json({ ok: true, result: [update] }));
+      vi.stubGlobal('fetch', fetch);
+
+      const pending = new TelegramApi(TOKEN).getUpdates(42);
+      const checked = expect(pending).resolves.toEqual([update]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await checked;
+      expect(fetch.mock.calls.map(([url, init]) => [url, JSON.parse(init.body).offset])).toEqual([
+        [`https://api.telegram.org/bot${TOKEN}/getUpdates`, 42],
+        [`https://api.telegram.org/bot${TOKEN}/getUpdates`, 42],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

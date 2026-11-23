@@ -127,6 +127,8 @@ export type FakeTelegram = {
   guasta(method: string, status: number, description: string): void;
   /** Accept one message and leave its HTTP response unreadable until the client exits. */
   withholdNextSendResponse(): void;
+  /** Accept one message, then return a readable 502 instead of its receipt. */
+  failNextAcceptedSendResponse(): void;
   close(): Promise<void>;
 };
 
@@ -234,7 +236,7 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
   const bytesByPath = new Map<string, Buffer>();
   // B10-errori: one planned rejection per method, consumed in call order.
   const guasti = new Map<string, Array<{ status: number; description: string }>>();
-  let withholdSendResponse = false;
+  let nextSendResponse: 'withhold' | 'fail' | undefined;
 
   const server: Server = createServer((req, res) => {
     // The file **download** route is not `<base>/bot<token>/METHOD` — it is
@@ -429,8 +431,13 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
         res.end(JSON.stringify({ ok: false, description: guastoInCoda.description }));
         return;
       }
-      if (recordedMethod === 'sendMessage' && withholdSendResponse) {
-        withholdSendResponse = false;
+      if (recordedMethod === 'sendMessage' && nextSendResponse !== undefined) {
+        const fault = nextSendResponse;
+        nextSendResponse = undefined;
+        if (fault === 'fail') {
+          res.writeHead(502, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, description: 'Bad Gateway: receipt unavailable' }));
+        }
         return;
       }
 
@@ -519,7 +526,10 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
       guasti.set(method, coda);
     },
     withholdNextSendResponse: () => {
-      withholdSendResponse = true;
+      nextSendResponse = 'withhold';
+    },
+    failNextAcceptedSendResponse: () => {
+      nextSendResponse = 'fail';
     },
     close: () =>
       new Promise<void>((resolve) => {

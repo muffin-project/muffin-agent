@@ -1332,7 +1332,7 @@ export class TelegramConnector {
       incoming.attachment !== undefined ||
       incoming.text.trim() === '' ||
       incoming.text.trimStart().startsWith('/') ||
-      incoming.fromId !== this.deps.config.ownerUserId
+      incoming.fromId !== incoming.chatId
     )
       return false;
     const prompt = update.message?.reply_to_message;
@@ -1345,7 +1345,7 @@ export class TelegramConnector {
     )
       return false;
     for (const turn of this.deps.loop.turns.ownerQuestions()) {
-      if (turn.waitFor === null || this.workChat(turn) !== incoming.chatId) continue;
+      if (turn.waitFor === null || turn.replyTo?.chatId !== incoming.chatId) continue;
       const question = decodeWaitFor(turn.waitFor);
       if (question?.kind !== 'owner_reply') continue;
       const expected = this.questionText(question);
@@ -1363,6 +1363,12 @@ export class TelegramConnector {
         );
       if (!matches) continue;
       const at = this.now();
+      // Recognize the durable reply target before checking live authority.
+      // Refusal must not send it to ordinary ingress under the boot-time owner.
+      if (this.workChat(turn) !== incoming.chatId) {
+        this.deps.inbox.discard(stored.updateId, at);
+        return true;
+      }
       const answered = this.deps.loop.turns.answerOwnerQuestion(
         turn.id,
         turn.waitFor,
@@ -1739,6 +1745,10 @@ export class TelegramConnector {
       throw new Error(`replyTo senza chatId numerico: ${JSON.stringify(replyTo)}`);
     }
     const record = this.deps.loop.turns.get(turnId);
+    if (record?.ownerQuestionFinal) {
+      const receipt = this.deps.delivery.recordedOutcome(turnId, record.leaseIndex);
+      if (receipt !== undefined) return receipt;
+    }
     if (
       record?.ownerQuestionFinal &&
       (this.workChat(record) !== chatId ||

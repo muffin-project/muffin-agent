@@ -48,6 +48,7 @@ async function withTelegram(
 async function withGateway(
   inst: Install,
   run: (kill: () => Promise<void>) => Promise<void>,
+  ready = 'telegram: connesso',
 ): Promise<void> {
   const child = spawn(process.execPath, [CLI, 'gateway', 'run'], {
     cwd: inst.workspace,
@@ -69,8 +70,8 @@ async function withGateway(
   child.stderr.setEncoding('utf8').on('data', (chunk: string) => (log += chunk));
   try {
     await until(() => {
-      if (child.exitCode !== null) throw new Error('Gateway exited before Telegram connected');
-      return log.includes('telegram: connesso');
+      if (child.exitCode !== null) throw new Error('Gateway exited before surface initialization');
+      return log.includes(ready);
     });
     await run(async () => {
       killed = true;
@@ -125,6 +126,15 @@ type Turn = {
 function turns(inst: Install): Turn[] {
   const sql = 'SELECT id, input_text, status, wait_for, wake_at, turn_outcome, delivery FROM turns';
   return inst.db((db) => db.prepare(sql).all() as Turn[]);
+}
+
+function writeDb(inst: Install, write: (db: Database.Database) => void): void {
+  const db = new Database(join(inst.home, 'muffin.db'), { fileMustExist: true });
+  try {
+    write(db);
+  } finally {
+    db.close();
+  }
 }
 
 function deliveryParts(inst: Install) {
@@ -233,9 +243,9 @@ describe('acceptance · Telegram messages during work', () => {
     );
   }, 60_000);
 
-  it.each([false, true])(
-    'resumes the same Work after a native reply (question receipt lost: %s)',
-    async (lostReceipt) => {
+  it.each(['confirmed', 'lost on crash', 'readable 502'] as const)(
+    'resumes the same Work after a native reply (question receipt: %s)',
+    async (receipt) => {
       const filename = 'pickup-notes.txt';
       const request = `Can you draft a pickup confirmation from ${filename}?`;
       const location = 'North counter';
@@ -255,15 +265,22 @@ describe('acceptance · Telegram messages during work', () => {
             `Pickup location: ${location}. Day not yet chosen.\n`,
           );
           await withGateway(inst, async (kill) => {
-            if (lostReceipt) telegram.withholdNextSendResponse();
+            if (receipt === 'lost on crash') telegram.withholdNextSendResponse();
+            if (receipt === 'readable 502') telegram.failNextAcceptedSendResponse();
+            const status = {
+              confirmed: 'sent',
+              'lost on crash': 'attempting',
+              'readable 502': 'possibly_sent',
+            }[receipt];
             telegram.deliver(dm(101, OWNER, 101, request));
             await until(
               () =>
                 turns(inst)[0]?.status === 'waiting' &&
-                deliveryParts(inst)[0]?.status === (lostReceipt ? 'attempting' : 'sent') &&
+                (receipt === 'lost on crash' || deliveryParts(inst)[0]?.status !== 'attempting') &&
                 bubbles(telegram).some((bubble) => bubble.text.includes(question)),
             );
-            if (lostReceipt) await kill();
+            expect(deliveryParts(inst)[0]?.status).toBe(status);
+            if (receipt === 'lost on crash') await kill();
           });
 
           const rows = turns(inst);
@@ -288,13 +305,14 @@ describe('acceptance · Telegram messages during work', () => {
           ]);
           if (asked?.id === undefined) throw new Error('Question missing its native message ID');
           const target = { messageId: asked.id, text: asked.text };
-          const questionPart = lostReceipt
-            ? {
-                ...sentPart(questionKey, undefined),
-                status: 'possibly_sent',
-                telegram_message_id: null,
-              }
-            : sentPart(questionKey, target.messageId);
+          const questionPart =
+            receipt === 'confirmed'
+              ? sentPart(questionKey, target.messageId)
+              : {
+                  ...sentPart(questionKey, undefined),
+                  status: 'possibly_sent',
+                  telegram_message_id: null,
+                };
           expect(inst.provider.main()).toHaveLength(2);
           expect(inst.provider.main()[1]?.tools).toContain('work_message');
           expect(inst.provider.main()[1]?.transcript).toContain(location);
@@ -394,7 +412,10 @@ describe('acceptance · Telegram messages during work', () => {
     );
   }, 75_000);
 
-  it('does not resend a resumed result that Telegram accepted before a crash', async () => {
+  async function recoverFinal(
+    receipt: 'sent' | 'possibly_sent',
+    revoke: 'no' | 'after crash' | 'before reconciliation',
+  ) {
     const final = 'The selected pickup day is Saturday.';
     await withTelegram(
       [
@@ -407,6 +428,13 @@ describe('acceptance · Telegram messages during work', () => {
         { text: final },
       ],
       async (inst, telegram) => {
+        const revokeBinding = () => writeFileSync(join(inst.home, 'rot', 'owner.json'), '{}\n');
+        const releaseReceipt = () =>
+          writeDb(inst, (db) => db.exec('DROP TRIGGER hold_owner_final_receipt'));
+        const expectReceipt = async () => {
+          await until(() => turns(inst)[0]?.delivery !== 'pending');
+          expect(turns(inst)[0]?.delivery).toBe(receipt);
+        };
         await withGateway(inst, async (kill) => {
           telegram.deliver(dm(101, OWNER, 101, 'Draft my pickup confirmation.'));
           await until(
@@ -414,30 +442,64 @@ describe('acceptance · Telegram messages during work', () => {
           );
           const asked = bubbles(telegram)[0];
           if (asked?.id === undefined) throw new Error('Question missing its native message ID');
-          telegram.withholdNextSendResponse();
+          if (receipt === 'possibly_sent') telegram.withholdNextSendResponse();
+          else {
+            // Hold the scalar receipt behind the independently committed wire journal.
+            writeDb(inst, (db) =>
+              db.exec(`
+              CREATE TRIGGER hold_owner_final_receipt BEFORE UPDATE OF delivery ON turns
+              WHEN NEW.delivery = 'sent'
+              BEGIN SELECT RAISE(IGNORE); END;
+            `),
+            );
+          }
           telegram.deliver(
             dm(102, OWNER, 102, 'Saturday', { messageId: asked.id, text: asked.text }),
           );
           await until(
             () =>
               turns(inst)[0]?.status === 'done' &&
-              deliveryParts(inst)[1]?.status === 'attempting' &&
+              turns(inst)[0]?.delivery === 'pending' &&
+              deliveryParts(inst)[1]?.status === (receipt === 'sent' ? 'sent' : 'attempting') &&
               bubbles(telegram).some((bubble) => bubble.text.includes(final)),
           );
-          await kill();
+          if (revoke === 'before reconciliation') {
+            revokeBinding();
+            releaseReceipt();
+            await expectReceipt();
+          } else await kill();
         });
-        await withGateway(inst, async () => {
-          await until(() => turns(inst)[0]?.delivery === 'possibly_sent');
-        });
+        if (revoke !== 'before reconciliation') {
+          if (receipt === 'sent') releaseReceipt();
+          if (revoke === 'after crash') revokeBinding();
+          const wireBefore = telegram.sent().length;
+          await withGateway(
+            inst,
+            expectReceipt,
+            revoke === 'after crash' ? 'telegram: abilitata ma senza owner' : undefined,
+          );
+          if (revoke === 'after crash') expect(telegram.sent().slice(wireBefore)).toEqual([]);
+        }
         expect(turns(inst)).toHaveLength(1);
         expect(inst.provider.main()).toHaveLength(2);
-        expect(deliveryParts(inst).map((part) => part.status)).toEqual(['sent', 'possibly_sent']);
+        expect(deliveryParts(inst).map((part) => part.status)).toEqual(['sent', receipt]);
         expect(bubbles(telegram).filter((message) => message.text.includes(final))).toHaveLength(1);
       },
     );
-  }, 90_000);
+  }
 
-  it('sends no resumed output to an owner whose binding stopped verifying', async () => {
+  it.each([
+    { receipt: 'possibly_sent', revoke: 'no' },
+    { receipt: 'possibly_sent', revoke: 'after crash' },
+    { receipt: 'sent', revoke: 'after crash' },
+    { receipt: 'sent', revoke: 'before reconciliation' },
+  ] as const)(
+    'reconciles a $receipt final (revoke: $revoke)',
+    ({ receipt, revoke }) => recoverFinal(receipt, revoke),
+    90_000,
+  );
+
+  it('discards a revoked owner’s native reply and sends nothing when the wait expires', async () => {
     const final = 'The pickup is still missing a day.';
     await withTelegram(
       [
@@ -455,22 +517,50 @@ describe('acceptance · Telegram messages during work', () => {
           await until(
             () => turns(inst)[0]?.status === 'waiting' && deliveryParts(inst)[0]?.status === 'sent',
           );
+          const asked = bubbles(telegram)[0];
+          if (asked?.id === undefined) throw new Error('Question missing its native message ID');
+          const waiting = turns(inst)[0];
           const wireBefore = telegram.sent().length;
           writeFileSync(join(inst.home, 'rot', 'owner.json'), '{}\n');
-          const db = new Database(join(inst.home, 'muffin.db'), { fileMustExist: true });
-          try {
+          const revokedReply = 'Saturday — stale binding';
+          telegram.deliver(
+            dm(102, OWNER, 102, revokedReply, { messageId: asked.id, text: asked.text }),
+          );
+          await until(
+            () =>
+              turns(inst).length > 1 ||
+              inbox(inst).find((row) => row.update_id === 102)?.processed_at != null,
+          );
+          expect(turns(inst)).toEqual([waiting]);
+          expect(inst.provider.main()).toHaveLength(1);
+          expect(inbox(inst)[1]).toEqual({
+            update_id: 102,
+            processed_at: expect.any(String),
+            failure: null,
+            work_id: null,
+          });
+          expect(
+            inst.db((db) =>
+              db
+                .prepare('SELECT payload FROM telegram_updates WHERE update_id = 102')
+                .pluck()
+                .get(),
+            ),
+          ).toBe('{}');
+          writeDb(inst, (db) => {
             expect(
               db
                 .prepare('UPDATE turns SET wake_at = ? WHERE status = ?')
                 .run('2000-01-01T00:00:00.000Z', 'waiting').changes,
             ).toBe(1);
-          } finally {
-            db.close();
-          }
+          });
           await until(
             () =>
               turns(inst)[0]?.status === 'done' &&
               turns(inst)[0]?.delivery?.startsWith('failed:') === true,
+          );
+          expect(inst.provider.main().some((call) => call.transcript.includes(revokedReply))).toBe(
+            false,
           );
           expect(
             telegram

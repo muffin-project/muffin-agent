@@ -15,6 +15,7 @@ import { visibleTools } from './context/assemble.js';
 import { toolContext } from './fixtures/tool-context.js';
 import { buildRuntime } from './runtime.js';
 import { makeSendFileTool, sendFileCapability } from './tools/deliver.js';
+import { WORK_MESSAGE_TOOL_NAME } from './tools/work-message.js';
 
 /**
  * A tool that is off can say why — end to end, not just in the formatter.
@@ -240,7 +241,9 @@ describe('cosa raggiunge un membro, con e senza grant (ADR-0073)', () => {
   /** Il menu iniziale che il modello vede per quel principal, per nome di tool. */
   function menu(runtime: ReturnType<typeof buildRuntime>, tenantId: string): string[] {
     const eligible = visibleTools(
-      runtime.deps.tools,
+      // This fixture projects the generic catalogue for a group member, not
+      // the owner-DM tool. Its real turn projection is covered in work-message.test.ts.
+      runtime.deps.tools.filter((tool) => tool.spec.name !== WORK_MESSAGE_TOOL_NAME),
       membro(tenantId),
       runtime.deps.capabilities,
       runtime.deps.grants?.get(tenantId),
@@ -296,11 +299,12 @@ describe('cosa raggiunge un membro, con e senza grant (ADR-0073)', () => {
     const { home, workspace } = homeConGrant();
     const runtime = buildRuntime(home, workspace);
     try {
-      // La frase dell'ADR, eseguita. `surface.reply` e `memory.write` sono le
-      // due porte del loop (`DOORS`), che non compaiono in `capabilities`.
+      // `surface.reply` is still the ordinary reply door for members. It is
+      // also registered now because the owner-DM tool uses the same policy row.
       expect(raggiunte(runtime, STANZA_SENZA)).toEqual([
         'documents.read',
         'memory.read',
+        'surface.reply',
         'sys.capability_discover',
         'sys.http',
       ]);
