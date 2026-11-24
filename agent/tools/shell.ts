@@ -159,26 +159,14 @@ const descriptionProperty = {
 const shellSpec: ToolSpec = {
   name: 'shell_run',
   description:
-    'Run a non-interactive shell command in the contained read lane. ' +
-    'It asks the owner every time: what a command reads on this machine reaches the conversation and cannot be ' +
-    'taken back. Reads are allow-scoped to the project workspace, a temporary scratch directory and explicit system paths; ' +
-    'writes stay in a ' +
-    'temporary scratch directory, direct IP networking is disabled, and on Linux Unix-domain sockets are blocked ' +
-    'by the sandbox. This lane is treated as high risk and is not replayed after an ' +
-    'uncertain crash. Muffin gateway socket paths are deny-listed. Prefer project-relative reads; ' +
-    'an absolute path outside the project fails with a permission error, ' +
-    'which is the boundary working, not a bug — and in-scope output reaches the model. Use it when you need to observe something no ' +
-    'dedicated tool wraps: `ls`, `lsof`, `sqlite3 -readonly`, `env`, `ps`, `df`, `du`, `git status`, `git log`, ' +
-    '`wc`, `find`, a dry run. Not for what a dedicated tool answers better than parsed text — `cat`/`ls` of a ' +
-    'known file (fs_read, fs_list), a search in the files (fs_search), `ps` (process_list), a question about this ' +
-    'instance (sys_inspect), an indexed document (document_read), what you already know (memory_search), a URL or ' +
-    'a search (http_get, web_search) — and not for anything that WRITES: a command that changes a file fails here ' +
-    'with a permission error, which is the boundary working, not a bug. A command that writes belongs to ' +
-    'shell_run_write. The working directory does NOT persist ' +
-    'between calls — pass cwd each time. Returns the exit code, stdout and stderr; output over ~30k characters is ' +
-    'cut head-and-tail with an explicit marker. An unhandled failure anywhere fails the whole call — a pipeline ' +
-    'fails if any stage fails, and a sequence stops at the first failing command. A failure you handle in the ' +
-    'command itself (`cmd || fallback`, `if cmd`, `! cmd`) may still succeed.',
+    'Run a read-only shell command that reports to stdout, such as `git status`, `wc`, or `awk` printing a total. ' +
+    'If the command creates or changes a project file, use shell_run_write. This includes shell output redirection ' +
+    '(`>` or `>>`), `tee`, and a script writing its own output file. For a file read, listing, or search, prefer ' +
+    'fs_read, fs_list, or fs_search. ' +
+    'Each command asks the owner because its output reaches the conversation. Reads are scoped to the project, ' +
+    'scratch, and allowed system paths. Only scratch is writable. Direct IP networking is disabled. ' +
+    'Pass cwd for each call that needs it. Returns the exit status, stdout, and stderr. An unhandled failure ' +
+    'in a sequence or pipeline fails the command. Long output is truncated with a marker.',
   inputSchema: {
     type: 'object',
     properties: { ...commonProperties, ...descriptionProperty },
@@ -193,21 +181,12 @@ const shellSpec: ToolSpec = {
 const shellWriteSpec: ToolSpec = {
   name: 'shell_run_write',
   description:
-    'Run a non-interactive shell command that CHANGES something — the last resort, and it asks the owner every ' +
-    'time. Use shell_run instead whenever the command only reads (`ls`, `lsof`, `sqlite3 -readonly`, `env`, ' +
-    '`grep`, `git status`): that one confines filesystem writes and, on Linux, cannot open Unix-domain sockets ' +
-    'either; it asks too and is not replayed after an uncertain crash. ' +
-    'Not for `echo … >` a single file (fs_write), ' +
-    '`kill` (process_kill), or a URL you already have a tool for (http_get, web_search). Use it when the task ' +
-    'genuinely needs a program none of the above wraps — a build, a test suite, an install, a one-off script that ' +
-    'writes. Writes are confined to the working directory and a scratch TMPDIR; direct IP networking is disabled, ' +
-    'and on Linux Unix-domain sockets are blocked by the verified sandbox filter as well. ' +
-    'The working directory does NOT persist between calls — pass cwd each time. Returns the exit code, stdout and ' +
-    'stderr; output over ~30k characters is cut head-and-tail with an explicit marker. An unhandled failure ' +
-    'anywhere fails the whole call — a pipeline fails if any stage fails, and a sequence stops at the first ' +
-    'failing command, so check the effect happened instead of reading on past it. A failure you handle in the ' +
-    'command itself (`cmd || fallback`, `if cmd`, `! cmd`) may still succeed. If the sandbox blocks the ' +
-    'command, say so and tell the owner what to run themselves; there is no unsandboxed retry.',
+    'Run a shell command that creates or changes project files, such as a build, a formatter, or `awk` saving ' +
+    'a computed result to a file. Use this for a program that writes its own output or uses `>` or `>>` to save it. ' +
+    'Use fs_write to save text you already have. Use shell_run when the command only reports a result to stdout. ' +
+    'Each command asks the owner. Writes are confined to the working directory and scratch. Direct IP networking ' +
+    'is disabled. Pass cwd for each call that needs it. Returns the exit status, stdout, and stderr. An unhandled ' +
+    'failure in a sequence or pipeline fails the command. Verify the requested effect before reporting success.',
   inputSchema: {
     type: 'object',
     properties: { ...commonProperties, ...descriptionProperty },
