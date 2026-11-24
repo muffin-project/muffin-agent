@@ -5,12 +5,12 @@ import { isIP } from 'node:net';
 import { Readable } from 'node:stream';
 import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib';
 import { z } from 'zod';
-import type { CapabilityDecl } from '../../core/policy/types.js';
-import type { ToolSpec } from '../providers/types.js';
-import { isForbiddenAddress } from '../../core/net/egress.js';
 import { fence } from '../../core/memory/spotlight.js';
-import { extractMainContent, isHtmlContentType } from './extract.js';
+import { isForbiddenAddress } from '../../core/net/egress.js';
+import type { CapabilityDecl } from '../../core/policy/types.js';
 import type { RegisteredTool } from '../loop.js';
+import type { ToolSpec } from '../providers/types.js';
+import { extractMainContent, isHtmlContentType } from './extract.js';
 
 /**
  * sys.http — reading is open; the allowlist governs acting, not reading.
@@ -90,8 +90,9 @@ const httpSpec: ToolSpec = {
     '`curl`/`wget`, not shell_run. Not for finding a URL when you only have a topic — use web_search first. ' +
     'Any public host is reachable — reading is open (ADR-0066) — but the ' +
     'request never reaches loopback, private, or link-local/metadata addresses, on the first hop ' +
-    'or after a redirect. A query string or fragment carrying bytes the model chose may still ask ' +
-    'the owner at higher taint. An HTML page is reduced to its main content (as Markdown) before ' +
+    'or after a redirect. Reuse a URL from search results or a page exactly as it appears. ' +
+    'Find a different address through search instead of composing its path or parameters, which can require approval. ' +
+    'An HTML page is reduced to its main content (as Markdown) before ' +
     'returning; other content types (JSON, plain text, …) pass through unchanged. Returns the body as ' +
     'untrusted text (fenced, tier 3), truncated with a marker when long. e.g. http_get({url: "https://example.com/status"}).',
   inputSchema: {
@@ -229,7 +230,11 @@ export function makeHttpTool(deps: HttpDeps = {}): RegisteredTool {
         if (response.status >= 300 && response.status < 400) {
           const location = response.headers.get('location');
           if (!location) {
-            return { content: `redirect ${response.status} without a location`, isError: true, tier: 0 };
+            return {
+              content: `redirect ${response.status} without a location`,
+              isError: true,
+              tier: 0,
+            };
           }
           try {
             await response.body?.cancel();
@@ -239,7 +244,11 @@ export function makeHttpTool(deps: HttpDeps = {}): RegisteredTool {
           try {
             current = new URL(location, current);
           } catch {
-            return { content: `redirect to an unparseable location: ${location}`, isError: true, tier: 0 };
+            return {
+              content: `redirect to an unparseable location: ${location}`,
+              isError: true,
+              tier: 0,
+            };
           }
           continue;
         }
@@ -281,7 +290,9 @@ export function makeHttpTool(deps: HttpDeps = {}): RegisteredTool {
           const fenced = fence('web', body, `GET ${current.href} → ${response.status}`);
           return {
             content: `${response.status} ${contentType ?? ''}\n${fenced.block}`,
-            ...(response.ok ? {} : { isError: true, ...(isTransient(response.status) ? { retryable: true } : {}) }),
+            ...(response.ok
+              ? {}
+              : { isError: true, ...(isTransient(response.status) ? { retryable: true } : {}) }),
             tier: 3,
           };
         }
@@ -305,7 +316,9 @@ export function makeHttpTool(deps: HttpDeps = {}): RegisteredTool {
         const fenced = fence('web', body, `GET ${current.href} → ${response.status}`);
         return {
           content: `${response.status} ${contentType ?? ''}\n${fenced.block}`,
-          ...(response.ok ? {} : { isError: true, ...(isTransient(response.status) ? { retryable: true } : {}) }),
+          ...(response.ok
+            ? {}
+            : { isError: true, ...(isTransient(response.status) ? { retryable: true } : {}) }),
           tier: 3,
         };
       }
@@ -341,10 +354,14 @@ export async function resolvePinnedIp(
     const detail = error instanceof Error ? error.message : String(error);
     return { address: null, error: `dns failed for ${hostname}: ${detail}` };
   }
-  if (addresses.length === 0) return { address: null, error: `dns returned no addresses for ${hostname}` };
+  if (addresses.length === 0)
+    return { address: null, error: `dns returned no addresses for ${hostname}` };
   for (const { address } of addresses) {
     if (isForbiddenAddress(address)) {
-      return { address: null, error: `${hostname} resolves to a non-routable address (${address}) — refused` };
+      return {
+        address: null,
+        error: `${hostname} resolves to a non-routable address (${address}) — refused`,
+      };
     }
   }
   return { address: addresses[0]!.address, error: null };
@@ -394,7 +411,10 @@ export function serverNameFor(originalAuthority: string): string | undefined {
  * hostname instead of an IP literal, since that would mean the caller
  * skipped {@link resolvePinnedIp}.
  */
-export async function defaultPinnedFetch(input: URL | string, init?: RequestInit): Promise<Response> {
+export async function defaultPinnedFetch(
+  input: URL | string,
+  init?: RequestInit,
+): Promise<Response> {
   const url = input instanceof URL ? new URL(input.href) : new URL(String(input));
   const rawHost = url.hostname.replace(/^\[|\]$/g, '');
   if (isIP(rawHost) === 0) {
@@ -427,7 +447,9 @@ export async function defaultPinnedFetch(input: URL | string, init?: RequestInit
     headers: plainHeaders,
     signal: init?.signal as AbortSignal | undefined,
     auth:
-      url.username !== '' ? `${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}` : undefined,
+      url.username !== ''
+        ? `${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`
+        : undefined,
   };
 
   return new Promise<Response>((resolve, reject) => {
@@ -444,7 +466,13 @@ export async function defaultPinnedFetch(input: URL | string, init?: RequestInit
       // 204/304 must not carry a body for the Response constructor.
       if (res.statusCode === 204 || res.statusCode === 304) {
         res.resume();
-        resolve(new Response(null, { status: res.statusCode, statusText: res.statusMessage ?? '', headers: outHeaders }));
+        resolve(
+          new Response(null, {
+            status: res.statusCode,
+            statusText: res.statusMessage ?? '',
+            headers: outHeaders,
+          }),
+        );
         return;
       }
       try {
@@ -487,7 +515,10 @@ function clipBody(text: string): string {
  * Uses only `node:stream`/`node:zlib` bridging for br, no new dependency
  * (`DecompressionStream` in this runtime lacks br).
  */
-export async function readBoundedBody(response: Response, maxChars: number): Promise<{ text: string; truncated: boolean }> {
+export async function readBoundedBody(
+  response: Response,
+  maxChars: number,
+): Promise<{ text: string; truncated: boolean }> {
   const body = response.body;
   if (body === null) return { text: '', truncated: false };
   const encodings = (response.headers.get('content-encoding') ?? '')
@@ -506,7 +537,10 @@ export async function readBoundedBody(response: Response, maxChars: number): Pro
   return readBoundedDecompressed(body, encodings, maxChars);
 }
 
-async function readBoundedWebStream(stream: ReadableStream<Uint8Array>, maxChars: number): Promise<{ text: string; truncated: boolean }> {
+async function readBoundedWebStream(
+  stream: ReadableStream<Uint8Array>,
+  maxChars: number,
+): Promise<{ text: string; truncated: boolean }> {
   const reader = stream.getReader();
   const decoder = new TextDecoder('utf-8');
   let out = '';
@@ -567,7 +601,8 @@ async function readBoundedDecompressed(
   let out = '';
   try {
     for await (const chunk of source as AsyncIterable<Uint8Array | string>) {
-      const bytes = typeof chunk === 'string' ? new TextEncoder().encode(chunk) : (chunk as Uint8Array);
+      const bytes =
+        typeof chunk === 'string' ? new TextEncoder().encode(chunk) : (chunk as Uint8Array);
       out += decoder.decode(bytes, { stream: true });
       if (out.length > maxChars) {
         out = out.slice(0, maxChars);

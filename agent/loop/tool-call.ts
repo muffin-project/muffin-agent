@@ -369,25 +369,28 @@ export async function runTool(
         // Keep the loop independent of the filesystem module: the resolver's
         // existing PathDenied carries this discriminant only for containment.
         // A similarly shaped failure from undo.take is never a path rejection.
-        if (
+        const outsideScope =
           !effectPathResolved &&
           error instanceof Error &&
           error.name === 'PathDenied' &&
           'reason' in error &&
-          error.reason === 'outside_scope'
-        ) {
+          error.reason === 'outside_scope';
+        if (outsideScope) {
           span.setAttributes({ 'muffin.effect.preflight_rejection': 'outside_scope' });
         }
-        span.end({ status: 'error', error: 'draft_snapshot_failed' });
+        const content = outsideScope
+          ? 'Il percorso richiesto è fuori dalla cartella di lavoro. ' +
+            'Nessun file è stato modificato da questa operazione. ' +
+            'Riferisci il limite e, se il lavoro dipende dalla scrittura, chiedi una destinazione nella cartella di lavoro. ' +
+            'Riprovare lo stesso percorso non può sbloccare la scrittura.'
+          : `Non ho potuto salvare una copia di quel file prima di modificarlo ` +
+            `(${error instanceof Error ? error.message : String(error)}). Non eseguito: senza copia non si torna indietro.`;
+        span.end({
+          status: 'error',
+          error: outsideScope ? 'outside_scope' : 'draft_snapshot_failed',
+        });
         emitToolEnd(true);
-        return {
-          type: 'tool_result',
-          toolCallId: call.id,
-          content:
-            `Non ho potuto salvare una copia di quel file prima di modificarlo ` +
-            `(${error instanceof Error ? error.message : String(error)}). Non eseguito: senza copia non si torna indietro.`,
-          isError: true,
-        };
+        return { type: 'tool_result', toolCallId: call.id, content, isError: true };
       }
       void 0;
       span.setAttributes({ 'muffin.policy.undo_window_s': decision.undo.windowSeconds });

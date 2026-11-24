@@ -719,33 +719,26 @@ export function buildRuntime(
     model: config.models.light,
   };
 
-  // Memory. The vector half is optional and its absence is reported rather than
-  // hidden: an embedder that is not running turns semantic recall into keyword
-  // search, and the difference has to be visible in `doctor` and in the traces.
+  // Recall and consolidation both work with full-text memory when vector
+  // indexing is disabled or the configured embedder cannot be constructed.
   const memoryStore = new MemoryStore(db);
   let vectors: VectorIndex | undefined;
-  try {
-    // Dalla config, non cablato: l'embedder è una scelta di installazione (il
-    // primo commento di `core/memory/embed.ts` lo dice da sempre, e finora non
-    // si poteva fare). Su una VPS senza Ollama, un `new OllamaEmbedder()` fisso
-    // significa che niente viene indicizzato e il recall resta solo testuale.
-    vectors = new VectorIndex(
-      db,
-      makeEmbedder(
-        config.embedder,
-        (ref) => readSecret(ref, home),
-        // Entrare in modalità degradata è un evento, non uno stato da scoprire
-        // leggendo `doctor` di propria iniziativa: passa dallo stesso writer
-        // del consolidamento, quindi nel REPL rispetta la riga di stato invece
-        // di incollarcisi dentro.
-        (motivo) =>
-          (opts.log ?? ((line: string) => process.stderr.write(`${line}\n`)))(
-            `embedder: ${motivo.message} — passo al fallback, e ci resto fino al riavvio`,
-          ),
-      ),
-    );
-  } catch {
-    vectors = undefined;
+  if (config.embedder?.enabled !== false) {
+    try {
+      vectors = new VectorIndex(
+        db,
+        makeEmbedder(
+          config.embedder,
+          (ref) => readSecret(ref, home),
+          (motivo) =>
+            (opts.log ?? ((line: string) => process.stderr.write(`${line}\n`)))(
+              `embedder: ${motivo.message} — passo al fallback, e ci resto fino al riavvio`,
+            ),
+        ),
+      );
+    } catch {
+      vectors = undefined;
+    }
   }
   const recallDeps: RecallDeps = {
     store: memoryStore,
