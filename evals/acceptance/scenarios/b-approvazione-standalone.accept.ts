@@ -1,11 +1,16 @@
-import DatabaseCtor from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { describe } from 'vitest';
-import { install, until, type Install } from '../harness.js';
-import { callbackQuery, privateMessage, startFakeTelegram, type FakeTelegram } from '../telegram.js';
 import { MemoryStore } from '../../../core/memory/store.js';
+import { type Install, install, until } from '../harness.js';
 import { itConSandbox } from '../sandbox-host.js';
+import {
+  callbackQuery,
+  type FakeTelegram,
+  privateMessage,
+  startFakeTelegram,
+} from '../telegram.js';
 
 /**
  * #783 · La domanda autonoma fra un riavvio: dal click al verdetto senza memoria calda.
@@ -68,10 +73,14 @@ function ownerDalFile(home: string): number | undefined {
  * dritto — la risposta non tocca il modello e non consuma lo script `main`.
  */
 async function pairOwner(inst: Install, tg: FakeTelegram, ownerId: number): Promise<Gw> {
-  const tok = await inst.muffin(['secret', 'set', 'telegram_token'], '123456:fake-standalone-token');
+  const tok = await inst.muffin(
+    ['secret', 'set', 'telegram_token'],
+    '123456:fake-standalone-token',
+  );
   if (tok.code !== 0) throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
   const enable = await inst.muffin(['surface', 'enable', 'telegram', '--api-base', tg.url]);
-  if (enable.code !== 0) throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
+  if (enable.code !== 0)
+    throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
   const code = /\n\s{6}([A-Z0-9-]{4,})\n/.exec(enable.err)?.[1];
   if (!code) throw new Error(`nessun codice di pairing stampato:\n${enable.err}`);
 
@@ -146,11 +155,31 @@ describe('acceptance · #783 · domanda autonoma: riavvio fra ask e click', () =
         // finale. Lo script attraversa i riavvii: il provider finto è in
         // questo processo, la cursore non si azzera quando il gateway muore.
         main: [
-          { tool: { name: 'shell_run_write', args: { command: 'echo primo', cwd: '.', description: 'primo comando' } } },
-          { tool: { name: 'shell_run_write', args: { command: 'echo primo', cwd: '.', description: 'primo comando' } } },
+          {
+            tool: {
+              name: 'shell_run_write',
+              args: { command: 'echo primo', cwd: '.', description: 'primo comando' },
+            },
+          },
+          {
+            tool: {
+              name: 'shell_run_write',
+              args: { command: 'echo primo', cwd: '.', description: 'primo comando' },
+            },
+          },
           { text: 'fatto, il primo comando ha risposto primo-fatto' },
-          { tool: { name: 'shell_run_write', args: { command: 'echo secondo', cwd: '.', description: 'secondo comando' } } },
-          { tool: { name: 'shell_run_write', args: { command: 'echo secondo', cwd: '.', description: 'secondo comando' } } },
+          {
+            tool: {
+              name: 'shell_run_write',
+              args: { command: 'echo secondo', cwd: '.', description: 'secondo comando' },
+            },
+          },
+          {
+            tool: {
+              name: 'shell_run_write',
+              args: { command: 'echo secondo', cwd: '.', description: 'secondo comando' },
+            },
+          },
           { text: 'fatto, il secondo comando ha risposto secondo-fatto' },
         ],
         env: { MUFFIN_GATEWAY_TICK_MS: '200' },
@@ -172,8 +201,14 @@ describe('acceptance · #783 · domanda autonoma: riavvio fra ask e click', () =
           tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'esegui il primo comando'));
           let ask1: Chiamata;
           try {
-            await until(() => tg.sent().some((c) => tastieraViva(c) && testoDi(c).includes('echo primo')), 20_000);
-            ask1 = tg.sent().filter((c) => tastieraViva(c) && testoDi(c).includes('echo primo')).at(-1)!;
+            await until(
+              () => tg.sent().some((c) => tastieraViva(c) && testoDi(c).includes('echo primo')),
+              20_000,
+            );
+            ask1 = tg
+              .sent()
+              .filter((c) => tastieraViva(c) && testoDi(c).includes('echo primo'))
+              .at(-1)!;
           } catch {
             throw new Error(
               `[standalone/restart · metà testo] la domanda con tastiera per «echo primo» non è mai partita:\n${riassuntoChiamate(tg)}`,
@@ -181,7 +216,9 @@ describe('acceptance · #783 · domanda autonoma: riavvio fra ask e click', () =
           }
           const ask1MessageId = ask1.messageId;
           if (ask1MessageId === undefined) {
-            throw new Error('[standalone/restart · metà testo] il messaggio ASK non ha un id registrato');
+            throw new Error(
+              '[standalone/restart · metà testo] il messaggio ASK non ha un id registrato',
+            );
           }
           const ok1 = (ask1.payload['reply_markup'] as Tastiera).inline_keyboard
             .flat()
@@ -257,13 +294,23 @@ describe('acceptance · #783 · domanda autonoma: riavvio fra ask e click', () =
             );
           }
           const tastiera1 = verdetto1!.payload['reply_markup'] as Tastiera | undefined;
-          if (!Array.isArray(tastiera1?.inline_keyboard) || tastiera1.inline_keyboard.length !== 0) {
+          if (
+            !Array.isArray(tastiera1?.inline_keyboard) ||
+            tastiera1.inline_keyboard.length !== 0
+          ) {
             throw new Error(
               `[standalone/restart · metà testo] la tastiera non è stata tolta con keyboard: [] nella stessa chiamata del verdetto: ${JSON.stringify(verdetto1!.payload)}`,
             );
           }
-          if (!tg.sent().slice(dalClick1).some((c) => c.method === 'answerCallbackQuery')) {
-            throw new Error('[standalone/restart · metà testo] nessun answerCallbackQuery dopo il click — il pulsante resta a girare');
+          if (
+            !tg
+              .sent()
+              .slice(dalClick1)
+              .some((c) => c.method === 'answerCallbackQuery')
+          ) {
+            throw new Error(
+              '[standalone/restart · metà testo] nessun answerCallbackQuery dopo il click — il pulsante resta a girare',
+            );
           }
           const dopo1 = inst.db(
             (db) =>
@@ -283,13 +330,21 @@ describe('acceptance · #783 · domanda autonoma: riavvio fra ask e click', () =
                   .sent()
                   .some(
                     (c) =>
-                      (c.method === 'sendMessage' || c.method === 'editMessageText' || c.method === 'editMessageRichText') &&
+                      (c.method === 'sendMessage' ||
+                        c.method === 'editMessageText' ||
+                        c.method === 'editMessageRichText') &&
                       testoDi(c).includes('primo-fatto'),
                   ),
               30_000,
             );
           } catch {
-            const righe = inst.db((db) => db.prepare('SELECT id, capability, decision, consumed_at FROM approvals ORDER BY asked_at').all());
+            const righe = inst.db((db) =>
+              db
+                .prepare(
+                  'SELECT id, capability, decision, consumed_at FROM approvals ORDER BY asked_at',
+                )
+                .all(),
+            );
             throw new Error(
               `[standalone/restart · metà testo] il turno non ha ripreso dopo il click (verdetto scritto, ma niente risposta):\n` +
                 `approvals: ${JSON.stringify(righe)}\n${riassuntoChiamate(tg)}`,
@@ -300,8 +355,14 @@ describe('acceptance · #783 · domanda autonoma: riavvio fra ask e click', () =
           tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'esegui il secondo comando'));
           let ask2: Chiamata;
           try {
-            await until(() => tg.sent().some((c) => tastieraViva(c) && testoDi(c).includes('echo secondo')), 20_000);
-            ask2 = tg.sent().filter((c) => tastieraViva(c) && testoDi(c).includes('echo secondo')).at(-1)!;
+            await until(
+              () => tg.sent().some((c) => tastieraViva(c) && testoDi(c).includes('echo secondo')),
+              20_000,
+            );
+            ask2 = tg
+              .sent()
+              .filter((c) => tastieraViva(c) && testoDi(c).includes('echo secondo'))
+              .at(-1)!;
           } catch {
             throw new Error(
               `[standalone/restart · metà ricca] la domanda con tastiera per «echo secondo» non è mai partita:\n${riassuntoChiamate(tg)}`,
@@ -309,7 +370,9 @@ describe('acceptance · #783 · domanda autonoma: riavvio fra ask e click', () =
           }
           const ask2MessageId = ask2.messageId;
           if (ask2MessageId === undefined) {
-            throw new Error('[standalone/restart · metà ricca] il messaggio ASK non ha un id registrato');
+            throw new Error(
+              '[standalone/restart · metà ricca] il messaggio ASK non ha un id registrato',
+            );
           }
           const ok2 = (ask2.payload['reply_markup'] as Tastiera).inline_keyboard
             .flat()
@@ -387,13 +450,23 @@ describe('acceptance · #783 · domanda autonoma: riavvio fra ask e click', () =
             );
           }
           const tastiera2 = verdetto2!.payload['reply_markup'] as Tastiera | undefined;
-          if (!Array.isArray(tastiera2?.inline_keyboard) || tastiera2.inline_keyboard.length !== 0) {
+          if (
+            !Array.isArray(tastiera2?.inline_keyboard) ||
+            tastiera2.inline_keyboard.length !== 0
+          ) {
             throw new Error(
               `[standalone/restart · metà ricca] la tastiera non è stata tolta con keyboard: [] nella stessa chiamata del verdetto: ${JSON.stringify(verdetto2!.payload)}`,
             );
           }
-          if (!tg.sent().slice(dalClick2).some((c) => c.method === 'answerCallbackQuery')) {
-            throw new Error('[standalone/restart · metà ricca] nessun answerCallbackQuery dopo il click — il pulsante resta a girare');
+          if (
+            !tg
+              .sent()
+              .slice(dalClick2)
+              .some((c) => c.method === 'answerCallbackQuery')
+          ) {
+            throw new Error(
+              '[standalone/restart · metà ricca] nessun answerCallbackQuery dopo il click — il pulsante resta a girare',
+            );
           }
           const dopo2 = inst.db(
             (db) =>
@@ -413,13 +486,21 @@ describe('acceptance · #783 · domanda autonoma: riavvio fra ask e click', () =
                   .sent()
                   .some(
                     (c) =>
-                      (c.method === 'sendMessage' || c.method === 'editMessageText' || c.method === 'editMessageRichText') &&
+                      (c.method === 'sendMessage' ||
+                        c.method === 'editMessageText' ||
+                        c.method === 'editMessageRichText') &&
                       testoDi(c).includes('secondo-fatto'),
                   ),
               30_000,
             );
           } catch {
-            const righe = inst.db((db) => db.prepare('SELECT id, capability, decision, consumed_at FROM approvals ORDER BY asked_at').all());
+            const righe = inst.db((db) =>
+              db
+                .prepare(
+                  'SELECT id, capability, decision, consumed_at FROM approvals ORDER BY asked_at',
+                )
+                .all(),
+            );
             throw new Error(
               `[standalone/restart · metà ricca] il turno non ha ripreso dopo il click (verdetto scritto, ma niente risposta):\n` +
                 `approvals: ${JSON.stringify(righe)}\n${riassuntoChiamate(tg)}`,

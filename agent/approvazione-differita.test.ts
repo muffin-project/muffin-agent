@@ -1,22 +1,28 @@
-import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import { ApprovalStore, APPROVAL_WINDOW_MS } from '../core/approvals/store.js';
+import { runInit } from '../cli/init.js';
+import { APPROVAL_WINDOW_MS, ApprovalStore } from '../core/approvals/store.js';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
+import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { TurnStore } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
-import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { decodeWaitFor } from '../core/turns/wait.js';
-import { resumeTurn, runTurn, type ApprovalWhere, type LoopDeps, type RegisteredTool } from './loop.js';
-import { runInit } from '../cli/init.js';
-import { buildRuntime } from './runtime.js';
+import {
+  type ApprovalWhere,
+  type LoopDeps,
+  type RegisteredTool,
+  resumeTurn,
+  runTurn,
+} from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatResult, Provider } from './providers/types.js';
+import { buildRuntime } from './runtime.js';
 
 /**
  * Chiedere l'approvazione a chi non è davanti allo schermo.
@@ -55,7 +61,13 @@ class Scripted implements Provider {
 }
 
 const usage = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 };
-const risposta = (text: string): ChatResult => ({ text, toolCalls: [], stopReason: 'end', usage, model: 'test' });
+const risposta = (text: string): ChatResult => ({
+  text,
+  toolCalls: [],
+  stopReason: 'end',
+  usage,
+  model: 'test',
+});
 
 /**
  * La forma di `sys.shell`: irreversibile, sulla riga `host`, nessuna risorsa
@@ -101,7 +113,10 @@ function harness(script: ChatResult[], opts: { conRegistro?: boolean } = {}) {
     spec: {
       name: 'probe_act',
       description: 'probe',
-      inputSchema: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string' } } },
+      inputSchema: {
+        type: 'object',
+        properties: { command: { type: 'string' }, cwd: { type: 'string' } },
+      },
     },
     handler: () => {
       eseguito.volte += 1;
@@ -116,7 +131,12 @@ function harness(script: ChatResult[], opts: { conRegistro?: boolean } = {}) {
     model: 'test',
     tools: [tool],
     capabilities,
-    decide: createDecide({ matrix: POLICY_FLOOR, capabilities, budgetExhausted: () => false, hardened: false }),
+    decide: createDecide({
+      matrix: POLICY_FLOOR,
+      capabilities,
+      budgetExhausted: () => false,
+      hardened: false,
+    }),
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions: new SessionStore(home),
     turns: new TurnStore(db),
@@ -273,7 +293,7 @@ describe('la risposta arriva, e il lavoro riparte', () => {
   });
 });
 
-describe("chi chiede è la superficie da cui il turno è arrivato", () => {
+describe('chi chiede è la superficie da cui il turno è arrivato', () => {
   /**
    * Il difetto vero della versione precedente: `deps.approve` era **una
    * funzione per processo**, e il REPL ci scriveva la sua. Un turno arrivato da
@@ -297,7 +317,9 @@ describe("chi chiede è la superficie da cui il turno è arrivato", () => {
       return 'allow';
     });
 
-    expect(await runtime.deps.approve!(domanda, { surface: 'telegram', turnId: 't1' })).toBe('unavailable');
+    expect(await runtime.deps.approve!(domanda, { surface: 'telegram', turnId: 't1' })).toBe(
+      'unavailable',
+    );
     expect(terminaleInterrogato).toBe(false);
 
     expect(await runtime.deps.approve!(domanda, { surface: 'cli', turnId: 't1' })).toBe('allow');
