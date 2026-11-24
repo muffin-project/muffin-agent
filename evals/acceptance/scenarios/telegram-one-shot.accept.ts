@@ -12,7 +12,8 @@ describe('acceptance · #598 · a Telegram request arms one autonomous job', () 
     const evidence = 'written once by the scheduler\n';
     const request =
       'Avvia in background una sola volta un lavoro per creare e verificare il file one-shot-evidence.txt. Avvisami quando è finito.';
-    const goal = 'Create and verify the synthetic file one-shot-evidence.txt.';
+    const goal =
+      'Once in the background, create and verify the synthetic file one-shot-evidence.txt. Tell me here when it is done.';
     const armed = 'One-shot work armed.';
     const final = 'One-shot file verified and complete.';
     const inst = await install({
@@ -149,6 +150,9 @@ describe('acceptance · #598 · a Telegram request arms one autonomous job', () 
         { tool: 'fs_write', is_error: 0 },
         { tool: 'fs_read', is_error: 0 },
       ]);
+      expect(inst.provider.main()[0]?.system).not.toContain('already scheduled job');
+      expect(inst.provider.main()[2]?.system).toContain('already scheduled job');
+      expect(inst.provider.main()[2]?.transcript).toContain(goal);
       expect(inst.provider.main()[2]?.tools).not.toContain('schedule_once');
       expect(inst.provider.main()[3]?.transcript).toContain('principal_forbidden');
       expect(inst.provider.main()[5]?.transcript).toContain(evidence.trim());
