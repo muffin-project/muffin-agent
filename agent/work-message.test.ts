@@ -44,7 +44,6 @@ function fixture(script: ChatResult[]) {
   const loop = (): LoopDeps => ({
     ...runtime.deps,
     provider: { kind: 'openai-compat', chat },
-    profile: { ...runtime.deps.profile, maxToolsExposed: 7 },
     sendWorkMessage: send,
   });
   const deps = loop();
@@ -77,8 +76,11 @@ it('exposes the work message on the first owner DM round under catalogue pressur
   const h = fixture([calls(work('ack', 'I’ll check.'))]);
   try {
     const result = await runTurn(h.deps, h.input);
-    expect(h.chat.mock.calls[0]?.[0].tools?.map((tool) => tool.name)).toContain('work_message');
-    expect(h.chat.mock.calls[0]?.[0].tools?.length).toBeLessThanOrEqual(7);
+    const firstMenu = h.chat.mock.calls[0]?.[0].tools?.map((tool) => tool.name);
+    expect(firstMenu).toEqual(
+      expect.arrayContaining(['work_message', 'fs_write', 'capability_search']),
+    );
+    expect(firstMenu).not.toContain('fs_edit');
     expect(h.send.mock.calls).toEqual([
       [result.turnId, expect.stringMatching(/^[a-f0-9]{64}$/), 'I’ll check.'],
     ]);

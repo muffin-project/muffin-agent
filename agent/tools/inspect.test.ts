@@ -169,7 +169,12 @@ describe('sys_inspect dice cosa sta usando adesso', () => {
     const result = await makeInspectTool(finto()).handler(
       {},
       toolContext({
-        toolExposure: () => ({ visible: ['bound_tool'], pressured: false, hiddenCount: 0 }),
+        capabilityExposure: () => ({
+          visible: ['bound_tool'],
+          pressured: false,
+          hiddenCount: 0,
+          eligibleCount: 1,
+        }),
       }),
     );
     expect(result.content).toContain('capability esposte: bound_tool\n');
@@ -191,7 +196,7 @@ describe('sys_inspect dice cosa sta usando adesso', () => {
     );
     expect(conOrigine.content).toContain('profilo: owner-lan · owner (owner-lan.json)');
     // Senza runtimeInfo la riga resta quella di sempre, senza suffissi inventati.
-    expect(testo).toContain('profilo: conservative — max');
+    expect(testo).toContain('profilo: conservative — tool caricati per pertinenza');
     expect(testo).not.toContain('profilo: conservative ·');
   });
 

@@ -136,16 +136,10 @@ export type ToolContext = {
     sanitize: (text: string) => string;
     send: (text: string) => ReturnType<NonNullable<LoopDeps['sendWorkMessage']>>;
   };
-  /**
-   * Turn-local progressive capability projection (#469).
-   *
-   * Absent when the authority-filtered catalogue already fits the profile cap.
-   * The handler may only search/load the eligible catalogue the engine built
-   * before the model call; execution still goes through runTool + the kernel.
-   */
+  /** The schema menu the turn last sent to the model, including in flat mode. */
+  capabilityExposure?: (() => CapabilityExposureSnapshot) | undefined;
+  /** Search and stage schemas from the eligible catalogue when discovery is configured. */
   capabilityDiscovery?: CapabilityDiscoveryPort | undefined;
-  /** Current model menu, also on the under-cap path where discovery is absent. */
-  toolExposure?: (() => CapabilityExposureSnapshot) | undefined;
   /** Durability guard for this turn: a write failure disables later tools. */
   durability?: {
     failure: () => string | null;

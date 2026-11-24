@@ -1,10 +1,11 @@
-import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { runTurn, type RegisteredTool, type ToolContext } from '../../agent/loop.js';
-import { selectProfile, loadProfiles } from '../../agent/profiles/profile.js';
+import DatabaseCtor from 'better-sqlite3';
+import { DEFAULT_CORE_TOOL_NAMES } from '../../agent/capability-exposure.js';
+import { type RegisteredTool, runTurn, type ToolContext } from '../../agent/loop.js';
+import { loadProfiles, selectProfile } from '../../agent/profiles/profile.js';
 import { OpenAICompatProvider } from '../../agent/providers/openai-compat.js';
 import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
 import {
@@ -82,7 +83,9 @@ const inventoryTool: RegisteredTool = {
   throwTier: 0,
   handler: (args) => {
     const sku =
-      args !== null && typeof args === 'object' && typeof (args as { sku?: unknown }).sku === 'string'
+      args !== null &&
+      typeof args === 'object' &&
+      typeof (args as { sku?: unknown }).sku === 'string'
         ? (args as { sku: string }).sku
         : '';
     if (sku.toUpperCase() !== 'BLUE-17') {
@@ -160,32 +163,28 @@ async function oneRun(input: {
     'shell_run',
     'shell_run_write',
   ].map(inert);
-  const search = makeCapabilitySearchTool();
-  const tools = [
+  const flatTools = [
     ...core.map((entry) => observed(entry.tool, calls)),
     ...fillers.map((entry) => observed(entry.tool, calls)),
     observed(inventoryTool, calls),
-    observed(search, calls),
   ];
   const capabilities = new Map<string, CapabilityDecl>([
     ...core.map((entry) => [entry.decl.id, entry.decl] as const),
     ...fillers.map((entry) => [entry.decl.id, entry.decl] as const),
     [inventoryDecl.id, inventoryDecl],
-    [capabilityDiscoveryCapability.id, capabilityDiscoveryCapability],
   ]);
+  const tools = [...flatTools];
+  if (input.mode === 'deferred') {
+    tools.push(observed(makeCapabilitySearchTool(), calls));
+    capabilities.set(capabilityDiscoveryCapability.id, capabilityDiscoveryCapability);
+  }
 
-  const baseProfile = selectProfile(
+  const profile = selectProfile(
     input.model,
     loadProfiles(join(import.meta.dirname, '..', '..', 'agent', 'profiles')),
   );
-  const profile = {
-    ...baseProfile,
-    maxToolsExposed: input.mode === 'flat' ? 24 : 4,
-  };
 
-  const provider = new ObservedProvider(
-    new OpenAICompatProvider(input.apiKey, input.baseUrl),
-  );
+  const provider = new ObservedProvider(new OpenAICompatProvider(input.apiKey, input.baseUrl));
   const started = Date.now();
   try {
     const result = await runTurn(
@@ -228,17 +227,16 @@ async function oneRun(input: {
     const hasAnswer = /\b37\b/.test(result.text);
     const projectionShape =
       input.mode === 'flat'
-        ? firstTools.includes('inventory_lookup') &&
+        ? firstTools.length === flatTools.length &&
+          flatTools.every(({ spec }) => firstTools.includes(spec.name)) &&
           !firstTools.includes('capability_search')
-        : firstTools.length <= 4 &&
+        : firstTools.length < flatTools.length &&
+          DEFAULT_CORE_TOOL_NAMES.every((name) => firstTools.includes(name)) &&
           firstTools.includes('inventory_lookup') &&
           firstTools.includes('capability_search');
 
     const pass =
-      result.stopped === 'answered' &&
-      hasAnswer &&
-      inventoryCalls === 1 &&
-      projectionShape;
+      result.stopped === 'answered' && hasAnswer && inventoryCalls === 1 && projectionShape;
 
     return {
       mode: input.mode,
@@ -296,9 +294,7 @@ const reps = Number(values.reps ?? 3);
 const apiKey = process.env['LLM_API_KEY'] ?? process.env['OPENAI_API_KEY'] ?? '';
 
 if (apiKey === '') {
-  process.stderr.write(
-    'serve LLM_API_KEY/OPENAI_API_KEY nell’ambiente\n',
-  );
+  process.stderr.write('serve LLM_API_KEY/OPENAI_API_KEY nell’ambiente\n');
   process.exit(78);
 }
 
@@ -340,12 +336,8 @@ const aggregate = (mode: Mode) => {
     avgIterations: Number(
       (rows.reduce((sum, row) => sum + row.iterations, 0) / rows.length).toFixed(2),
     ),
-    avgInputTokens: Math.round(
-      rows.reduce((sum, row) => sum + row.inputTokens, 0) / rows.length,
-    ),
-    avgOutputTokens: Math.round(
-      rows.reduce((sum, row) => sum + row.outputTokens, 0) / rows.length,
-    ),
+    avgInputTokens: Math.round(rows.reduce((sum, row) => sum + row.inputTokens, 0) / rows.length),
+    avgOutputTokens: Math.round(rows.reduce((sum, row) => sum + row.outputTokens, 0) / rows.length),
     avgMs: Math.round(rows.reduce((sum, row) => sum + row.ms, 0) / rows.length),
   };
 };
