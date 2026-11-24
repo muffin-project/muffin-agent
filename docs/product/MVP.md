@@ -91,7 +91,7 @@ recorded. A row is closed only when both are true.
 | Family | Journey | Status | Falsifier / gap |
 |---|---|---|---|
 | Filesystem read/write/edit | `d-capability` D1–D3, `fs-edit-chirurgico` | journey exists | remove scope guard / undo wiring → journey must fail; mutation run not yet recorded |
-| Shell | `d-capability` D4, `b-telegram-journey` #746 | journey exists | offered only after the sandbox probe; headless proves the ASK (command+cwd), while the executor itself is unit/CI-proven |
+| Shell | `d-capability` D4, `d-approved-shell` | mutation-proven on compiled `10ce2bbe` | The Telegram fixture verifies no effect before approval, a single consumed approval, actual file contents and a settled stdout record under native macOS containment. Replacing the executor with a successful reply fails on the missing file. See [#874](https://github.com/muffin-project/muffin-agent/issues/874). |
 | Web search + fetch | `d-capability` D7/D9, `b-retry` | journey exists | key/endpoint resolution, SSRF/retry guards; no real-provider search+fetch turn |
 | Memory search/propose/recall | `c-memory`, `c-consolidamento`, `c-tempo` | journey exists | mutation run not yet recorded |
 | Schedule / wait / todo / event | `job-fires`, `b-continuity`, `c-tempo` | partial | no single turn exercising schedule → occurrence → completion |
