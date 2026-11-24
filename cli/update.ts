@@ -30,6 +30,7 @@ import { buildEndpointsUrl, parseEndpointTags } from '../core/config/endpoints.j
 import { repairStaleRouting, tagsToEvidence } from '../core/config/model-resolve.js';
 import { providerFor } from '../core/config/providers.js';
 import { schemaVersionOf } from '../core/db/migrate.js';
+import { askRaw } from '../core/gateway/control-socket.js';
 import { readGateway } from '../core/gateway/lock.js';
 import {
   checkSupervisor,
@@ -782,33 +783,32 @@ export function currentGatewayPid(home: string): number | null {
   }
 }
 
-/**
- * «È già cambiato?», chiesto un numero limitato di volte — mai `while(true)`:
- * un processo che non arriva mai non deve appendere la CLI in eterno per
- * un'osservazione che è comunque best-effort. Di default 8 letture ogni
- * 750ms, 6s in tutto: la claim del lock avviene presto nell'avvio di un
- * gateway sano (`cmdGatewayRun` in `cli/gateway.ts` la prende subito dopo
- * `buildRuntime`, prima di qualunque tick), quindi 6s bastano per un riavvio
- * che va bene; per uno che non va, dire onestamente «non confermato entro Ns»
- * è la risposta giusta — non un'attesa più lunga a caso.
- */
+const DEFAULT_GATEWAY_VERIFY_ATTEMPTS = 8;
+
+/** Stop polling when the observation deadline or the attempt limit is reached. */
 export async function waitForGatewayPid(
-  readPid: () => number | null,
+  readPid: () => number | null | Promise<number | null>,
   before: number | null,
   opts: {
     attempts?: number | undefined;
     intervalMs?: number | undefined;
+    deadline?: number | undefined;
     sleep?: ((ms: number) => Promise<void>) | undefined;
   } = {},
 ): Promise<number | null> {
-  const attempts = opts.attempts ?? 8;
+  const attempts = opts.attempts ?? DEFAULT_GATEWAY_VERIFY_ATTEMPTS;
   const intervalMs = opts.intervalMs ?? 750;
   const sleep =
     opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  let pid = readPid();
+  let pid = await readPid();
   for (let i = 0; i < attempts && (pid === null || pid === before); i++) {
-    await sleep(intervalMs);
-    pid = readPid();
+    const waitMs =
+      opts.deadline === undefined
+        ? intervalMs
+        : Math.min(intervalMs, opts.deadline - performance.now());
+    if (waitMs <= 0) break;
+    await sleep(waitMs);
+    pid = await readPid();
   }
   return pid;
 }
@@ -818,6 +818,7 @@ export type RestartVerdict = { restarted: boolean; line: string };
 export type GatewayRestartOptions = {
   restart?: (argv: string[], timeoutMs: number) => SpawnResult;
   readGatewayPid?: () => number | null;
+  readGatewaySocketPid?: (timeoutMs: number) => Promise<number | null>;
   sleep?: (ms: number) => Promise<void>;
   verifyAttempts?: number;
   verifyIntervalMs?: number;
@@ -831,24 +832,37 @@ export async function restartSupervisedGateway(
 ): Promise<RestartVerdict> {
   const { printable, argv, timeoutMs } = request;
   const readPid = opts.readGatewayPid ?? (() => currentGatewayPid(home));
+  const readSocketPid =
+    opts.readGatewaySocketPid ??
+    (async (limit: number) => {
+      const status = (await askRaw(home, { verb: 'status' }, limit)) as { pid?: number } | null;
+      return status?.pid ?? null;
+    });
   const restart = opts.restart ?? ((args, limit) => run(args[0]!, args.slice(1), home, limit));
   process.stderr.write(`${printable}\n`);
   const pidBefore = readPid();
   const deadline = performance.now() + timeoutMs;
   const command = restart(argv, timeoutMs);
   const intervalMs = Math.max(1, opts.verifyIntervalMs ?? 750);
-  // A successful supervisor request can return while the new gateway is
-  // still starting. Use the remaining service window to see its claim.
+  // The claim appears before the gateway can accept commands. Confirm the
+  // same process on the control socket within the remaining service window.
+  const now = performance.now();
   const attempts =
     opts.verifyAttempts ??
     (command.status === 0
-      ? Math.ceil(Math.max(0, deadline - performance.now()) / intervalMs)
-      : undefined);
-  const pidAfter = await waitForGatewayPid(readPid, pidBefore, {
-    attempts,
-    intervalMs,
-    sleep: opts.sleep,
-  });
+      ? Math.ceil(Math.max(0, deadline - now) / intervalMs)
+      : DEFAULT_GATEWAY_VERIFY_ATTEMPTS);
+  const pollDeadline = command.status === 0 ? deadline : now + attempts * intervalMs;
+  const pidAfter = await waitForGatewayPid(
+    async () => {
+      const claimed = readPid();
+      if (claimed === null || claimed === pidBefore) return claimed;
+      const limit = Math.max(1, Math.min(intervalMs, pollDeadline - performance.now()));
+      return (await readSocketPid(limit)) === claimed ? claimed : null;
+    },
+    pidBefore,
+    { attempts, intervalMs, deadline: pollDeadline, sleep: opts.sleep },
+  );
   return restartVerdict({
     pidBefore,
     pidAfter,
@@ -888,8 +902,8 @@ export function restartVerdict(args: {
   }
   const lastSeen =
     args.pidAfter === null
-      ? 'nessun processo attivo rilevato'
-      : `serve ancora il pid ${args.pidAfter}`;
+      ? 'nessun nuovo gateway ha risposto sul socket'
+      : `il registro riporta ancora il pid ${args.pidAfter}`;
   return {
     restarted: false,
     line:
