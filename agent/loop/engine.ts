@@ -426,9 +426,22 @@ async function runClaimedTurn(
     maxToolsExposed: deps.profile.maxToolsExposed,
     ...(discoveryTool === undefined ? {} : { discoveryTool }),
   });
+  const readerName = 'http_get';
+  // A link in the direct owner request is a selection hint only. Resolve and
+  // authorize the actual URL in the ordinary tool call.
+  const preferReader =
+    input.principal.kind === 'owner' &&
+    input.inputOrigin !== 'external' &&
+    input.text.match(/\bhttps?:\/\/[^\s<>"'`]+/gi)?.some((url) => URL.canParse(url)) &&
+    eligibleTools.some((tool) => tool.spec.name === readerName) &&
+    !capabilityExposure.exposed.some((tool) => tool.spec.name === readerName);
   const preloaded =
     capabilityExposure.pressured && deps.profile.maxToolsExposed > 1
-      ? preloadCapabilitiesForTask(capabilityExposure, input.text, 2)
+      ? preloadCapabilitiesForTask(
+          capabilityExposure,
+          preferReader ? readerName : input.text,
+          preferReader ? 1 : 2,
+        )
       : null;
   const exposed = capabilityExposure.exposed;
   turn.setAttributes({
