@@ -19,7 +19,6 @@ itConSandbox(
       main: [
         { tool: { name: 'capability_search', args: { query: 'shell_run_write', max_results: 1 } } },
         call,
-        call,
         { text: reply },
       ],
       env: { MUFFIN_GATEWAY_TICK_MS: '200' },
@@ -117,13 +116,14 @@ itConSandbox(
         inst.db((db) => db.prepare('SELECT decision, consumed_at FROM approvals').all()),
       ).toEqual([{ decision: 'allow', consumed_at: expect.any(String) }]);
       const requests = inst.provider.main();
-      expect(requests).toHaveLength(4);
+      expect(requests).toHaveLength(3);
       expect(requests[0]?.tools).not.toContain('shell_run_write');
       expect(requests[1]?.tools).toContain('shell_run_write');
       expect(
         requests[2]?.tools,
         'approved command missing on the first resumed provider request',
       ).toContain('shell_run_write');
+      expect(requests[2]?.transcript).toContain('\n42\n');
       await gateway.stop();
     } finally {
       await inst.cleanup();
