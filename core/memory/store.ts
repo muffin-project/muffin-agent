@@ -423,7 +423,7 @@ export class MemoryStore {
     return write();
   }
 
-  /** Episodes not yet processed by the current pipeline version, oldest first. */
+  /** Active episodes not yet processed by the current pipeline version, oldest first. */
   pendingEpisodes(tenantId: string, extractionV: number, limit = 50): Episode[] {
     return this.db
       .prepare(
@@ -1735,16 +1735,7 @@ export class MemoryStore {
       (this.db.prepare(sql).get(...params) as { v: T }).v;
     return {
       episodes: one<number>(`SELECT count(*) AS v FROM episodes WHERE tenant_id = ?`, tenantId),
-      // Deliberately the exact complement of `pendingEpisodes` — same three
-      // conditions, same version constant. It used to diverge on all three, and
-      // each divergence undercounted in a way that only bites once the lane runs
-      // unattended: `role = 'user'` ignored every agent-role episode the lane
-      // will in fact extract; `extraction_v = 0` would miss rows left at an
-      // older non-zero version the day `EXTRACTION_VERSION` is bumped, which is
-      // the one moment a backlog appears out of nowhere; and no `content IS NOT
-      // NULL` counted rows the fetch can never return, so the number could not
-      // reach zero. A pending count that a human reads to decide "is it caught
-      // up?" has to answer for the fetch, not for a similar-sounding question.
+      // Count the same active episodes that `pendingEpisodes` scans, before its batch limit.
       pending: one<number>(
         `SELECT count(*) AS v FROM episodes
           WHERE ${PENDING_EXTRACTION_WHERE}`,
