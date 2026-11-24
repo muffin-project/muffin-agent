@@ -81,7 +81,12 @@ it.each([
     expect(messages).not.toContain(join(home, 'secrets'));
     expect(messages).not.toContain('fixture-search-key');
     expect(messages.includes('Ricerca web indisponibile')).toBe(scene.reason !== null);
-    if (scene.reason !== null) expect(messages).toContain(scene.reason);
+    if (scene.reason !== null) {
+      expect(messages).toContain(scene.reason);
+      expect(messages).toContain('usa http_get');
+      expect(messages).toContain('capability_search');
+      expect(messages).toContain('chiedi un URL');
+    }
     expect(runtime.deps.tools.some((tool) => tool.spec.name === 'web_search')).toBe(
       scene.state === 'ready',
     );
