@@ -13,13 +13,12 @@ export const CAPABILITY_DISCOVERY_GUIDANCE =
 /**
  * The initial always-visible native kernel when catalogue pressure exists.
  *
- * These are retrieval/orientation primitives, not business/domain capabilities.
- * The list is deliberately small; missing entries are filled from the existing
- * eligible registration order so a custom runtime is not left with an empty
- * kernel merely because it does not ship Muffin's built-ins.
+ * Keep common workspace read and write operations and orientation tools visible.
+ * The list only selects from the catalogue already filtered by authority.
  */
 export const DEFAULT_CORE_TOOL_NAMES = [
   'fs_read',
+  'fs_write',
   'fs_list',
   'fs_search',
   'memory_search',

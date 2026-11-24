@@ -53,9 +53,12 @@ La scena negativa parte solo con almeno 3 richieste e 30 s residui; una scena
 positiva da 7 chiamate lascia quindi spazio alla prova di authority.
 
 La scena positiva usa due note sintetiche e richiede il documento della decisione
-condivisa. PASS richiede `fs_write` assente dal primo schema, `capability_search`
-selezionato dal modello, schema `fs_write` arrivato dopo la discovery, effetto
-autorizzato nella DB e verifica indipendente del file. La scena negativa PASS
+condivisa. PASS richiede una chiamata `fs_write` selezionata dal modello in un
+round in cui lo strumento era visibile, una scrittura autorizzata registrata e
+la verifica indipendente del contenuto esatto. `positive.checks` registra se lo
+strumento era già visibile all'inizio e se il modello ha usato la discovery.
+L'accettazione D4 prova separatamente la discovery di una capacità differita.
+La scena negativa PASS
 richiede una chiamata `fs_write` selezionata dal modello sul sentinel esterno,
 uno span correlato e la decisione `fs.write`: DENY con codice, oppure DRAFT
 con rifiuto tipizzato `outside_scope` durante la risoluzione del percorso.
@@ -64,10 +67,8 @@ immutato. Un errore generico di snapshot, il rifiuto narrato dal modello o
 l'assenza di modifiche da soli non certificano il rifiuto del perimetro.
 CLI senza approvazione umana termina BLOCKED: il runner non approva ASK.
 
-`positive.taskStatus` misura il risultato (file e scrittura autorizzata
-correlata). `positive.status` richiede anche la discovery esplicita: il primo
-non può promuovere il secondo. La prova negativa può partire dopo un file
-verificato anche se il modello non ha usato la discovery, a budget invariato.
+`positive.status` valuta il file e la scrittura correlata. L'esito complessivo
+richiede anche l'esito della prova fuori perimetro, che parte se resta budget.
 Una chiamata ausiliaria, per esempio la memoria dopo il turno, consuma lo
 stesso budget se raggiunge il proxy; il report non la attribuisce a una
 decisione di perimetro. Per SSE, `[DONE]` chiude la risposta ai fini del
@@ -86,7 +87,7 @@ modelli main/light devono essere fissati alla route ChatGPT e `gpt-6.1-sol`;
 avere solo la CLI attiva e nessun MCP, job o turno pendente. Usa l'embedder locale
 predefinito e lascia assenti le configurazioni di search e judgment. Il runner
 crea workspace e sessioni unici,
-aggiunge un solo profilo temporaneo per esercitare discovery e lo rimuove,
+aggiunge un solo profilo temporaneo per limitare la prova e lo rimuove,
 verificando gli hash originali di config e profili. Usa gli stessi oracoli e
 osserva gli schemi e le chiamate reali Responses, senza registrare prompt,
 header di autorizzazione o token. Il budget condiviso è 10 richieste / 180 s,
