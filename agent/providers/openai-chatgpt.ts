@@ -21,7 +21,6 @@ import {
   type ProviderMessageMetadata,
   ProviderStreamError,
   parseRetryAfterMs,
-  type StreamEvent,
   type ToolSpec,
 } from './types.js';
 
@@ -39,6 +38,8 @@ export type ChatGPTConnection = {
   accessToken(signal?: AbortSignal): Promise<string>;
   listModels(signal?: AbortSignal): Promise<ChatGPTModel[]>;
 };
+
+type HostedSearchHit = { title: string; url: string; snippet: string };
 
 export type ChatGPTProviderOptions = {
   fetch?: typeof fetch;
@@ -146,35 +147,80 @@ export class OpenAIChatGPTProvider implements Provider {
 
   async chat(call: ChatCall): Promise<ChatResult> {
     try {
-      for await (const event of this.run(call)) {
-        if (event.type === 'done') return event.result;
-      }
+      const { response, refusal, firstTextMs } = await this.complete(call);
+      const result = resultFromResponse(
+        response,
+        refusal,
+        new Set((call.tools ?? []).map((tool) => tool.name)),
+      );
+      return firstTextMs === undefined ? result : { ...result, firstTextMs };
     } catch (error) {
-      // This adapter has no non-streaming route. An unfinished SSE is a
-      // failed chat invocation: let the loop's persisted transport budget
-      // retry it, without publishing partial text or executing partial tools.
+      // Incomplete SSE must not expose partial text or local tool calls.
       if (error instanceof ProviderStreamError)
         throw new ProviderError(error.message, true, undefined, 'transport');
       throw error;
     }
-    throw new ProviderError('Responses stream ended without a completed result', true);
   }
 
-  // No public chatStream: the loop's non-stream fallback would issue a second
-  // SSE request on this streaming-only route. chat() consumes exactly one SSE.
+  /** Called only by the selected search backend after ordinary query authorization. */
+  async searchWeb(
+    model: string,
+    query: string,
+    signal: AbortSignal,
+    maxResults = 5,
+  ): Promise<HostedSearchHit[]> {
+    const { response, refusal } = await this.complete(
+      {
+        model,
+        system: [
+          {
+            type: 'text',
+            text: 'Use hosted web search for the supplied query. Return a brief answer with citations to the sources found.',
+          },
+        ],
+        messages: [{ role: 'user', origin: 'owner', content: [{ type: 'text', text: query }] }],
+        // The plan API has no remote output-token control. The caller supplies the deadline.
+        maxOutputTokens: 0,
+        stream: false,
+        signal,
+      },
+      true,
+    );
+    if (
+      refusal ||
+      !response.output.some(
+        (item) => item.type === 'web_search_call' && item.status === 'completed',
+      )
+    ) {
+      throw new ProviderError('ChatGPT returned no completed web search', false);
+    }
+    return webCitations(response, maxResults);
+  }
 
-  private async *run(call: ChatCall): AsyncIterable<StreamEvent> {
+  // No public chatStream: the loop's non-stream fallback would issue another
+  // request on this streaming-only route. Both operations require a terminal.
+  private async complete(
+    call: ChatCall,
+    hostedSearch = false,
+  ): Promise<{
+    response: OpenAI.Responses.Response;
+    refusal: boolean;
+    firstTextMs: number | undefined;
+  }> {
     if (call.signal?.aborted)
       throw new ProviderError('aborted', false, undefined, 'transport', undefined, false, {
         receivedAnyEvent: false,
       });
     const params = await this.requestBody(call);
+    if (hostedSearch) {
+      params.tools = [{ type: 'web_search', external_web_access: true }];
+      params.tool_choice = 'auto';
+    }
 
     let receivedAnyEvent = false;
     let terminal: OpenAI.Responses.Response | undefined;
     let refusal = false;
     let firstTextMs: number | undefined;
-    const toolItems = new Map<number, { id?: string; callId?: string; name?: string }>();
     const completedOutputItems = new Map<number, OpenAI.Responses.ResponseOutputItem>();
     const allowedTools = new Set((call.tools ?? []).map((tool) => tool.name));
 
@@ -222,7 +268,6 @@ export class OpenAIChatGPTProvider implements Provider {
             if (firstTextMs === undefined && event.delta.trim() !== '') {
               firstTextMs = Math.round(performance.now() - requestStartedAt);
             }
-            yield { type: 'text_delta', text: event.delta };
             break;
           case 'response.output_item.added':
           case 'response.output_item.done': {
@@ -244,35 +289,7 @@ export class OpenAIChatGPTProvider implements Provider {
                 );
               completedOutputItems.set(event.output_index, item);
             }
-            if (item.type === 'function_call') {
-              const index = event.output_index;
-              const current = toolItems.get(index) ?? {};
-              if (item.id !== undefined) current.id = item.id;
-              current.callId = item.call_id;
-              current.name = responseToolName(item, allowedTools);
-              toolItems.set(index, current);
-              if (event.type === 'response.output_item.added') {
-                yield {
-                  type: 'tool_call_delta',
-                  index,
-                  ...(current.callId ? { id: current.callId } : {}),
-                  ...(current.name ? { name: current.name } : {}),
-                };
-              }
-            }
-            break;
-          }
-          case 'response.function_call_arguments.delta': {
-            const index = event.output_index;
-            const current = toolItems.get(index) ?? {};
-            toolItems.set(index, current);
-            yield {
-              type: 'tool_call_delta',
-              index,
-              ...(current.callId ? { id: current.callId } : {}),
-              ...(current.name ? { name: current.name } : {}),
-              argsDelta: event.delta,
-            };
+            if (item.type === 'function_call') responseToolName(item, allowedTools);
             break;
           }
           case 'response.failed':
@@ -346,8 +363,7 @@ export class OpenAIChatGPTProvider implements Provider {
               .map(([, item]) => item),
           }
         : terminal;
-    const result = resultFromResponse(resultResponse, refusal, allowedTools);
-    yield { type: 'done', result: firstTextMs === undefined ? result : { ...result, firstTextMs } };
+    return { response: resultResponse, refusal, firstTextMs };
   }
 
   private async requestBody(
@@ -654,6 +670,29 @@ function resultFromResponse(
     requestId: response.id,
     ...(providerMetadata === undefined ? {} : { providerMetadata }),
   };
+}
+
+function webCitations(response: OpenAI.Responses.Response, maxResults: number): HostedSearchHit[] {
+  const hits = new Map<string, HostedSearchHit>();
+  for (const item of response.output) {
+    if (item.type === 'reasoning' || item.type === 'web_search_call') continue;
+    if (item.type !== 'message' || item.status !== 'completed') {
+      throw new ProviderError('ChatGPT returned an unexpected web search item', false);
+    }
+    for (const part of item.content) {
+      if (part.type === 'refusal') throw new ProviderError('ChatGPT refused the web search', false);
+      if (part.type !== 'output_text') continue;
+      for (const citation of part.annotations) {
+        if (citation.type !== 'url_citation' || typeof citation.title !== 'string') continue;
+        const url = URL.parse(citation.url);
+        if (!url || (url.protocol !== 'https:' && url.protocol !== 'http:')) continue;
+        if (url.username || url.password || hits.has(url.href) || hits.size >= maxResults) continue;
+        const title = citation.title.trim().slice(0, 300);
+        hits.set(url.href, { title: title || url.hostname, url: url.href, snippet: '' });
+      }
+    }
+  }
+  return [...hits.values()];
 }
 
 function responseFailure(error: unknown, requestId: string | undefined): ProviderError {

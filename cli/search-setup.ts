@@ -1,5 +1,20 @@
-import { loadConfig, saveConfig, writeAuthoritativeSecret, writeSecret, locateSecret, type SecretBackend } from '../core/config/config.js';
-import { SEARCH_PROVIDERS, SEARCH_PROVIDER_IDS, type SearchProviderId } from '../core/config/providers.js';
+import { chatGPTSearchBackend, diagnoseConfiguredSearch } from '../agent/search-readiness.js';
+import {
+  ConfigError,
+  loadConfig,
+  locateSecret,
+  type SecretBackend,
+  saveConfig,
+  writeAuthoritativeSecret,
+  writeSecret,
+} from '../core/config/config.js';
+import {
+  CHATGPT_SEARCH_PROVIDER,
+  SEARCH_PROVIDER_IDS,
+  SEARCH_PROVIDERS,
+  type SearchProviderId,
+} from '../core/config/providers.js';
+import { type EgressPolicy, loadEgress } from '../core/net/egress.js';
 import { widenEgressForCapability } from '../core/rot/egress-writer.js';
 
 /**
@@ -63,12 +78,29 @@ export type SearchDeps = {
   secretBackend?: SecretBackend;
 };
 
+const searchChoices = [CHATGPT_SEARCH_PROVIDER.id, ...SEARCH_PROVIDER_IDS].join(', ');
+
 function stato(home: string, out: (l: string) => void): number {
   const config = loadConfig(home);
   if (config.search === undefined) {
     out('ricerca web: spenta.');
-    out(`motori disponibili: ${SEARCH_PROVIDER_IDS.join(', ')}`);
-    out('accendila con `muffin search <motore>` (la chiave in pipe).');
+    out(`motori disponibili: ${searchChoices}`);
+    out('accendila con `muffin search <motore>`. ChatGPT usa il collegamento già attivo.');
+    return 0;
+  }
+  if (config.search.provider === CHATGPT_SEARCH_PROVIDER.id) {
+    let egress: EgressPolicy;
+    try {
+      egress = loadEgress(home);
+    } catch {
+      egress = { allow: [] };
+    }
+    const diagnosis = diagnoseConfiguredSearch(config, egress, home);
+    out(
+      diagnosis.on
+        ? 'ricerca web: ChatGPT · collegamento al piano configurato; vale la quota del piano'
+        : `ricerca web: ChatGPT · ${diagnosis.gap?.reason}. ${diagnosis.gap?.remedy ?? 'muffin doctor'}`,
+    );
     return 0;
   }
   const entry = SEARCH_PROVIDERS[config.search.provider];
@@ -102,12 +134,40 @@ export async function cmdSearch(home: string, argv: string[], deps: SearchDeps):
     // Il segreto resta dov'e': spegnere la ricerca non e' ruotare una chiave, e
     // cancellarne una per un effetto collaterale e' il tipo di cosa che si
     // scopre il giorno che serviva.
-    out(`ricerca web spenta. La chiave resta dov'era: \`muffin secret\` per gestirla.`);
+    out(
+      config.search.provider === CHATGPT_SEARCH_PROVIDER.id
+        ? 'ricerca web spenta. Il collegamento a ChatGPT resta attivo.'
+        : 'ricerca web spenta. La chiave resta dov’è. Usa `muffin secret` per gestirla.',
+    );
+    return 0;
+  }
+
+  if (primo === CHATGPT_SEARCH_PROVIDER.id) {
+    try {
+      chatGPTSearchBackend(loadConfig(home), home);
+    } catch (error) {
+      if (!(error instanceof ConfigError)) throw error;
+      out(`${error.message}. ${error.remedy}`);
+      return 78;
+    }
+    out('ChatGPT riceve le query di ricerca e usa la quota del piano collegato.');
+    const egress = await widenEgressForCapability(
+      home,
+      [new URL(CHATGPT_SEARCH_PROVIDER.endpoint).hostname],
+      'la ricerca web (ChatGPT)',
+      { out, ...(deps.chiediConferma ? { chiediConferma: deps.chiediConferma } : {}) },
+    );
+    if (!egress.ok) return 1;
+    const config = loadConfig(home);
+    if (config.search?.provider !== CHATGPT_SEARCH_PROVIDER.id) {
+      saveConfig({ ...config, search: { provider: CHATGPT_SEARCH_PROVIDER.id } }, home);
+    }
+    out('ricerca web: ChatGPT. Vale dal prossimo avvio del gateway.');
     return 0;
   }
 
   if (!(SEARCH_PROVIDER_IDS as readonly string[]).includes(primo)) {
-    out(`«${primo}» non è un motore conosciuto. Disponibili: ${SEARCH_PROVIDER_IDS.join(', ')}, oppure \`off\`.`);
+    out(`«${primo}» non è un motore conosciuto. Disponibili: ${searchChoices}, oppure \`off\`.`);
     return 2;
   }
   const entry = SEARCH_PROVIDERS[primo as SearchProviderId];
@@ -132,8 +192,9 @@ export async function cmdSearch(home: string, argv: string[], deps: SearchDeps):
     out(`serve la chiave di ${entry.label} — prendila da ${entry.keysUrl}.`);
     if (deps.chiediChiave !== undefined) {
       chiave = (
-        (await deps.chiediChiave(`Incollala qui (non si vede mentre la scrivi; invio a vuoto lascia tutto com'è): `)) ??
-        ''
+        (await deps.chiediChiave(
+          `Incollala qui (non si vede mentre la scrivi; invio a vuoto lascia tutto com'è): `,
+        )) ?? ''
       ).trim();
     }
   }
@@ -148,11 +209,15 @@ export async function cmdSearch(home: string, argv: string[], deps: SearchDeps):
     return 78;
   }
 
-  const at = deps.secretBackend === 'persistent'
-    ? writeAuthoritativeSecret(entry.secretName, chiave, home)
-    : writeSecret(entry.secretName, chiave, home, 'home');
+  const at =
+    deps.secretBackend === 'persistent'
+      ? writeAuthoritativeSecret(entry.secretName, chiave, home)
+      : writeSecret(entry.secretName, chiave, home, 'home');
   const config = loadConfig(home);
-  saveConfig({ ...config, search: { provider: entry.id, apiKeyRef: `secret://${entry.secretName}` } }, home);
+  saveConfig(
+    { ...config, search: { provider: entry.id, apiKeyRef: `secret://${entry.secretName}` } },
+    home,
+  );
   out(`ricerca web: ${entry.label} · chiave (${chiave.length} caratteri, 0600) → ${at}`);
   out('Vale dal prossimo avvio: il tool `web_search` si registra al boot del runtime.');
 
@@ -168,9 +233,14 @@ export async function cmdSearch(home: string, argv: string[], deps: SearchDeps):
   // lo stato di uscita non ha altro modo di accorgersi che l'host nominato
   // non è entrato nell'allowlist.
   const host = new URL(entry.endpoint).hostname;
-  const esitoEgress = await widenEgressForCapability(home, [host], `la ricerca web (${entry.label})`, {
-    out,
-    ...(deps.chiediConferma !== undefined ? { chiediConferma: deps.chiediConferma } : {}),
-  });
+  const esitoEgress = await widenEgressForCapability(
+    home,
+    [host],
+    `la ricerca web (${entry.label})`,
+    {
+      out,
+      ...(deps.chiediConferma !== undefined ? { chiediConferma: deps.chiediConferma } : {}),
+    },
+  );
   return esitoEgress.ok ? 0 : 1;
 }

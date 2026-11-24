@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { CapabilityDecl } from '../../core/policy/types.js';
-import type { ToolSpec } from '../providers/types.js';
+import { ProviderError, type ToolSpec } from '../providers/types.js';
 import { fence } from '../../core/memory/spotlight.js';
 import { SEARCH_PROVIDERS } from '../../core/config/providers.js';
 import type { RegisteredTool } from '../loop.js';
@@ -278,28 +278,23 @@ export type SearchDiagnosis =
 export function diagnoseSearch(
   config: Pick<Config, 'search'>,
   egress: EgressPolicy,
-  resolveApiKey: (ref: string) => string,
+  resolveApiKey: ((ref: string) => string) | undefined,
+  resolveChatGPT?: () => SearchBackend,
 ): SearchDiagnosis {
   if (!config.search) return { on: false, gap: null };
 
   let backend: SearchBackend;
   try {
-    const opzioni = {
-      apiKey: resolveApiKey(config.search.apiKeyRef),
-      ...(config.search.maxResults === undefined ? {} : { maxResults: config.search.maxResults }),
-    };
-    // Uno `switch` esaustivo, per lo stesso motivo di `agent/runtime.ts`: un
-    // id nuovo nel catalogo diventa un errore di compilazione qui, non un
-    // motore scelto in config e ignorato a runtime.
-    switch (config.search.provider) {
-      case 'tavily':
-        backend = tavilyBackend(opzioni);
-        break;
-      case 'keenable':
-        backend = keenableBackend(opzioni);
-        break;
-      default:
-        throw new Error(`motore di ricerca non implementato: ${String(config.search.provider)}`);
+    if (config.search.provider === 'chatgpt') {
+      if (!resolveChatGPT) throw new Error('ChatGPT search is unavailable');
+      backend = resolveChatGPT();
+    } else {
+      if (!resolveApiKey) throw new Error('Search key resolver is unavailable');
+      const options = {
+        apiKey: resolveApiKey(config.search.apiKeyRef),
+        ...(config.search.maxResults === undefined ? {} : { maxResults: config.search.maxResults }),
+      };
+      backend = config.search.provider === 'tavily' ? tavilyBackend(options) : keenableBackend(options);
     }
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
@@ -342,7 +337,7 @@ export function makeSearchTool(backend: SearchBackend): RegisteredTool {
     // status code and our own schema-mismatch text, never the response body —
     // the actual snippets only ever leave through the fenced, tier-3 `return`.
     throwTier: 0,
-    handler: async (args) => {
+    handler: async (args, context) => {
       const parsed = searchArgs.safeParse(args);
       if (!parsed.success) {
         return { content: 'invalid arguments: query is required (max 400 chars)', isError: true, tier: 0 };
@@ -350,7 +345,9 @@ export function makeSearchTool(backend: SearchBackend): RegisteredTool {
 
       let hits: SearchHit[];
       try {
-        hits = await backend.search(parsed.data.query, AbortSignal.timeout(FETCH_TIMEOUT_MS));
+        const timeout = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+        const signal = context.signal ? AbortSignal.any([context.signal, timeout]) : timeout;
+        hits = await backend.search(parsed.data.query, signal);
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         // `tier: 0` on an error: nothing from the provider reached us, so there
@@ -369,7 +366,7 @@ export function makeSearchTool(backend: SearchBackend): RegisteredTool {
         return {
           content: `ricerca fallita (${backend.id}): ${detail}`,
           isError: true,
-          retryable: true,
+          retryable: !(error instanceof ProviderError) || error.retryable,
           tier: 0,
         };
       }

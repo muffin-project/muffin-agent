@@ -73,6 +73,7 @@ import {
   withThinking,
 } from './profiles/profile.js';
 import { configuredProvider } from './providers/configured.js';
+import { diagnoseConfiguredSearch } from './search-readiness.js';
 import { type LightAttemptReport, lightLane } from './providers/light-lane.js';
 import type { Provider } from './providers/types.js';
 import {
@@ -102,7 +103,7 @@ import {
 } from './tools/memory-propose.js';
 import { makeProcessTools, processCapabilities } from './tools/process.js';
 import { makeScheduleTool, scheduleCapability } from './tools/schedule.js';
-import { diagnoseSearch, makeSearchTool, searchCapability } from './tools/search.js';
+import { makeSearchTool, searchCapability } from './tools/search.js';
 import {
   makeShellTool,
   makeShellWriteTool,
@@ -990,7 +991,7 @@ export function buildRuntime(
   // the same function rather than re-deriving the sentence, which is the
   // defect this whole slice exists to close (the owner's 03/09/2026 turn: three
   // retries against a reason that was sitting in `gateway.err` the whole time).
-  const searchDiagnosis = diagnoseSearch(config, egress, (ref) => readSecret(ref, home));
+  const searchDiagnosis = diagnoseConfiguredSearch(config, egress, home, (ref) => readSecret(ref, home));
   const searchOn = searchDiagnosis.on;
   if (searchDiagnosis.on) {
     tools.push(makeSearchTool(searchDiagnosis.backend));

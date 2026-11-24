@@ -97,6 +97,80 @@ function harness(
   return { provider, requests, modelListCalls: () => modelListCalls };
 }
 
+describe('ChatGPT as a bounded web search backend', () => {
+  const search = { type: 'web_search_call', status: 'completed' };
+  const citation = (url: string, title: string) => ({ type: 'url_citation', url, title });
+  const message = {
+    type: 'message',
+    status: 'completed',
+    content: [
+      {
+        type: 'output_text',
+        text: 'Untrusted answer prose must not come back to the parent turn.',
+        annotations: [
+          citation('https://official.example/notice', 'Official notice'),
+          citation('https://official.example/notice', 'Duplicate'),
+          citation('https://user:secret@example.test/private', 'Credentials'),
+          citation('file:///tmp/no', 'Invalid scheme'),
+          citation('not a URL', 'Unparseable'),
+          citation('https://official.example/another', 'Over the result limit'),
+        ],
+      },
+    ],
+  };
+  const done = (output: unknown[]) =>
+    event('response.completed', { response: responseOutput(output) });
+
+  it('sends one query and returns only bounded web citations after verified completion', async () => {
+    const h = harness([
+      event('response.output_item.done', { output_index: 0, item: search }),
+      event('response.output_item.done', { output_index: 1, item: message }),
+      done([]),
+    ]);
+    const query = 'Find the official public notice';
+    const hits = await h.provider.searchWeb(CALL.model, query, AbortSignal.timeout(2000), 1);
+    expect(hits).toEqual([
+      { title: 'Official notice', url: 'https://official.example/notice', snippet: '' },
+    ]);
+    expect(h.requests).toHaveLength(1);
+    expect(h.requests[0]).toMatchObject({
+      url: 'https://api.openai.com/v1/responses',
+      body: {
+        input: [{ role: 'user', content: [{ type: 'input_text', text: query }] }],
+        model: CALL.model,
+        store: false,
+        tools: [{ type: 'web_search', external_web_access: true }],
+        tool_choice: 'auto',
+      },
+    });
+    expect(h.requests[0]?.body).not.toHaveProperty('previous_response_id');
+    expect(h.modelListCalls()).toBe(0);
+  });
+
+  it('rejects a plausible cited answer without a completed hosted action', async () => {
+    const h = harness([done([message])]);
+    await expect(
+      h.provider.searchWeb(CALL.model, 'public notice', AbortSignal.timeout(2000)),
+    ).rejects.toMatchObject({
+      message: 'ChatGPT returned no completed web search',
+      retryable: false,
+    });
+    expect(h.requests).toHaveLength(1);
+  });
+
+  it('never promotes a hosted action or an incomplete result into ordinary chat output', async () => {
+    const completed = harness([done([search, message])]);
+    await expect(completed.provider.chat(CALL)).rejects.toThrow();
+    const incomplete = harness([
+      event('response.output_item.done', { output_index: 0, item: search }),
+    ]);
+    await expect(
+      incomplete.provider.searchWeb(CALL.model, 'public notice', AbortSignal.timeout(2000)),
+    ).rejects.toThrow('without response.completed');
+    expect(incomplete.requests).toHaveLength(1);
+  });
+});
+
 describe('OpenAI ChatGPT plan Responses provider', () => {
   it('does not classify credential acquisition failures as retryable stream failures', async () => {
     let requests = 0;

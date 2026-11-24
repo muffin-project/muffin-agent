@@ -77,7 +77,7 @@ describe('muffin search', () => {
       chiediConferma: () => Promise.resolve('s'),
     });
     expect(code).toBe(0);
-    expect(loadConfig(h).search?.apiKeyRef).toBe('secret://tavily_api_key');
+    expect(loadConfig(h).search).toMatchObject({ apiKeyRef: 'secret://tavily_api_key' });
     expect(out.join('\n')).not.toContain('tvly-dal-terminale');
     // Non stampa nessun rimedio: non c'è niente da rimediare.
     expect(out.join('\n')).not.toContain('muffin search tavily <');
@@ -112,7 +112,7 @@ describe('muffin search', () => {
     const c = loadConfig(h);
     expect(c.search?.provider).toBe('tavily');
     // In config va il riferimento, mai il valore.
-    expect(c.search?.apiKeyRef).toBe('secret://tavily_api_key');
+    expect(c.search).toMatchObject({ apiKeyRef: 'secret://tavily_api_key' });
     expect(readFileSync(paths(h).config, 'utf8')).not.toContain('tvly-segretissima');
     expect(out.join('\n')).not.toContain('tvly-segretissima');
     expect(out.join('\n')).toContain('17 caratteri');
@@ -278,7 +278,7 @@ describe('muffin search keenable', () => {
 
     const c = loadConfig(h);
     expect(c.search?.provider).toBe('keenable');
-    expect(c.search?.apiKeyRef).toBe(`secret://${SEARCH_PROVIDERS.keenable.secretName}`);
+    expect(c.search).toMatchObject({ apiKeyRef: `secret://${SEARCH_PROVIDERS.keenable.secretName}` });
     expect(readFileSync(paths(h).config, 'utf8')).not.toContain('keen_from_terminal');
 
     expect(questions).toHaveLength(1);

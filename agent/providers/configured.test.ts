@@ -1,10 +1,12 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { runInit } from '../../cli/init.js';
+import { cmdSearch } from '../../cli/search-setup.js';
 import { ChatGPTConnection } from '../../core/config/chatgpt-oauth.js';
-import { loadConfig, saveConfig } from '../../core/config/config.js';
+import { loadConfig, paths, saveConfig } from '../../core/config/config.js';
+import { seal } from '../../core/rot/verify.js';
 import { runTurn } from '../loop.js';
 import { buildRuntime } from '../runtime.js';
 import { configuredProvider } from './configured.js';
@@ -95,6 +97,157 @@ function wire(nonce: string) {
   }) as typeof globalThis.fetch;
   return { fetch, requests };
 }
+
+describe('ChatGPT hosted search wiring through Muffin', () => {
+  it('uses only the authorized query and honors the existing group, query approval and disable rules', async () => {
+    const { config, home } = fixture();
+    saveConfig(config, home);
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-plan-search-workspace-'));
+    const readsKey = vi.fn(() => {
+      throw new Error('ChatGPT should reuse the existing connection');
+    });
+    const setup = { out: vi.fn(), readKey: readsKey };
+    const query = 'Find the official public calendar';
+    const bodyForSearch = vi.fn();
+    const note = 'PRIVATE-CONVERSATION-CANARY';
+    const source = 'https://official.example/calendar';
+    const owner = { kind: 'owner', connector: 'cli', externalId: 'local' } as const;
+    const member = {
+      kind: 'member',
+      connector: 'telegram',
+      tenantId: 'group:telegram:g1',
+      externalId: 'u1',
+    } as const;
+
+    vi.stubGlobal('fetch', async (input: string | URL | Request, options?: RequestInit) => {
+      const request = new Request(input, options);
+      expect(request.url).toBe('https://api.openai.com/v1/responses');
+      expect(request.headers.get('authorization')).toBe('Bearer oauth-access-canary');
+      bodyForSearch(await request.json());
+      const response = {
+        status: 'completed',
+        model: config.models.main,
+        output: [
+          { type: 'web_search_call', status: 'completed' },
+          {
+            type: 'message',
+            role: 'assistant',
+            status: 'completed',
+            content: [
+              {
+                type: 'output_text',
+                text: 'Do not retain this untrusted prose.',
+                annotations: [{ type: 'url_citation', title: 'Official calendar', url: source }],
+              },
+            ],
+          },
+        ],
+      };
+      return new Response(
+        `event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', response })}\n\n`,
+        { headers: { 'content-type': 'text/event-stream' } },
+      );
+    });
+
+    let runtime: ReturnType<typeof buildRuntime> | undefined;
+    try {
+      expect(await cmdSearch(home, ['chatgpt'], setup)).toBe(1);
+      expect(loadConfig(home).search).toBeUndefined();
+      expect(
+        await cmdSearch(home, ['chatgpt'], { ...setup, chiediConferma: async () => 'y' }),
+      ).toBe(0);
+      expect(loadConfig(home).search).toEqual({ provider: 'chatgpt' });
+      expect(readsKey).not.toHaveBeenCalled();
+      expect(bodyForSearch).not.toHaveBeenCalled();
+
+      runtime = buildRuntime(home, workspace);
+      let deps = runtime.deps;
+      async function search(principal: typeof owner | typeof member, id: string, contentTaint?: 3) {
+        let calls = 0;
+        const provider: Provider = {
+          kind: 'openai-chatgpt',
+          async chat(call) {
+            const first = calls++ === 0;
+            if (id === 'owner' && first) {
+              expect(call.tools?.some((tool) => tool.name === 'web_search')).toBe(true);
+            }
+            return {
+              text: first ? null : 'Result observed',
+              toolCalls: first
+                ? [{ id: 'search-request', name: 'web_search', args: { query } }]
+                : [],
+              stopReason: first ? 'tool_use' : 'end',
+              usage: { inputTokens: 2, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+              model: config.models.main,
+            };
+          },
+        };
+        return runTurn(
+          { ...deps, provider, prepareTurn: undefined },
+          {
+            principal,
+            tenant: principal.kind === 'member' ? principal.tenantId : 'host',
+            surface: principal.connector,
+            session: deps.sessions.open(id),
+            text: `Search the web for a public calendar. Keep this private in the parent turn: ${note}`,
+            ...(contentTaint === undefined ? {} : { contentTaint, inputOrigin: 'external' }),
+          },
+        );
+      }
+
+      const result = await search(owner, 'owner');
+      expect(result.stopped).toBe('answered');
+      expect(bodyForSearch).toHaveBeenCalledTimes(1);
+      expect(bodyForSearch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: [{ role: 'user', content: [{ type: 'input_text', text: query }] }],
+          tools: [{ type: 'web_search', external_web_access: true }],
+          store: false,
+        }),
+      );
+      expect(JSON.stringify(bodyForSearch.mock.calls)).not.toContain(note);
+      const effects = runtime.db.prepare(
+        "SELECT tool, decision, is_error FROM turn_tool_calls WHERE turn_id = ? AND tool = 'web_search'",
+      );
+      expect(effects.all(result.turnId)).toEqual([
+        { tool: 'web_search', decision: 'allow', is_error: 0 },
+      ]);
+
+      await search(member, 'member');
+      expect(bodyForSearch).toHaveBeenCalledTimes(1);
+
+      expect(await cmdSearch(home, ['off'], setup)).toBe(0);
+      const disabled = await search(owner, 'disabled');
+      expect(disabled.stopped).toBe('answered');
+      expect(effects.all(disabled.turnId)).toContainEqual(expect.objectContaining({ is_error: 1 }));
+      expect(bodyForSearch).toHaveBeenCalledTimes(1);
+
+      runtime.close();
+      runtime = undefined;
+      expect(await cmdSearch(home, ['chatgpt'], setup)).toBe(0);
+      const policyFile = join(paths(home).rot, 'policy.json');
+      const policy = JSON.parse(readFileSync(policyFile, 'utf8'));
+      writeFileSync(policyFile, JSON.stringify({ ...policy, searchMaxTaint: 1 }));
+      seal(home, 'test', new Date());
+      runtime = buildRuntime(home, workspace);
+      deps = runtime.deps;
+      const tainted = await search(owner, 'tainted', 3);
+      expect(tainted.stopped).toBe('ask');
+      expect(tainted.pending).toMatchObject({ capability: 'sys.search' });
+
+      expect(await cmdSearch(home, ['off'], setup)).toBe(0);
+      rmSync(join(paths(home).secrets, 'chatgpt'));
+      expect(await cmdSearch(home, ['chatgpt'], setup)).toBe(78);
+      expect(loadConfig(home).search).toBeUndefined();
+      expect(bodyForSearch).toHaveBeenCalledTimes(1);
+    } finally {
+      runtime?.close();
+      vi.unstubAllGlobals();
+      rmSync(workspace, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('configured production provider and online verifier share ChatGPT route', () => {
   it('uses protected OAuth connection and Responses wire, rather than Chat Completions', async () => {

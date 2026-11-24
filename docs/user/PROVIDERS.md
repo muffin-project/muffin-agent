@@ -91,3 +91,17 @@ text for indexing and semantic search queries to the OpenAI API. The local
 database keeps its source text and rebuilds vectors for the new model as
 consolidation runs. API usage is charged to the key's API organization, including
 any eligible [subscription API credits](https://help.openai.com/en/articles/20001626).
+
+## Web search
+
+With ChatGPT selected as the main provider, run `muffin search chatgpt` once to
+authorize web search using that connection. Review the network permission if
+prompted, then restart the gateway. The ordinary plan connection does not enable
+search by itself. `muffin doctor` checks the local setup. An actual search depends on
+the model and ChatGPT account's eligibility and uses the connected plan's quota.
+
+Muffin sends the searched phrase to ChatGPT in a separate request. It returns
+source links to the turn and uses Muffin's usual web reader to open them.
+An existing Tavily or Keenable selection stays in place until you change it.
+`muffin search off` disables search without disconnecting ChatGPT. Use it before
+rolling back to a build that cannot read the ChatGPT search setting.

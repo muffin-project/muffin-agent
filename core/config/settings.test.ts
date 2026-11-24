@@ -101,7 +101,7 @@ describe('setConfigKnob — search.maxResults', () => {
     const after = loadConfig(dir);
     expect(after.search?.maxResults).toBe(7);
     expect(after.search?.provider).toBe('tavily');
-    expect(after.search?.apiKeyRef).toBe('secret://search_key');
+    expect(after.search).toMatchObject({ apiKeyRef: 'secret://search_key' });
     rmSync(dir, { recursive: true, force: true });
   });
 
