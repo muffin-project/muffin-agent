@@ -1067,7 +1067,11 @@ export async function reconcileProposalLocked(
   }
   const withdrawn = deps.store.withdrawnEpisodes(tenantId, proposal.sourceEpisodeIds);
   const usable = proposal.sourceEpisodeIds.filter((id) => !withdrawn.includes(id));
-  if (usable.length === 0) {
+  // The first source of an owner statement is the authenticated ingress. A
+  // supporting citation cannot carry its authority or its wording after it is withdrawn.
+  const ownerIngressWithdrawn =
+    proposal.producer === 'owner-stated' && usable[0] !== proposal.sourceEpisodeIds[0];
+  if (usable.length === 0 || ownerIngressWithdrawn) {
     const detail = `evidenza ritirata prima della riconciliazione (episodi ${withdrawn.join(', ')}).`;
     deps.store.resolveProposal(tenantId, proposalId, { status: 'rejected', factIds: [], detail, decidedAt: at });
     return { proposalId, status: 'rejected', factIds: [], report: rep };
@@ -1144,10 +1148,7 @@ export async function reconcileProposalLocked(
   // latest tier before it writes a fact.
   const decision = await decideCandidate(deps, incoming, committed.candidate, {
     existing: deps.store.episodeById(tenantId, committed.candidate.episodeId)?.content ?? undefined,
-    // An owner proposal can quote its evidence. Once any of that provenance
-    // was withdrawn, judge the surviving candidate without replaying the quote.
-    incoming:
-      proposal.producer === 'owner-stated' && withdrawn.length > 0 ? undefined : proposal.content,
+    incoming: proposal.content,
   }, parent);
   const judged = deps.store.transact(() => {
     const fresh = deps.store.proposalById(tenantId, proposalId);
