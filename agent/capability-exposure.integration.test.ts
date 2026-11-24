@@ -1,9 +1,10 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
 import { runInit } from '../cli/init.js';
+import { ApprovalStore } from '../core/approvals/store.js';
 import { paths } from '../core/config/config.js';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
@@ -15,7 +16,7 @@ import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { TurnStore } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
 import { CAPABILITY_DISCOVERY_GUIDANCE } from './capability-exposure.js';
-import { type LoopDeps, type RegisteredTool, runTurn } from './loop.js';
+import { type LoopDeps, type RegisteredTool, resumeTurn, runTurn } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatCall, ChatResult, Provider } from './providers/types.js';
 import { buildRuntime } from './runtime.js';
@@ -24,6 +25,8 @@ import {
   makeCapabilitySearchTool,
 } from './tools/capability-search.js';
 import { makeScheduleTool, scheduleCapability } from './tools/schedule.js';
+import { shellWriteCapability } from './tools/shell.js';
+import { makeWaitTool, waitCapability } from './tools/wait.js';
 
 const usage = {
   inputTokens: 1,
@@ -213,6 +216,112 @@ describe('#469 production-path capability discovery', () => {
       'Valuta separatamente ogni azione ed effetto richiesto',
     );
   });
+
+  it.each(['process exit', 'interrupted claim', 'revoked tool'] as const)(
+    'rebuilds the approval menu through current policy after %s',
+    async (resume) => {
+      const home = mkdtempSync(join(tmpdir(), 'muffin-capability-approval-'));
+      const db = new DatabaseCtor(':memory:');
+      const missingPid = 999_999_999;
+      const afterCrash = resume === 'interrupted claim';
+      const turns = new TurnStore(db);
+      const approvals = new ApprovalStore(db);
+      const sessions = new SessionStore(home);
+      const write = {
+        id: 'initial-write',
+        name: 'shell_run_write',
+        args: { command: 'printf 42' },
+      };
+      const wait = {
+        id: 'wait-for-exit',
+        name: 'wait',
+        args: { seconds: 600, until_process_exits: missingPid },
+      };
+      const provider = new Scripted([
+        toolCall('discover', 'capability_search', { query: write.name, max_results: 1 }),
+        toolBatch(write, ...(!afterCrash ? [wait] : [])),
+        toolCall('repeat-write', write.name, write.args),
+        answer('done'),
+      ]);
+      const capabilities = new Map(
+        [capabilityDiscoveryCapability, shellWriteCapability, waitCapability].map((capability) => [
+          capability.id,
+          capability,
+        ]),
+      );
+      const decide = createDecide({
+        matrix: POLICY_FLOOR,
+        capabilities,
+        budgetExhausted: () => false,
+        hardened: false,
+      });
+      let executions = 0;
+      let revoked = false;
+      const deps: LoopDeps = {
+        provider,
+        profile: { ...CONSERVATIVE, recovery: [] },
+        model: 'test-model',
+        capabilities,
+        decide: (request) =>
+          revoked && request.capability === shellWriteCapability.id
+            ? { effect: 'deny', code: 'principal_forbidden', detail: 'fixture revoked' }
+            : decide(request),
+        tracer: new SimpleTracer(new JsonlExporter(home)),
+        sessions,
+        turns,
+        todos: new TodoStore(db),
+        approvals,
+        approve: async () => 'asked',
+        tools: [
+          {
+            ...inertTool(write.name).tool,
+            capability: shellWriteCapability.id,
+            handler: () => {
+              executions += 1;
+              return { content: 'printed 42', tier: 0 };
+            },
+          },
+          makeCapabilitySearchTool(),
+          makeWaitTool(turns),
+        ],
+        budgetExhausted: () => false,
+        systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite.' },
+      };
+
+      try {
+        const initial = await runTurn(deps, {
+          principal: owner,
+          tenant: 'host',
+          surface: 'cli',
+          session: sessions.open('approval-resume'),
+          text: 'Somma 27 e 16.',
+        });
+        expect(initial.stopped).toBe('suspended');
+        expect(provider.seen[0]?.tools?.map((tool) => tool.name)).not.toContain(write.name);
+        expect(provider.seen[1]?.tools?.map((tool) => tool.name)).toContain(write.name);
+        const grant = approvals.open(initial.turnId);
+        expect(grant).not.toBeNull();
+        expect(turns.get(initial.turnId)?.waitFor).toBe(
+          afterCrash ? `approval:${grant?.id}` : `process_exit:${missingPid}`,
+        );
+        expect(approvals.decide(grant?.id ?? '', 'allow', new Date())).toBe('ok');
+        expect(turns.wake(initial.turnId, new Date())).toBe(true);
+        if (afterCrash) {
+          const claimed = turns.claim(initial.turnId, missingPid);
+          expect(claimed?.waitFor).toBeNull();
+          expect(turns.reclaim().map((turn) => turn.id)).toEqual([initial.turnId]);
+        }
+        revoked = resume === 'revoked tool';
+        await resumeTurn(deps, initial.turnId);
+        const resumedNames = provider.seen[2]?.tools?.map((tool) => tool.name) ?? [];
+        expect(resumedNames.includes(write.name)).toBe(!revoked);
+        expect(executions).toBe(revoked ? 0 : 1);
+      } finally {
+        db.close();
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each([false, true])('unions all discoveries in a batch (trailing miss: %s)', async (miss) => {
     const home = mkdtempSync(join(tmpdir(), 'muffin-capability-batch-'));

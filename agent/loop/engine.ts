@@ -420,20 +420,20 @@ async function runClaimedTurn(
   );
   const wakeBarrier =
     options.wokenFromWait === true ? decodeWaitFor(options.waitForAtWake ?? record.waitFor) : null;
-  // An approval replay asks for the same invocation. Rebuild its schema menu
-  // from the last tool batch checkpointed in this turn. The current eligible
-  // catalogue still controls which names can be shown after the pause.
-  const pendingBatch =
-    wakeBarrier?.kind === 'approval'
-      ? run.messages.findLast(
-          (message) =>
-            message.role === 'assistant' &&
-            message.content.some((block) => block.type === 'tool_use'),
-        )
-      : undefined;
-  const resumedToolNames =
-    pendingBatch?.content.filter((block) => block.type === 'tool_use').map((call) => call.name) ??
-    [];
+  // After an approval, the model may need to reissue a call discovered in
+  // the suspended turn. The last wait can be for a process, and a claimed
+  // wake that crashed can have no barrier left. Use the durable transcript
+  // and the current eligible catalogue, including only tools this turn used.
+  const resumingApproval =
+    options.resumed === true &&
+    (wakeBarrier?.kind === 'approval' || deps.approvals?.decidedUnconsumed(record.id) === true);
+  const resumedToolNames = resumingApproval
+    ? run.messages.flatMap((message) =>
+        message.role === 'assistant'
+          ? message.content.filter((block) => block.type === 'tool_use').map((call) => call.name)
+          : [],
+      )
+    : [];
   const capabilityExposure = createCapabilityExposure({
     eligible: eligibleTools,
     ...(resumedToolNames.length === 0
