@@ -59,7 +59,12 @@ import { adoptOwnerState } from '../core/surface/adopt-owner.js';
 import { type CliWriter, cliSurface } from '../core/surface/cli.js';
 import { SurfaceRegistry } from '../core/surface/registry.js';
 import { SaluteSuperfici } from '../core/surface/salute.js';
-import type { DeliveryOutcome, FileSpec, Surface } from '../core/surface/types.js';
+import {
+  type DeliveryOutcome,
+  type FileSpec,
+  notDelivered,
+  type Surface,
+} from '../core/surface/types.js';
 import type { ModelLane } from '../core/turns/model-lane.js';
 import { decidiVista, type Vista } from '../core/vista/vista.js';
 import { cmdModel } from './model.js';
@@ -1096,12 +1101,17 @@ export function connectSurfaces(
     channel === TELEGRAM_ID || telegramAddress(channel, undefined) !== null;
   const deliverToChannel: Deliver = async (channel, text, turn) => {
     if (turn?.recovered && isTelegramChannel(channel)) {
-      const record = runtime.deps.turns.get(turn.id);
-      if (record !== null && record.jobId !== null && record.replyTo?.channel === channel) {
-        // A prior receipt can be reconciled even if Telegram lost its binding
-        // or credentials before startup. Reading it authorizes no new send.
-        const receipt = telegramDelivery().recordedOutcome(record.id, record.leaseIndex);
-        if (receipt !== undefined) return telegramDeliveryResult(receipt);
+      try {
+        const record = runtime.deps.turns.get(turn.id);
+        if (record !== null && record.jobId !== null && record.replyTo?.channel === channel) {
+          // A prior receipt can be reconciled even if Telegram lost its binding
+          // or credentials before startup. Reading it authorizes no new send.
+          const receipt = telegramDelivery().recordedOutcome(record.id, record.leaseIndex);
+          if (receipt !== undefined) return telegramDeliveryResult(receipt);
+        }
+      } catch {
+        // An unreadable receipt does not tell us that it is safe to send again.
+        return notDelivered('Telegram delivery receipt is unreadable');
       }
     }
     return registry.deliver(channel, text, turn);
@@ -1453,9 +1463,9 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
         delivery.parts(turn.id, record.leaseIndex).length === 0
       )
         return 'possibly_sent';
-      const target = address['chatId'];
+      const target = address.chatId;
       const jobId = record.jobId;
-      const channel = record.replyTo?.['channel'];
+      const channel = record.replyTo?.channel;
       const declaredAddress =
         typeof channel === 'string' ? telegramAddress(channel, undefined) : null;
       const hasExplicitRoute = (): boolean => {
@@ -1475,7 +1485,7 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
         record.replyTo?.scheduledDeliveryVersion === SCHEDULED_DELIVERY_VERSION &&
         declaredAddress !== null &&
         declaredAddress.chatId === target &&
-        declaredAddress.threadId === address['threadId'] &&
+        declaredAddress.threadId === address.threadId &&
         Number.isSafeInteger(target) &&
         target > 0 &&
         hasExplicitRoute()

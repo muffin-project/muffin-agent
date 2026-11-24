@@ -267,7 +267,12 @@ export class TelegramDeliveryStore {
 
   /** A whole-plan receipt that can be reconciled without authorizing a new effect. */
   recordedOutcome(turnId: string, leaseIndex: number): 'sent' | 'possibly_sent' | undefined {
-    const parts = this.parts(turnId, leaseIndex);
+    const parts = this.db
+      .prepare(
+        `SELECT status, kind FROM telegram_delivery_parts
+         WHERE turn_id = ? AND lease_index = ? ORDER BY part_index`,
+      )
+      .all(turnId, leaseIndex) as Pick<TelegramDeliveryPart, 'status' | 'kind'>[];
     if (parts.length === 0) return undefined;
     const next = parts.find(
       (part) => part.status !== 'sent' && !(part.kind === 'rich' && part.status === 'rejected'),

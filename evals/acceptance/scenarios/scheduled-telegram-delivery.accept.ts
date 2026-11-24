@@ -30,6 +30,7 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
     'suspended lost response',
     'revoked lost response',
     'revoked suspended lost response',
+    'revoked corrupt lost response',
     'recurring suspended lost response',
   ] as const)(
     'reconciles %s without losing or repeating the final message',
@@ -38,8 +39,8 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
       const beforeSend = scene === 'before send';
       const legacy = scene === 'legacy lost response';
       const recurring = scene === 'recurring suspended lost response';
-      const revoked =
-        scene === 'revoked lost response' || scene === 'revoked suspended lost response';
+      const revoked = scene.startsWith('revoked ');
+      const corruptReceipt = scene === 'revoked corrupt lost response';
       const suspended =
         recurring ||
         scene === 'suspended lost response' ||
@@ -90,7 +91,7 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
           'add',
           ...(recurring ? ['--cron', '0 8 * * *'] : ['--once']),
           '--channel',
-          'telegram:' + destination,
+          `telegram:${destination}`,
           'Verify the synthetic task.',
         ]);
         expect(armed.code, armed.err).toBe(0);
@@ -168,6 +169,16 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
         first.kill();
         expect(await first.exited).toBeNull();
         if (revoked) writeFileSync(join(inst.home, 'rot', 'owner.json'), '{}\n');
+        if (corruptReceipt) {
+          const db = new Database(join(inst.home, 'muffin.db'));
+          try {
+            db.prepare("UPDATE telegram_delivery_parts SET rich_json = '{' WHERE turn_id = ?").run(
+              workId,
+            );
+          } finally {
+            db.close();
+          }
+        }
         if (legacy) {
           // Recreate the state left by a gateway that accepted no journal
           // context. The external fixture still owns the first message.
