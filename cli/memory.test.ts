@@ -134,7 +134,7 @@ async function homeWithProposalTransportFailure(canary: string): Promise<{ home:
   });
   const proposal = proposeMemoryRecord(store, {
     tenantId: 'host', subject: 'owner', subjectKind: 'person', predicate: 'accountant',
-    object: 'Lucia', producer: 'owner-stated', sourceEpisodeIds: [proposalEpisode],
+    object: 'Lucia', producer: 'owner-stated', sourceEpisodeIds: [proposalEpisode], ownerIngressEpisodeId: proposalEpisode,
     content: 'ricorda che il mio commercialista ora è Lucia', confidence: 0.95,
   });
   const provider: Provider = {
@@ -174,7 +174,7 @@ async function homeWithProposalMalformedJudge(response: string): Promise<{ home:
   });
   const proposal = proposeMemoryRecord(store, {
     tenantId: 'host', subject: 'owner', subjectKind: 'person', predicate: 'accountant',
-    object: 'Lucia', producer: 'owner-stated', sourceEpisodeIds: [proposalEpisode],
+    object: 'Lucia', producer: 'owner-stated', sourceEpisodeIds: [proposalEpisode], ownerIngressEpisodeId: proposalEpisode,
     content: 'ricorda che il mio commercialista ora è Lucia', confidence: 0.95,
   });
   const provider: Provider = {
@@ -380,6 +380,7 @@ describe('muffin memory review', () => {
       object: 'Sara',
       producer: 'owner-stated',
       sourceEpisodeIds: [proposalEpisode],
+      ownerIngressEpisodeId: proposalEpisode,
       content: 'il mio commercialista ora è Sara',
       confidence: 0.95,
     });

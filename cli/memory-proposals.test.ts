@@ -54,6 +54,7 @@ function homeWithProposals(): { home: string; pending: number; accepted: number 
     object: 'Mario',
     producer: 'owner-stated',
     sourceEpisodeIds: [ep],
+      ownerIngressEpisodeId: ep,
     content: 'ricorda che il mio commercialista è Mario',
     confidence: 0.95,
   }).id;

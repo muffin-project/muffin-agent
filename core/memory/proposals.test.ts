@@ -110,12 +110,41 @@ const proposeOwner = (
     object: over.object ?? 'Mario',
     producer: over.producer ?? 'owner-stated',
     sourceEpisodeIds: [ep],
+    ownerIngressEpisodeId: over.producer === 'agent-inference' ? undefined : ep,
     content: 'ricorda che il mio commercialista è Mario',
     confidence: 0.95,
   });
 };
 
 describe('MemoryProposal — propose is durable and idempotent', () => {
+  it('deduplicates the same owner source without aliasing a different owner source', () => {
+    const { store } = harness();
+    const introduction = episode(store, 'Il commercialista è Mario');
+    const repeat = episode(store, 'Segnati che il commercialista è Mario');
+    const proposal = {
+      tenantId: HOST,
+      subject: 'owner',
+      predicate: 'accountant',
+      object: 'Mario',
+      producer: 'owner-stated' as const,
+      sourceEpisodeIds: [introduction, repeat],
+      content: 'Il commercialista è Mario',
+      confidence: 0.95,
+    };
+    const legacy = proposeMemoryRecord(store, proposal);
+    const first = proposeMemoryRecord(store, { ...proposal, ownerIngressEpisodeId: introduction });
+    const second = proposeMemoryRecord(store, { ...proposal, ownerIngressEpisodeId: repeat });
+    const replay = proposeMemoryRecord(store, {
+      ...proposal,
+      ownerIngressEpisodeId: introduction,
+      sourceEpisodeIds: [repeat, introduction],
+    });
+
+    expect(new Set([legacy.id, first.id, second.id]).size).toBe(3);
+    expect(replay).toEqual({ id: first.id, duplicate: true });
+    expect(store.proposalById(HOST, second.id)?.ownerIngressEpisodeId).toBe(repeat);
+  });
+
   it('records a proposal durably and returns its id', () => {
     const { store } = harness();
     const { id, duplicate } = proposeOwner(store);
@@ -169,6 +198,7 @@ describe('MemoryProposal — propose is durable and idempotent', () => {
       object: 'Mario',
       producer: 'owner-stated' as const,
       sourceEpisodeIds: [ep],
+      ownerIngressEpisodeId: ep,
       content: 'owner accountant Mario',
       confidence: 0.9,
     };
@@ -488,6 +518,7 @@ describe('MemoryProposal — one canonical reconciliation, every outcome', () =>
       object: '   ',
       producer: 'owner-stated',
       sourceEpisodeIds: [ep],
+      ownerIngressEpisodeId: ep,
       content: 'ricorda questo',
       confidence: 0.9,
     });
@@ -529,6 +560,7 @@ describe('MemoryProposal — one canonical reconciliation, every outcome', () =>
       object: 'Mario',
       producer: 'owner-stated',
       sourceEpisodeIds: [ep1],
+      ownerIngressEpisodeId: ep1,
       content: 'ricorda che il mio commercialista è Mario',
       confidence: 0.95,
     });
@@ -844,7 +876,8 @@ describe('MemoryProposal — duplicate tier promotion is ordered with reconcilia
       const out = proposeMemoryRecord(store, {
         tenantId: 'host', subject: 'owner', subjectKind: 'person',
         predicate: 'accountant', object: 'Mario', producer: 'owner-stated',
-        sourceEpisodeIds: [Number(episodeId)], contextTier: 3,
+        sourceEpisodeIds: [Number(episodeId)],
+      ownerIngressEpisodeId: Number(episodeId), contextTier: 3,
         content: 'ricorda che il mio commercialista è Mario', confidence: 0.95,
       });
       writeFileSync(doneFile, JSON.stringify(out));
@@ -944,6 +977,7 @@ describe('MemoryProposal — duplicate tier promotion is ordered with reconcilia
       object: 'Mario',
       producer: 'owner-stated',
       sourceEpisodeIds: [sourceEpisode],
+      ownerIngressEpisodeId: sourceEpisode,
       contextTier: 3,
       content: 'ricorda che il mio commercialista è Mario',
       confidence: 0.95,

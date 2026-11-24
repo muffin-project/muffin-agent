@@ -495,6 +495,7 @@ describe('memory_propose — owner-stated solo da ingress autenticato (#776)', (
     expect(updated).toMatchObject({
       producer: 'owner-stated',
       sourceEpisodeIds: [currentEvidence, h.turnEpisode],
+      ownerIngressEpisodeId: currentEvidence,
     });
     expect(h.store.factById('host', initial)?.supersededBy).toBe(updated.resultingFactIds[0]);
     expect(h.store.factById('host', updated.resultingFactIds[0]!)?.episodeId).toBe(currentEvidence);
@@ -543,7 +544,8 @@ describe('memory_propose — owner-stated solo da ingress autenticato (#776)', (
       predicate: 'accountant',
       object: 'Lucia',
       producer: 'owner-stated',
-      sourceEpisodeIds: [source, citation],
+      sourceEpisodeIds: [citation, source],
+      ownerIngressEpisodeId: source,
       confidence: 0.8,
       content: correction,
     });
@@ -573,6 +575,26 @@ describe('memory_propose — owner-stated solo da ingress autenticato (#776)', (
       producer: 'agent-inference',
       content: 'owner accountant Lucia',
     });
+  });
+
+  it('leaves an unanchored legacy owner proposal for a fresh instruction', async () => {
+    const h = seed();
+    const { id } = proposeMemoryRecord(h.store, {
+      tenantId: 'host',
+      subject: 'owner',
+      predicate: 'accountant',
+      object: 'Lucia',
+      producer: 'owner-stated',
+      sourceEpisodeIds: [h.turnEpisode],
+      confidence: 0.8,
+      content: 'owner accountant Lucia',
+    });
+
+    const legacy = await reconcileProposal(h.deps, 'host', id, { at: NOW() });
+
+    expect(legacy.status).toBe('rejected');
+    expect(legacy.factIds).toEqual([]);
+    expect(h.store.proposalById('host', id)?.detail).toContain('ripeti');
   });
 
   it('virgolettato non autorizza: resta agent-inference', async () => {

@@ -177,7 +177,9 @@ export async function proposeMemory(
     quote.includes(object) && (subject === 'owner' || quote.includes(subject));
   const ingress = deps.store.episodeIdByTurnId(ctx.tenant, ctx.turnId);
   const ownerStatement =
-    ingress !== null && instruction !== null && statedByOwner(instruction) ? instruction : null;
+    ingress !== null && instruction !== null && statedByOwner(instruction)
+      ? { wording: instruction, episodeId: ingress }
+      : null;
   const producer =
     ownerStatement === null ? ('agent-inference' as const) : ('owner-stated' as const);
 
@@ -244,8 +246,9 @@ export async function proposeMemory(
       ...(validFrom === null ? {} : { validFrom }),
       producer,
       sourceEpisodeIds: evidenceIds,
+      ownerIngressEpisodeId: ownerStatement?.episodeId,
       contextTier,
-      content: ownerStatement ?? `${subject} ${predicate} ${object}`,
+      content: ownerStatement?.wording ?? `${subject} ${predicate} ${object}`,
       confidence,
     }));
   } catch (error) {

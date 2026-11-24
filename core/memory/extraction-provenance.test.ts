@@ -202,6 +202,7 @@ describe('automatic extraction carries interpretation, not owner assertion', () 
       object: 'Synthetic engineer',
       producer: 'owner-stated',
       sourceEpisodeIds: [source],
+      ownerIngressEpisodeId: source,
       content: 'owner-authored candidate',
       confidence: 1,
     });
