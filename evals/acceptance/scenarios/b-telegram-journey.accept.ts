@@ -524,18 +524,8 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
               args: { command: 'echo ciao', cwd: '.', description: 'stampa la parola ciao' },
             },
           },
-          // The same call again: a resumed turn re-asks the model, and the
-          // model is scripted here to retry exactly the call it made before
-          // suspending (`cli/surface.ts#approvatoreTelegram`'s own docstring:
-          // "il turno si sospende qui e riprende da solo quando arriva la
-          // risposta" — the retry is real production behaviour, not a test
-          // artefact).
-          {
-            tool: {
-              name: 'shell_run_write',
-              args: { command: 'echo ciao', cwd: '.', description: 'stampa la parola ciao' },
-            },
-          },
+          // The runtime applies the saved command on consent. The model can
+          // report its result in its next request without issuing it again.
           { text: 'fatto, il comando ha risposto ciao' },
         ],
         env: { MUFFIN_GATEWAY_TICK_MS: '200' },
@@ -673,6 +663,20 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
             throw new Error(
               'la riga approvals non risulta mai consumata dopo la ripresa del turno',
             );
+          const shellResults = inst.db((db) =>
+            db
+              .prepare(
+                "SELECT is_error, content FROM turn_tool_calls WHERE tool = 'shell_run_write'",
+              )
+              .all(),
+          ) as Array<{ is_error: number; content: string }>;
+          if (
+            shellResults.length !== 1 ||
+            shellResults[0]?.is_error !== 0 ||
+            !shellResults[0].content.includes('\nciao\n')
+          ) {
+            throw new Error('the approved shell did not record exactly one successful output');
+          }
 
           // The button press itself got answered (`answerCallbackQuery`) —
           // the client is never left with a spinner.
@@ -718,7 +722,7 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
           }
 
           // (b) La domanda è un passo del turno: il processo del turno ripreso
-          // — la riga di attesa risolta e il tool rieseguito — arriva
+          // — la riga di attesa risolta e il tool eseguito — arriva
           // collassato nel `details` dello **stesso** messaggio che portava la
           // tastiera. Nessuna riga di attesa congelata, nessuna seconda bolla:
           // il verdetto è nello stesso vocabolario di ogni altro passo

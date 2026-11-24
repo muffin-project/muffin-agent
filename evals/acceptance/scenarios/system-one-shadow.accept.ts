@@ -93,14 +93,6 @@ describe('acceptance · System One giudica gli ask in shadow, il pulsante decide
             args: { command: COMANDO, cwd: '.', description: 'scarica i dati di servizio' },
           },
         },
-        // Il turno ripreso rifà la chiamata, come sempre: la ripresa è
-        // comportamento di produzione, non un artefatto dello script.
-        {
-          tool: {
-            name: 'shell_run_write',
-            args: { command: COMANDO, cwd: '.', description: 'scarica i dati di servizio' },
-          },
-        },
         { text: 'fatto: i dati sono arrivati' },
       ],
       env: { MUFFIN_GATEWAY_TICK_MS: '200' },

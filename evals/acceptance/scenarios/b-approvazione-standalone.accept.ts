@@ -150,10 +150,8 @@ describe('acceptance · #783 · domanda autonoma: riavvio fra ask e click', () =
     async () => {
       const tg = await startFakeTelegram();
       const inst = await install({
-        // Due turni, ognuno con la forma di D12: il tool, il suo ritentativo
-        // dopo la ripresa (un turno ripreso ridomanda al modello), la risposta
-        // finale. Lo script attraversa i riavvii: il provider finto è in
-        // questo processo, la cursore non si azzera quando il gateway muore.
+        // Two turns. Consent resumes the original call even after restart, so
+        // the next model request in each turn can report the settled result.
         main: [
           {
             tool: {
@@ -161,19 +159,7 @@ describe('acceptance · #783 · domanda autonoma: riavvio fra ask e click', () =
               args: { command: 'echo primo', cwd: '.', description: 'primo comando' },
             },
           },
-          {
-            tool: {
-              name: 'shell_run_write',
-              args: { command: 'echo primo', cwd: '.', description: 'primo comando' },
-            },
-          },
           { text: 'fatto, il primo comando ha risposto primo-fatto' },
-          {
-            tool: {
-              name: 'shell_run_write',
-              args: { command: 'echo secondo', cwd: '.', description: 'secondo comando' },
-            },
-          },
           {
             tool: {
               name: 'shell_run_write',

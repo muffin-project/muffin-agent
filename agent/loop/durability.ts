@@ -10,6 +10,7 @@ import type {
 import type { TodoItem } from '../../core/turns/todo.js';
 import { encodeWaitFor, type WaitSpec } from '../../core/turns/wait.js';
 import type { ContentBlock, Message } from '../providers/types.js';
+import { resumeApprovedInvocations } from './approval-resume.js';
 import { harnessMessage, toolMessage } from './message-origin.js';
 import { harnessMessages, providerMessages } from './provider-checkpoint.js';
 import type { TurnRun } from './run-state.js';
@@ -286,6 +287,7 @@ export async function reconcile(scope: TurnScope): Promise<TurnResult | null> {
     toolContext,
     turn,
   } = scope;
+  const approved = await resumeApprovedInvocations(scope);
   const last = run.messages[run.messages.length - 1];
   if (last === undefined || last.role !== 'assistant') return null;
   const pending = last.content.filter(
@@ -299,6 +301,11 @@ export async function reconcile(scope: TurnScope): Promise<TurnResult | null> {
   turn.setAttributes({ 'muffin.turn.reconciled': pending.length });
 
   for (const block of pending) {
+    const approvedResult = approved.get(block.id);
+    if (approvedResult !== undefined) {
+      repaired.push(approvedResult);
+      continue;
+    }
     const done = recorded.get(block.id);
     if (done !== undefined) {
       // The taint the recorded result carried has to come back with it: this

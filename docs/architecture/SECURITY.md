@@ -932,6 +932,15 @@ execution.
 Delivery is an effect with its own uncertainty: completed computation and
 definitely delivered output are different facts.
 
+New deferred shell approvals bind the original checkpointed invocation to the
+canonical workspace and working directory. On wake, the current kernel rules
+on that call, and one transaction consumes the consent and records the effect
+intent under the active turn claim. Only then can the existing contained
+executor run it. The original tool result is recovered from the journal when
+available. A consumed approval with an unfinished intent yields an uncertain
+result instead of invoking the shell again.
+[ADR-0109](../decisions/0109-resume-the-exact-approved-shell-call.md).
+
 For remote Nodes the same effect semantics cross the protocol. Lost connection
 after `started` but before outcome must remain uncertain; it must not become
 "never happened" merely because the Home did not receive the final frame.

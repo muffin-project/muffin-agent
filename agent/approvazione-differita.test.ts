@@ -101,7 +101,10 @@ const chiamata = (id = 'c1'): ChatResult => ({
   model: 'test',
 });
 
-function harness(script: ChatResult[], opts: { conRegistro?: boolean } = {}) {
+function harness(
+  script: ChatResult[],
+  opts: { conRegistro?: boolean; approvalScope?: () => string } = {},
+) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-appr-diff-'));
   const provider = new Scripted(script);
   const capabilities = new Map([[probeAct.id, probeAct]]);
@@ -123,6 +126,7 @@ function harness(script: ChatResult[], opts: { conRegistro?: boolean } = {}) {
       return { content: 'fatto', tier: 0 as const };
     },
     throwTier: 0,
+    ...(opts.approvalScope === undefined ? {} : { approvalScope: opts.approvalScope }),
   };
   const chieste: ApprovalWhere[] = [];
   const deps: LoopDeps = {
@@ -352,5 +356,93 @@ describe('#742 — la fine del turno ritira la domanda ancora aperta', () => {
     expect(h.approvals.get(aperta!.id)?.withdrawnAt).not.toBeNull();
     // «Ritirata», non «già risposto»: e il turno non si muove.
     expect(h.approvals.decide(aperta!.id, 'allow', new Date())).toBe('withdrawn');
+  });
+});
+
+describe('checkpoint-bound shell approvals', () => {
+  it.each(['allow', 'deny', 'expired', 'changed scope', 'current policy'] as const)(
+    'reports %s before asking the model to continue',
+    async (scenario) => {
+      let scope = 'first workspace';
+      const h = harness([chiamata(), risposta('continue')], { approvalScope: () => scope });
+      const turn = await parti(h.deps, h.home);
+      const row = h.approvals.open(turn.turnId);
+      if (row === null) throw new Error('expected a pending approval');
+      const decidedAt =
+        scenario === 'expired'
+          ? new Date(Date.parse(row.askedAt) + APPROVAL_WINDOW_MS + 1)
+          : new Date();
+      h.approvals.decide(row.id, scenario === 'deny' ? 'deny' : 'allow', decidedAt);
+      if (scenario === 'changed scope') scope = 'another workspace';
+      if (scenario === 'current policy') {
+        const before = h.deps.decide;
+        h.deps.decide = (request) =>
+          request.capability === probeAct.id
+            ? { effect: 'deny', code: 'principal_forbidden', detail: 'no longer available' }
+            : before(request);
+      }
+      expect(h.deps.turns.wake(turn.turnId, decidedAt)).toBe(true);
+      await resumeTurn(h.deps, turn.turnId);
+
+      expect(h.provider.chiamate).toBe(2);
+      expect(h.chieste).toHaveLength(1);
+      expect(h.eseguito.volte).toBe(scenario === 'allow' ? 1 : 0);
+      const expected = {
+        allow: 'fatto',
+        deny: 'ha rifiutato',
+        expired: 'dopo la scadenza',
+        'changed scope': "applicare l'approvazione",
+        'current policy': 'principal_forbidden',
+      }[scenario];
+      expect(h.provider.letti.join('\n')).toContain(expected);
+    },
+  );
+
+  it('preserves an uncertain effect after the holder dies before writing the outcome', async () => {
+    const h = harness([chiamata(), risposta('check the workspace')], {
+      approvalScope: () => 'same workspace',
+    });
+    const turn = await parti(h.deps, h.home);
+    const row = h.approvals.open(turn.turnId);
+    const invocation = row?.invocation;
+    if (row == null || invocation == null) throw new Error('expected an exact approval');
+    const at = new Date();
+    h.approvals.decide(row.id, 'allow', at);
+    expect(h.deps.turns.wake(turn.turnId, at)).toBe(true);
+    const claim = h.deps.turns.claim(turn.turnId, 999_999_999, at);
+    if (claim === null) throw new Error('expected to claim the turn');
+    expect(
+      h.approvals.startInvocation(
+        {
+          id: row.id,
+          turnId: turn.turnId,
+          capability: row.capability,
+          resource: row.resource ?? undefined,
+          invocation,
+          claimToken: claim.claimToken,
+        },
+        at,
+        () => {
+          h.deps.turns.startToolCall(turn.turnId, {
+            callId: invocation.callId,
+            tool: 'probe_act',
+            capability: row.capability,
+            rerunnable: false,
+            args: chiamata().toolCalls[0]?.args,
+            effect: { row: 'host', decision: 'ask', reversible: 'no', resource: row.resource },
+          });
+        },
+      ),
+    ).toBe('allow');
+    // The handler can already have changed the world, but left no outcome row.
+    h.eseguito.volte = 1;
+    expect(h.deps.turns.reclaim().map((dead) => dead.id)).toEqual([turn.turnId]);
+    await resumeTurn(h.deps, turn.turnId);
+
+    expect(h.eseguito.volte).toBe(1);
+    expect(h.provider.letti.join('\n')).toContain(
+      'verificare se la chiamata approvata abbia avuto effetto',
+    );
+    expect(h.deps.turns.uncertainCalls(turn.turnId)).toHaveLength(1);
   });
 });

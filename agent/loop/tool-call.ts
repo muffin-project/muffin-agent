@@ -1,4 +1,9 @@
-import { APPROVAL_WINDOW_MS } from '../../core/approvals/store.js';
+import { createHash } from 'node:crypto';
+import {
+  APPROVAL_WINDOW_MS,
+  type ApprovalInvocation,
+  type ApprovalStore,
+} from '../../core/approvals/store.js';
 import { sleep } from '../../core/net/sleep.js';
 import type { PermissionSnapshot, TrustTier } from '../../core/policy/types.js';
 import type { SessionMessage } from '../../core/session/store.js';
@@ -164,6 +169,22 @@ async function eseguiConRitentativi(
   return outcome;
 }
 
+function approvalInvocation(
+  call: {
+    id: string;
+    name: string;
+    args: unknown;
+  },
+  scope: string,
+): ApprovalInvocation {
+  return {
+    callId: call.id,
+    digest: createHash('sha256')
+      .update(JSON.stringify([call.name, call.args ?? null, scope]))
+      .digest('hex'),
+  };
+}
+
 export async function runTool(
   deps: LoopDeps,
   snapshot: PermissionSnapshot,
@@ -174,6 +195,7 @@ export async function runTool(
   exposed: RegisteredTool[],
   /** The turn a handler is running in: identity, and the suspension barrier. */
   ctx: ToolContext,
+  replay?: { approvalId: string; claimToken: string | null },
 ): Promise<ContentBlock> {
   const span = deps.tracer.start(
     'muffin.tool_call',
@@ -279,6 +301,19 @@ export async function runTool(
   // `core/policy/decide.ts`'s own `switch (decl.risk)` already gets for free
   // from its non-void return type; this one needs to say so, because `ask`'s
   // approved path does not return here, it falls through to execution below.
+  if (replay !== undefined && decision.effect !== 'ask' && decision.effect !== 'deny') {
+    span.end({ status: 'error', error: 'approval_policy_changed' });
+    emitToolEnd(true);
+    return {
+      type: 'tool_result',
+      toolCallId: call.id,
+      content:
+        'La policy è cambiata dopo la richiesta di approvazione. Chiamata sospesa non eseguita.',
+      isError: true,
+    };
+  }
+  let approved: Parameters<ApprovalStore['startInvocation']>[0] | undefined;
+  let approvedScope: string | undefined;
   switch (decision.effect) {
     case 'deny':
       span.end({ status: 'error', error: decision.code });
@@ -286,7 +321,10 @@ export async function runTool(
       return {
         type: 'tool_result',
         toolCallId: call.id,
-        content: denyText(decision),
+        content:
+          replay === undefined
+            ? denyText(decision)
+            : `La policy attuale rifiuta la chiamata approvata (${decision.code}). Non è stata eseguita.`,
         isError: true,
       };
     case 'draft': {
@@ -378,6 +416,21 @@ export async function runTool(
       break; // fotografato: si esegue, come 'allow'
     }
     case 'ask': {
+      let invocation: ApprovalInvocation | undefined;
+      let preparedScope: string | undefined;
+      try {
+        preparedScope = tool.approvalScope?.(call.args);
+        if (preparedScope !== undefined) invocation = approvalInvocation(call, preparedScope);
+      } catch (error) {
+        span.end({ status: 'error', error: 'approval_resource_unavailable' });
+        emitToolEnd(true);
+        return {
+          type: 'tool_result',
+          toolCallId: call.id,
+          content: error instanceof Error ? error.message : String(error),
+          isError: true,
+        };
+      }
       const request: ApprovalRequest = {
         capability,
         prompt: conProvenienza(
@@ -407,6 +460,28 @@ export async function runTool(
           : { description: descriptionOf(call.args) }),
         taint: snapshot.currentTaint(),
       };
+      if (replay !== undefined) {
+        if (invocation === undefined) {
+          span.end({ status: 'error', error: 'approval_scope_unavailable' });
+          emitToolEnd(true);
+          return {
+            type: 'tool_result',
+            toolCallId: call.id,
+            content: "La chiamata approvata non ha più l'ambito richiesto. Non l'ho eseguita.",
+            isError: true,
+          };
+        }
+        approvedScope = preparedScope;
+        approved = {
+          id: replay.approvalId,
+          turnId: ctx.turnId,
+          capability,
+          resource: request.resource,
+          invocation,
+          claimToken: replay.claimToken,
+        };
+        break;
+      }
       const nega = (): ContentBlock => {
         span.end({ status: 'error', error: 'ask_denied' });
         emitToolEnd(true);
@@ -514,6 +589,7 @@ export async function runTool(
             ...(request.resource === undefined ? {} : { resource: request.resource }),
             prompt: request.prompt,
             taint: request.taint,
+            invocation,
           },
           adesso,
         );
@@ -596,6 +672,7 @@ export async function runTool(
           return {
             type: 'tool_result',
             toolCallId: call.id,
+            ...(invocation === undefined ? {} : { deferredApprovalId: approvalId }),
             content:
               `Ho chiesto la sua approvazione per "${capability}"${request.resource ? ` su ${request.resource}` : ''} ` +
               `e sto aspettando che risponda. Non l'ho fatto. Non richiederlo e non cercare un'altra strada per farlo ` +
@@ -607,15 +684,13 @@ export async function runTool(
         // consumata nello stesso momento, o un secondo `sys.shell` più avanti
         // nello stesso turno la troverebbe libera e passerebbe senza chiedere.
         if (deps.approvals !== undefined && approvalId !== undefined) {
-          deps.approvals.decide(approvalId, answer, (deps.now ?? (() => new Date()))());
-          deps.approvals.take(
-            {
-              turnId: ctx.turnId,
-              capability,
-              ...(request.resource === undefined ? {} : { resource: request.resource }),
-            },
-            (deps.now ?? (() => new Date()))(),
-          );
+          const now = (deps.now ?? (() => new Date()))();
+          deps.approvals.decide(approvalId, answer, now);
+          if (
+            deps.approvals.get(approvalId)?.decision !== answer ||
+            !deps.approvals.consumeInline(approvalId, now)
+          )
+            return nega();
         }
         if (answer === 'deny') return nega();
       }
@@ -734,20 +809,44 @@ export async function runTool(
     resource: effectResource(risolto, resource, call.args),
     decision: decision.effect as EffectDecision,
   };
-  const intentError = recordIntent(
-    deps,
-    ctx.turnId,
-    span,
-    {
-      callId: call.id,
-      tool: call.name,
-      capability,
-      rerunnable: decl?.rerunnable === true,
-      args,
-      effect,
-    },
-    ctx,
-  );
+  const invocation = {
+    callId: call.id,
+    tool: call.name,
+    capability,
+    rerunnable: decl?.rerunnable === true,
+    args,
+    effect,
+  };
+  if (approved !== undefined) {
+    let decision: ReturnType<ApprovalStore['startInvocation']> | undefined;
+    try {
+      if (input.signal?.aborted !== true) {
+        decision = deps.approvals?.startInvocation(
+          approved,
+          (deps.now ?? (() => new Date()))(),
+          () => deps.turns.startToolCall(ctx.turnId, invocation),
+        );
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      ctx.durability?.fail(reason);
+      span.setAttributes({ 'muffin.turn.record_error': reason });
+    }
+    if (decision !== 'allow') {
+      span.end({ status: 'error', error: 'deferred_approval_not_applied' });
+      emitToolEnd(true);
+      const content =
+        decision === 'deny'
+          ? "L'owner ha rifiutato la chiamata. Non è stata eseguita."
+          : decision === 'expired'
+            ? "L'approvazione è arrivata dopo la scadenza. La chiamata non è stata eseguita."
+            : "Non ho potuto applicare l'approvazione a questa chiamata. Non è stata eseguita.";
+      return { type: 'tool_result', toolCallId: call.id, content, isError: true };
+    }
+    span.setAttributes({ 'muffin.policy.approval': 'allow' });
+  }
+  const intentError =
+    approved === undefined ? recordIntent(deps, ctx.turnId, span, invocation, ctx) : null;
   if (intentError !== null) {
     // EFFECT WAL, a DAY-1 readiness invariant: the write above did not land, so
     // the handler must not run — a missing intent row has to mean "never
@@ -814,7 +913,12 @@ export async function runTool(
     const outcome = await eseguiConRitentativi(
       tool,
       args,
-      { ...ctx, signal: input.signal, ...(risolto === undefined ? {} : { effectPath: risolto }) },
+      {
+        ...ctx,
+        signal: input.signal,
+        ...(risolto === undefined ? {} : { effectPath: risolto }),
+        ...(approvedScope === undefined ? {} : { approvedScope }),
+      },
       decl?.rerunnable === true,
       call.name,
       input.onProgress,
