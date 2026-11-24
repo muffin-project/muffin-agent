@@ -424,9 +424,29 @@ async function runClaimedTurn(
   const discoveryTool = eligibleTools.find(
     (tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME,
   );
+  const wakeBarrier =
+    options.wokenFromWait === true ? decodeWaitFor(options.waitForAtWake ?? record.waitFor) : null;
+  // After an approval, the model may need to reissue a call discovered in
+  // the suspended turn. The last wait can be for a process, and a claimed
+  // wake that crashed can have no barrier left. Use the durable transcript
+  // and the current eligible catalogue, including only tools this turn used.
+  const resumingApproval =
+    options.resumed === true &&
+    (wakeBarrier?.kind === 'approval' || deps.approvals?.decidedUnconsumed(record.id) === true);
+  const resumedToolNames = resumingApproval
+    ? run.messages.flatMap((message) =>
+        message.role === 'assistant'
+          ? message.content.filter((block) => block.type === 'tool_use').map((call) => call.name)
+          : [],
+      )
+    : [];
   const capabilityExposure = createCapabilityExposure({
     eligible: eligibleTools,
-    ...(canWorkMessage ? { coreNames: [WORK_MESSAGE_TOOL_NAME, ...DEFAULT_CORE_TOOL_NAMES] } : {}),
+    coreNames: [
+      ...(canWorkMessage ? [WORK_MESSAGE_TOOL_NAME] : []),
+      ...DEFAULT_CORE_TOOL_NAMES,
+      ...resumedToolNames,
+    ],
     ...(discoveryTool === undefined
       ? {}
       : {
@@ -766,7 +786,7 @@ async function runClaimedTurn(
     const lostClaim = await reconcile(scope);
     if (lostClaim !== null) return lostClaim;
     if (options.wokenFromWait === true) {
-      const waitFor = decodeWaitFor(options.waitForAtWake ?? record.waitFor);
+      const waitFor = wakeBarrier;
       // Lo stesso giudizio che dà la lane quando sceglie chi svegliare, con lo
       // stesso registro sotto: senza `answered` una barriera d'approvazione
       // risulterebbe non soddisfatta qui, e il turno si risveglierebbe con
