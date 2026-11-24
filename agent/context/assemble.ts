@@ -397,7 +397,8 @@ function istanzaRighe(f: IstanzaFacts): string[] {
           f.webSearchUnavailable === 'credential'
             ? '- Ricerca web indisponibile. La credenziale del servizio configurato manca o non è leggibile.'
             : '- Ricerca web indisponibile. L’accesso di rete del servizio configurato non è autorizzato.',
-          '- Se ti serve trovare una fonte e non hai uno strumento adatto, chiedi un URL. Leggere un URL noto segue le regole di accesso del turno.',
+          '- Per leggere un URL già fornito usa http_get, con le regole di accesso del turno. Se manca dal menu e vedi capability_search, cerca lo strumento per la lettura di URL.',
+          '- Se ti serve trovare una fonte e non hai uno strumento di ricerca adatto, chiedi un URL. Per trovare o aprire fonti web evita il terminale e i tentativi sui file locali.',
         ]),
   ];
 }
