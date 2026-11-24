@@ -56,7 +56,7 @@ export type CapabilityDiscoveryPort = {
    * defence-in-depth rule for forbidden calls.
    */
   readonly searchAndLoad: (query: string, maxResults: number) => CapabilityLoadResult;
-  /** Apply the last staged selection at the next round boundary. */
+  /** Replace the current dynamic selection with the batch's matches at the next round boundary. */
   readonly activatePending: () => void;
   /** Current model-visible projection, for truthful runtime inspection. */
   readonly snapshot: () => CapabilityExposureSnapshot;
@@ -182,7 +182,7 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
   const fixed = [...core, discoveryTool];
   const exposed = [...fixed];
 
-  let pending: T[] | null = null;
+  let pending: Map<string, T> | null = null;
 
   const discovery: CapabilityDiscoveryPort = {
     searchAndLoad(query, maxResults) {
@@ -193,7 +193,8 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
         .sort((left, right) => right.score - left.score || left.index - right.index);
 
       const selected = ranked.slice(0, limit).map((row) => row.tool);
-      pending = selected;
+      pending ??= new Map();
+      for (const tool of selected) pending.set(tool.spec.name, tool);
 
       const loaded = selected.map((tool) => ({
         name: tool.spec.name,
@@ -210,7 +211,7 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
     activatePending() {
       if (pending === null) return;
       exposed.splice(fixed.length);
-      exposed.push(...pending);
+      exposed.push(...pending.values());
       pending = null;
     },
 

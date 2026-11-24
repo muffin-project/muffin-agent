@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
@@ -57,9 +57,13 @@ function inertTool(name: string): { tool: RegisteredTool; decl: CapabilityDecl }
 }
 
 function toolCall(id: string, name: string, args: Record<string, unknown>): ChatResult {
+  return toolBatch({ id, name, args });
+}
+
+function toolBatch(...toolCalls: ChatResult['toolCalls']): ChatResult {
   return {
     text: null,
-    toolCalls: [{ id, name, args }],
+    toolCalls,
     stopReason: 'tool_use',
     usage,
     model: 'test-model',
@@ -205,6 +209,196 @@ describe('#469 production-path capability discovery', () => {
       'Valuta separatamente ogni azione ed effetto richiesto',
     );
   });
+
+  it.each([false, true])('unions all discoveries in a batch (trailing miss: %s)', async (miss) => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-capability-batch-'));
+    const db = new DatabaseCtor(':memory:');
+    const catalogue = [
+      inertTool('fs_read'),
+      inertTool('inventory_lookup'),
+      inertTool('translate_document'),
+      inertTool('calibrate_sensor'),
+    ];
+    const discoveries = [
+      { id: 'find-inventory', name: 'capability_search', args: { query: 'inventory_lookup' } },
+      { id: 'find-translation', name: 'capability_search', args: { query: 'translate_document' } },
+      { id: 'find-inventory-again', name: 'capability_search', args: { query: 'inventory' } },
+    ];
+    if (miss)
+      discoveries.push({ id: 'miss', name: 'capability_search', args: { query: 'zzzzzz' } });
+    const provider = new Scripted([
+      toolBatch(...discoveries),
+      toolCall('find-calibration', 'capability_search', { query: 'calibrate_sensor' }),
+      answer('done'),
+    ]);
+    const sessions = new SessionStore(home);
+    const capabilities = new Map(catalogue.map(({ decl }) => [decl.id, decl]));
+    capabilities.set(capabilityDiscoveryCapability.id, capabilityDiscoveryCapability);
+
+    try {
+      const result = await runTurn(
+        {
+          provider,
+          profile: { ...CONSERVATIVE, recovery: [] },
+          model: 'test-model',
+          tools: [...catalogue.map(({ tool }) => tool), makeCapabilitySearchTool()],
+          capabilities,
+          decide: createDecide({
+            matrix: POLICY_FLOOR,
+            capabilities,
+            budgetExhausted: () => false,
+            hardened: true,
+          }),
+          tracer: new SimpleTracer(new JsonlExporter(home)),
+          sessions,
+          turns: new TurnStore(db),
+          todos: new TodoStore(db),
+          budgetExhausted: () => false,
+          systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite.' },
+        },
+        {
+          principal: owner,
+          tenant: 'host',
+          surface: 'cli',
+          session: sessions.open('capability-batch'),
+          text: 'Begin.',
+        },
+      );
+
+      expect(result.stopped).toBe('answered');
+      if (miss) {
+        expect(provider.seen[1]?.messages.flatMap((message) => message.content)).toContainEqual(
+          expect.objectContaining({
+            type: 'tool_result',
+            toolCallId: 'miss',
+            content: 'No authorized hidden capability matched that query.',
+          }),
+        );
+      }
+      expect(provider.seen.map((request) => request.tools?.map(({ name }) => name))).toEqual([
+        ['fs_read', 'capability_search'],
+        ['fs_read', 'capability_search', 'inventory_lookup', 'translate_document'],
+        ['fs_read', 'capability_search', 'calibrate_sensor'],
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it.each(['deferred', 'flat'] as const)(
+    'applies categorical owner denials to the %s catalogue without treating resource checks as eligibility',
+    async (mode) => {
+      const home = mkdtempSync(join(tmpdir(), 'muffin-capability-owner-authority-'));
+      const db = new DatabaseCtor(':memory:');
+      const core = inertTool('fs_read');
+      const sealed = inertTool('sealed_setting');
+      const high = inertTool('high_risk');
+      const undeclared = inertTool('undeclared_tool');
+      const url = inertTool('public_url');
+      const deferred = mode === 'deferred';
+      const sessions = new SessionStore(home);
+      const invoked = vi.fn(url.tool.handler);
+      const forbidden = vi.fn(sealed.tool.handler);
+      const capabilities = new Map([
+        [core.decl.id, core.decl],
+        [sealed.decl.id, sealed.decl],
+        [high.decl.id, { ...high.decl, risk: 'high' as const }],
+        [url.decl.id, { ...url.decl, resourceKind: 'url-read' as const, policyArgs: ['url'] }],
+      ]);
+      if (deferred)
+        capabilities.set(capabilityDiscoveryCapability.id, capabilityDiscoveryCapability);
+      const provider = new Scripted([
+        ...(deferred
+          ? [
+              toolCall('search-sealed', 'capability_search', { query: 'sealed_setting' }),
+              toolCall('search-url', 'capability_search', { query: 'public_url' }),
+            ]
+          : []),
+        toolCall('read-url', 'public_url', { url: 'https://public.example/' }),
+        toolCall('guess-sealed', 'sealed_setting', {}),
+        answer('done'),
+      ]);
+
+      try {
+        const result = await runTurn(
+          {
+            provider,
+            profile: { ...CONSERVATIVE, recovery: [] },
+            model: 'test-model',
+            tools: [
+              core.tool,
+              { ...sealed.tool, handler: forbidden },
+              high.tool,
+              undeclared.tool,
+              { ...url.tool, handler: invoked },
+              ...(deferred ? [makeCapabilitySearchTool()] : []),
+            ],
+            capabilities,
+            decide: createDecide({
+              matrix: {
+                ...POLICY_FLOOR,
+                neverAtRuntime: new Set([...POLICY_FLOOR.neverAtRuntime, sealed.decl.id]),
+              },
+              capabilities,
+              safeMode: true,
+              budgetExhausted: () => false,
+              hardened: true,
+            }),
+            tracer: new SimpleTracer(new JsonlExporter(home)),
+            sessions,
+            turns: new TurnStore(db),
+            todos: new TodoStore(db),
+            budgetExhausted: () => false,
+            systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite.' },
+          },
+          {
+            principal: owner,
+            tenant: 'host',
+            surface: 'cli',
+            session: sessions.open('capability-owner-authority'),
+            text: 'sealed_setting high_risk undeclared_tool',
+          },
+        );
+
+        expect(result.stopped).toBe('answered');
+        expect(invoked).toHaveBeenCalledOnce();
+        expect(forbidden).not.toHaveBeenCalled();
+        const menus = provider.seen.map((request) => request.tools?.map(({ name }) => name));
+        expect(menus).toEqual(
+          deferred
+            ? [
+                ['fs_read', 'capability_search'],
+                ['fs_read', 'capability_search'],
+                ['fs_read', 'capability_search', 'public_url'],
+                ['fs_read', 'capability_search', 'public_url'],
+                ['fs_read', 'capability_search', 'public_url'],
+              ]
+            : Array.from({ length: 3 }, () => ['fs_read', 'public_url']),
+        );
+        const results = provider.seen.at(-1)?.messages.flatMap((message) => message.content);
+        if (deferred) {
+          expect(results).toContainEqual(
+            expect.objectContaining({
+              type: 'tool_result',
+              toolCallId: 'search-sealed',
+              content: 'No authorized hidden capability matched that query.',
+            }),
+          );
+        }
+        expect(results).toContainEqual(
+          expect.objectContaining({
+            type: 'tool_result',
+            toolCallId: 'guess-sealed',
+            isError: true,
+            content: expect.stringContaining('rot_violation'),
+          }),
+        );
+      } finally {
+        db.close();
+      }
+    },
+  );
+
   it('keeps forbidden tools out of discovery while direct guesses still meet the kernel', async () => {
     const home = mkdtempSync(join(tmpdir(), 'muffin-capability-authority-'));
     const db = new DatabaseCtor(':memory:');
