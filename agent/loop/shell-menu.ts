@@ -8,21 +8,28 @@ const write = {
   capability: 'sys.shell.write',
   effect: 'write_project',
 } as const;
+type ShellEffect = typeof read | typeof write;
+const effects = [read, write] as const;
 
 /** Model-interface experiment. The execution registry and both capability gates stay intact. */
-export function modelShellMenu(exposed: readonly RegisteredTool[]): ToolSpec[] | undefined {
-  const readTool = exposed.find(
-    (tool) => tool.spec.name === read.name && tool.capability === read.capability,
+export function modelShellMenu(
+  exposed: readonly RegisteredTool[],
+  registered: readonly RegisteredTool[],
+): { tools: ToolSpec[]; effects: ShellEffect[] } | undefined {
+  if (registered.some((tool) => tool.spec.name === name)) return undefined;
+  const available = effects.filter((effect) =>
+    exposed.some((tool) => tool.spec.name === effect.name && tool.capability === effect.capability),
   );
-  const writeTool = exposed.find(
-    (tool) => tool.spec.name === write.name && tool.capability === write.capability,
+  const shellTools = exposed.filter((tool) =>
+    available.some((effect) => effect.name === tool.spec.name),
   );
-  if (!readTool || !writeTool || exposed.some((tool) => tool.spec.name === name)) return undefined;
+  const [first] = shellTools;
+  if (first === undefined) return undefined;
 
-  const schema = readTool.spec.inputSchema;
-  return exposed.flatMap((tool) => {
-    if (tool === writeTool) return [];
-    if (tool !== readTool) return [tool.spec];
+  const schema = first.spec.inputSchema;
+  const tools = exposed.flatMap((tool) => {
+    if (!shellTools.includes(tool)) return [tool.spec];
+    if (tool !== first) return [];
     return [
       {
         name,
@@ -38,7 +45,7 @@ export function modelShellMenu(exposed: readonly RegisteredTool[]): ToolSpec[] |
             ...(schema.properties as Record<string, unknown>),
             effect: {
               type: 'string',
-              enum: [read.effect, write.effect],
+              enum: available.map((effect) => effect.effect),
               description:
                 'write_project creates or changes a project file. read_only prints a result without changing project files.',
             },
@@ -48,16 +55,20 @@ export function modelShellMenu(exposed: readonly RegisteredTool[]): ToolSpec[] |
       },
     ];
   });
+  return { tools, effects: available };
 }
 
 /** Resolve the model's declared scope before storing the call or looking up its capability. */
-export function canonicalShellCalls(result: ChatResult): ChatResult {
+export function canonicalShellCalls(
+  result: ChatResult,
+  available: readonly ShellEffect[],
+): ChatResult {
   return {
     ...result,
     toolCalls: result.toolCalls.map((call) => {
       if (call.name !== name || !call.args || typeof call.args !== 'object') return call;
       const { effect, ...args } = call.args as Record<string, unknown>;
-      const selected = effect === read.effect ? read : effect === write.effect ? write : undefined;
+      const selected = available.find((candidate) => candidate.effect === effect);
       return selected === undefined ? call : { ...call, name: selected.name, args };
     }),
   };
@@ -72,8 +83,7 @@ export function modelShellHistory(messages: Message[]): Message[] {
       content: message.content.map((block) => {
         if (block.type !== 'tool_use' || !block.input || typeof block.input !== 'object')
           return block;
-        const selected =
-          block.name === read.name ? read : block.name === write.name ? write : undefined;
+        const selected = effects.find((candidate) => candidate.name === block.name);
         return selected === undefined
           ? block
           : {

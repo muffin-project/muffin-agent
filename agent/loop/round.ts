@@ -565,7 +565,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
         : deps.systemPrompts[turnClass];
     // One breakpoint on the fixed prefix, up to three on the last messages,
     // never more than four. Copies: the session transcript is not a cache map.
-    const shellMenu = modelShellMenu(exposed);
+    const shellMenu = modelShellMenu(exposed, deps.tools);
     const providerMessages = shellMenu === undefined ? messages : modelShellHistory(messages);
     const placed = placeCacheBreakpoints([{ type: 'text', text: systemText }], providerMessages);
     const call: ChatCall = {
@@ -586,7 +586,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // with a precise reason to demand a call, and it sets the flag itself.
       ...(exposed.length > 0
         ? {
-            tools: shellMenu ?? exposed.map((t) => t.spec),
+            tools: shellMenu?.tools ?? exposed.map((t) => t.spec),
             toolChoice: 'auto' as const,
           }
         : {}),
@@ -805,7 +805,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
         });
       }
       result = await requestChatResult(reasoningResolution);
-      if (shellMenu !== undefined) result = canonicalShellCalls(result);
+      if (shellMenu !== undefined) result = canonicalShellCalls(result, shellMenu.effects);
     } catch (error) {
       const abortReason = lastAbortReason;
       chatSpan.setAttributes({
