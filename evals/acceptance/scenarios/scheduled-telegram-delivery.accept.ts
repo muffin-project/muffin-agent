@@ -28,6 +28,8 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
     'lost send response',
     'legacy lost response',
     'suspended lost response',
+    'revoked lost response',
+    'revoked suspended lost response',
     'recurring suspended lost response',
   ] as const)(
     'reconciles %s without losing or repeating the final message',
@@ -36,7 +38,13 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
       const beforeSend = scene === 'before send';
       const legacy = scene === 'legacy lost response';
       const recurring = scene === 'recurring suspended lost response';
-      const suspended = recurring || scene === 'suspended lost response';
+      const revoked =
+        scene === 'revoked lost response' || scene === 'revoked suspended lost response';
+      const suspended =
+        recurring ||
+        scene === 'suspended lost response' ||
+        scene === 'revoked suspended lost response';
+      const destination = revoked ? OTHER : OWNER;
       const uncertain = !interrupted && !beforeSend;
       const delivery = uncertain ? 'possibly_sent' : 'sent';
       const inst = await install({
@@ -82,7 +90,7 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
           'add',
           ...(recurring ? ['--cron', '0 8 * * *'] : ['--once']),
           '--channel',
-          'telegram:' + OWNER,
+          'telegram:' + destination,
           'Verify the synthetic task.',
         ]);
         expect(armed.code, armed.err).toBe(0);
@@ -155,9 +163,11 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
           expect(readTurn()).toMatchObject({ status: 'done', delivery: 'pending' });
         }
         const workId = readTurn()!.id;
+        if (revoked) expect(partsOf(inst, workId)).toEqual([{ status: 'attempting' }]);
         const scheduleBeforeRestart = readSchedule();
         first.kill();
         expect(await first.exited).toBeNull();
+        if (revoked) writeFileSync(join(inst.home, 'rot', 'owner.json'), '{}\n');
         if (legacy) {
           // Recreate the state left by a gateway that accepted no journal
           // context. The external fixture still owns the first message.
@@ -187,7 +197,7 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
           );
           expect(readSchedule()).toEqual(scheduleBeforeRestart);
         }
-        expect(messages()).toEqual([{ chatId: OWNER, text: expect.stringContaining(FINAL) }]);
+        expect(messages()).toEqual([{ chatId: destination, text: expect.stringContaining(FINAL) }]);
         expect(readTurn()).toMatchObject({
           id: workId,
           status: 'done',
@@ -431,34 +441,45 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
     }
   }, 45_000);
 
-  it('delivers a scheduled result to another Telegram chat, once', async () => {
-    const armed = await arm('telegram:' + OTHER);
-    try {
-      await withGateway(armed, async () => {
-        await until(() => finals(armed.telegram).length === 1, 12_000);
-        await untilSettled(armed.inst);
-      });
-      expect(finals(armed.telegram)).toEqual([
-        { chatId: OTHER, text: expect.stringContaining(FINAL) },
-      ]);
-      expect(turnOf(armed.inst)).toMatchObject({
-        delivery: 'sent',
-        channel: 'telegram:' + OTHER,
-        version: 1,
-      });
-      expect(partsOf(armed.inst, turnOf(armed.inst)!.id)).toEqual([{ status: 'sent' }]);
-      expect(armed.inst.provider.main()).toHaveLength(1);
+  it.each([
+    { channel: `telegram:${OTHER}`, threadId: undefined },
+    { channel: `telegram:0${OTHER}#013`, threadId: 13 },
+  ])(
+    'delivers a scheduled result to another Telegram chat, once ($channel)',
+    async ({ channel, threadId }) => {
+      const armed = await arm(channel);
+      try {
+        await withGateway(armed, async () => {
+          await until(() => finals(armed.telegram).length === 1, 12_000);
+          await untilSettled(armed.inst);
+        });
+        expect(finals(armed.telegram)).toEqual([
+          { chatId: OTHER, text: expect.stringContaining(FINAL) },
+        ]);
+        expect(turnOf(armed.inst)).toMatchObject({
+          delivery: 'sent',
+          channel,
+          version: 1,
+        });
+        expect(partsOf(armed.inst, turnOf(armed.inst)!.id)).toEqual([{ status: 'sent' }]);
+        expect(
+          armed.telegram.sent().find((call) => call.method === 'sendMessage')?.payload
+            .message_thread_id,
+        ).toBe(threadId);
+        expect(armed.inst.provider.main()).toHaveLength(1);
 
-      await withGateway(armed, async () => {
-        await holdQuiet();
-      });
-      expect(finals(armed.telegram)).toHaveLength(1);
-      expect(armed.inst.provider.main()).toHaveLength(1);
-    } finally {
-      await armed.inst.cleanup();
-      await armed.telegram.close();
-    }
-  }, 45_000);
+        await withGateway(armed, async () => {
+          await holdQuiet();
+        });
+        expect(finals(armed.telegram)).toHaveLength(1);
+        expect(armed.inst.provider.main()).toHaveLength(1);
+      } finally {
+        await armed.inst.cleanup();
+        await armed.telegram.close();
+      }
+    },
+    45_000,
+  );
 
   it('stops retries of an explicit scheduled send after owner binding revocation', async () => {
     const armed = await arm('telegram:' + OTHER);
