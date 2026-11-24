@@ -1291,10 +1291,12 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
     return null;
   }
   const base = tg?.apiBase;
-  const api = new TelegramApi(token, base, (chatId) => {
+  const pairedPrivateChat = (): number | undefined => {
     const owner = runtime.deps.workMessageOwner?.();
-    return owner?.userId === chatId && (owner.chatId ?? owner.userId) === chatId;
-  });
+    const userId = owner?.userId;
+    return userId !== undefined && (owner?.chatId ?? userId) === userId ? userId : undefined;
+  };
+  const api = new TelegramApi(token, base, (chatId) => pairedPrivateChat() === chatId);
   // Question answers and their inbox consumption commit together.
   const inbox = new UpdateInbox(runtime.db);
   const delivery = ctx.telegramDelivery();
@@ -1428,6 +1430,44 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
         delivery.parts(turn.id, record.leaseIndex).length === 0
       )
         return 'possibly_sent';
+      const target = address['chatId'];
+      const ownerAtStart = pairedPrivateChat();
+      const jobId = record.jobId;
+      const hasExplicitRoute = (chatId: number): boolean => {
+        const channel = `telegram:${chatId}`;
+        if (jobId === null || record.replyTo?.['channel'] !== channel) return false;
+        const job = runtime.jobs.get(jobId);
+        return (
+          job?.channel === channel &&
+          job.origin.surface === 'cli' &&
+          job.origin.tenant === 'host' &&
+          job.origin.principal === 'owner' &&
+          job.origin.turnId === null
+        );
+      };
+      if (
+        !record.ownerQuestionFinal &&
+        record.replyTo?.scheduledDeliveryVersion === SCHEDULED_DELIVERY_VERSION &&
+        typeof target === 'number' &&
+        Number.isSafeInteger(target) &&
+        target > 0 &&
+        ownerAtStart !== undefined &&
+        target !== ownerAtStart &&
+        hasExplicitRoute(target)
+      ) {
+        if (delivery.parts(turn.id, record.leaseIndex).some((part) => part.chatId !== target)) {
+          throw new Error('Scheduled delivery plan does not match the registered chat');
+        }
+        // CLI jobs name their destination explicitly. Keep the live owner
+        // binding and the recorded job route in force at the Bot API boundary.
+        const scheduledApi = new TelegramApi(
+          token,
+          base,
+          (chatId) =>
+            chatId === target && pairedPrivateChat() === ownerAtStart && hasExplicitRoute(chatId),
+        );
+        return connector.deliverTo(turn.id, address, text, scheduledApi);
+      }
       return connector.deliverTo(turn.id, address, text);
     }),
     start: avvia,

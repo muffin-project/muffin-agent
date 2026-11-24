@@ -460,6 +460,31 @@ describe('acceptance · #949 · scheduled Telegram delivery', () => {
     }
   }, 45_000);
 
+  it('stops retries of an explicit scheduled send after owner binding revocation', async () => {
+    const armed = await arm('telegram:' + OTHER);
+    try {
+      let revoked = false;
+      armed.telegram.guasta('sendMessage', 429, 'Too Many Requests');
+      armed.telegram.beforeNextResponse('sendRichMessage', () => {
+        writeFileSync(join(armed.inst.home, 'rot', 'owner.json'), '{}\n');
+        revoked = true;
+      });
+      await withGateway(armed, async () => {
+        const turn = await untilSettled(armed.inst);
+        expect(turn.delivery).toMatch(/^failed:.*owner binding/);
+        expect(partsOf(armed.inst, turn.id).some((part) => part.status === 'sent')).toBe(false);
+      });
+      const wire = armed.telegram.sent().filter((call) => call.method === 'sendMessage');
+      expect(wire).toHaveLength(1);
+      expect(wire[0]?.payload.chat_id).toBe(OTHER);
+      expect(revoked).toBe(true);
+      expect(armed.inst.provider.main()).toHaveLength(1);
+    } finally {
+      await armed.inst.cleanup();
+      await armed.telegram.close();
+    }
+  }, 45_000);
+
   it.each(['pager:1', 'telegram:not-a-chat'] as const)(
     'records one failed delivery for %s and does not call the model again',
     async (channel) => {

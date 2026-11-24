@@ -1768,6 +1768,7 @@ export class TelegramConnector {
     turnId: string,
     replyTo: Record<string, unknown>,
     text: string,
+    api: TelegramApiLike = this.deps.api,
   ): Promise<TelegramDeliveryOutcome> {
     const chatId = replyTo['chatId'];
     if (typeof chatId !== 'number') {
@@ -1851,7 +1852,7 @@ export class TelegramConnector {
     const send = (plan: TelegramDeliveryPlanPart[]) =>
       deliverTelegram(
         this.deps.delivery,
-        this.deps.api,
+        api,
         turnId,
         plan,
         () => this.now(),
