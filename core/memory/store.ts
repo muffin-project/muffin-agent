@@ -242,6 +242,9 @@ const PROPOSAL_SELECT = `SELECT id, tenant_id, identity_key, subject, subject_ki
     detail, proposed_at, decided_at
   FROM memory_proposals`;
 
+const PENDING_EXTRACTION_WHERE =
+  'tenant_id = ? AND extraction_v < ? AND content IS NOT NULL AND superseded_at IS NULL';
+
 /**
  * What makes a contradiction *open*, written once. Legacy judge failures were
  * recorded as `error` rows but have the same two active fact ids; include them
@@ -428,7 +431,7 @@ export class MemoryStore {
                 role, kind, content, vault_path AS vaultPath, trust_tier AS trustTier,
                 created_at AS createdAt, extraction_v AS extractionV, turn_id AS turnId
          FROM episodes
-         WHERE tenant_id = ? AND extraction_v < ? AND content IS NOT NULL
+         WHERE ${PENDING_EXTRACTION_WHERE}
          ORDER BY created_at LIMIT ?`,
       )
       .all(tenantId, extractionV, limit)
@@ -448,7 +451,9 @@ export class MemoryStore {
    */
   markExtracted(tenantId: string, episodeIds: number[], extractionV: number): void {
     if (episodeIds.length === 0) return;
-    const stmt = this.db.prepare(`UPDATE episodes SET extraction_v = ? WHERE id = ? AND tenant_id = ?`);
+    const stmt = this.db.prepare(
+      `UPDATE episodes SET extraction_v = ? WHERE id = ? AND tenant_id = ?`,
+    );
     const tx = this.db.transaction((ids: number[]) => {
       for (const id of ids) stmt.run(extractionV, id, tenantId);
     });
@@ -517,7 +522,8 @@ export class MemoryStore {
 
   isFunctional(predicate: string): boolean {
     return (
-      this.db.prepare(`SELECT 1 FROM functional_predicates WHERE predicate = ?`).get(predicate) !== undefined
+      this.db.prepare(`SELECT 1 FROM functional_predicates WHERE predicate = ?`).get(predicate) !==
+      undefined
     );
   }
 
@@ -539,7 +545,8 @@ export class MemoryStore {
    * *is* the trust tier this gate is checking for.
    */
   addFact(input: FactInput): number {
-    const pinned = input.pinned === true && input.trustTier === 0 && (input.origin ?? 'said') === 'said';
+    const pinned =
+      input.pinned === true && input.trustTier === 0 && (input.origin ?? 'said') === 'said';
     const info = this.db
       .prepare(
         `INSERT INTO facts (tenant_id, subject_id, predicate, object_id, object_value,
@@ -676,7 +683,14 @@ export class MemoryStore {
    * safety net for one verb.
    */
   searchActiveFacts(tenantId: string, query: string, limit = 12): Fact[] {
-    const tokens = [...new Set(query.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 4))];
+    const tokens = [
+      ...new Set(
+        query
+          .toLowerCase()
+          .split(/[^\p{L}\p{N}]+/u)
+          .filter((t) => t.length >= 4),
+      ),
+    ];
     if (tokens.length === 0) return [];
     const rows = this.db
       .prepare(
@@ -694,7 +708,8 @@ export class MemoryStore {
       .all(tenantId) as Fact[];
     const scored = rows
       .map((f) => {
-        const text = `${f.subjectName} ${f.predicate} ${f.objectValue ?? ''} ${f.objectName ?? ''}`.toLowerCase();
+        const text =
+          `${f.subjectName} ${f.predicate} ${f.objectValue ?? ''} ${f.objectName ?? ''}`.toLowerCase();
         return { f, hits: tokens.filter((t) => text.includes(t)).length };
       })
       .filter((x) => x.hits > 0)
@@ -814,7 +829,9 @@ export class MemoryStore {
    * kind that changes without its caller noticing (see `activeFacts`, where
    * exactly that happened).
    */
-  multiValuedActiveFacts(tenantId: string): { subjectId: number; predicate: string; facts: Fact[] }[] {
+  multiValuedActiveFacts(
+    tenantId: string,
+  ): { subjectId: number; predicate: string; facts: Fact[] }[] {
     const rows = this.db
       .prepare(
         `SELECT f.id, f.subject_id AS subjectId, s.name AS subjectName, f.predicate,
@@ -971,13 +988,18 @@ export class MemoryStore {
    * things it could not do without them: label a hit with the surface it came
    * from, and ask for its neighbourhood, which is scoped to its own thread.
    */
-  episodeWindow(tenantId: string, episodeId: number): { connector: string; threadKey: string; createdAt: string } | null {
+  episodeWindow(
+    tenantId: string,
+    episodeId: number,
+  ): { connector: string; threadKey: string; createdAt: string } | null {
     const row = this.db
       .prepare(
         `SELECT connector, thread_key AS threadKey, created_at AS createdAt
          FROM episodes WHERE tenant_id = ? AND id = ?`,
       )
-      .get(tenantId, episodeId) as { connector: string; threadKey: string; createdAt: string } | undefined;
+      .get(tenantId, episodeId) as
+      | { connector: string; threadKey: string; createdAt: string }
+      | undefined;
     return row ?? null;
   }
 
@@ -1017,7 +1039,10 @@ export class MemoryStore {
          ORDER BY rank LIMIT ?`,
       )
       .all(
-        cleaned.split(/\s+/).map((t) => `"${t}"`).join(' OR '),
+        cleaned
+          .split(/\s+/)
+          .map((t) => `"${t}"`)
+          .join(' OR '),
         tenantId,
         ...esclusi,
         filter.includeSuperseded ? 1 : 0,
@@ -1099,7 +1124,11 @@ export class MemoryStore {
     return [...bind('<', 'DESC').reverse(), ...bind('>', 'ASC')];
   }
 
-  entitiesByName(tenantId: string, name: string, limit = 5): { id: number; name: string; kind: string }[] {
+  entitiesByName(
+    tenantId: string,
+    name: string,
+    limit = 5,
+  ): { id: number; name: string; kind: string }[] {
     return this.db
       .prepare(
         `SELECT id, name, kind FROM entities
@@ -1164,7 +1193,13 @@ export class MemoryStore {
   openContradictions(
     tenantId: string,
     limit = 50,
-  ): { id: number; createdAt: string; detail: string; existingFactId: number; incomingFactId: number }[] {
+  ): {
+    id: number;
+    createdAt: string;
+    detail: string;
+    existingFactId: number;
+    incomingFactId: number;
+  }[] {
     return this.db
       .prepare(
         `SELECT r.id, r.created_at AS createdAt, r.detail,
@@ -1196,7 +1231,10 @@ export class MemoryStore {
   // ---- vault ----------------------------------------------------------------
 
   /** Live episodes for one vault file, in chunk order. */
-  episodesForVaultPath(tenantId: string, vaultPath: string): { id: number; mediaMeta: string | null }[] {
+  episodesForVaultPath(
+    tenantId: string,
+    vaultPath: string,
+  ): { id: number; mediaMeta: string | null }[] {
     return this.db
       .prepare(
         `SELECT id, media_meta AS mediaMeta FROM episodes
@@ -1391,7 +1429,12 @@ export class MemoryStore {
          FROM episodes WHERE tenant_id = ? AND id = ?`,
       )
       .get(tenantId, id) as
-      | (Episode & { actorId: number | null; vaultPath: string | null; turnId: string | null; undoneAt: string | null })
+      | (Episode & {
+          actorId: number | null;
+          vaultPath: string | null;
+          turnId: string | null;
+          undoneAt: string | null;
+        })
       | undefined;
     if (!row) return null;
     // The optional columns come back NULL from SQLite; the type says absent.
@@ -1582,7 +1625,8 @@ export class MemoryStore {
       importance: row.importance,
       pinnedRequest: row.pinned_request === 1,
       status: row.status,
-      resultingFactIds: row.resulting_fact_ids === null ? [] : (JSON.parse(row.resulting_fact_ids) as number[]),
+      resultingFactIds:
+        row.resulting_fact_ids === null ? [] : (JSON.parse(row.resulting_fact_ids) as number[]),
       detail: row.detail,
       proposedAt: row.proposed_at,
       decidedAt: row.decided_at,
@@ -1600,7 +1644,9 @@ export class MemoryStore {
   pendingProposals(tenantId: string, limit = 50): MemoryProposalRecord[] {
     return (
       this.db
-        .prepare(`${PROPOSAL_SELECT} WHERE tenant_id = ? AND status = 'pending' ORDER BY id LIMIT ?`)
+        .prepare(
+          `${PROPOSAL_SELECT} WHERE tenant_id = ? AND status = 'pending' ORDER BY id LIMIT ?`,
+        )
         .all(tenantId, limit) as ProposalRow[]
     ).map(MemoryStore.proposalFromRow);
   }
@@ -1612,9 +1658,13 @@ export class MemoryStore {
   ): MemoryProposalRecord[] {
     const rows = (
       opts.status === undefined
-        ? this.db.prepare(`${PROPOSAL_SELECT} WHERE tenant_id = ? ORDER BY id DESC LIMIT ?`).all(tenantId, opts.limit ?? 50)
+        ? this.db
+            .prepare(`${PROPOSAL_SELECT} WHERE tenant_id = ? ORDER BY id DESC LIMIT ?`)
+            .all(tenantId, opts.limit ?? 50)
         : this.db
-            .prepare(`${PROPOSAL_SELECT} WHERE tenant_id = ? AND status = ? ORDER BY id DESC LIMIT ?`)
+            .prepare(
+              `${PROPOSAL_SELECT} WHERE tenant_id = ? AND status = ? ORDER BY id DESC LIMIT ?`,
+            )
             .all(tenantId, opts.status, opts.limit ?? 50)
     ) as ProposalRow[];
     return rows.map(MemoryStore.proposalFromRow);
@@ -1697,7 +1747,7 @@ export class MemoryStore {
       // up?" has to answer for the fetch, not for a similar-sounding question.
       pending: one<number>(
         `SELECT count(*) AS v FROM episodes
-          WHERE tenant_id = ? AND extraction_v < ? AND content IS NOT NULL`,
+          WHERE ${PENDING_EXTRACTION_WHERE}`,
         tenantId,
         EXTRACTION_VERSION,
       ),
