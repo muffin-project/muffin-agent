@@ -658,7 +658,6 @@ describe('#469 production-path capability discovery', () => {
     const schedule = makeScheduleTool({
       jobs: new JobStore(db),
       defaultTimezone: 'Europe/Rome',
-      defaultChannel: 'cli',
     });
     let scheduleCalls = 0;
     const scheduleObserved: RegisteredTool = {

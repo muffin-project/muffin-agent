@@ -1,24 +1,24 @@
-import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { BudgetEngine } from '../core/budget/budget.js';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import { JobFireStore } from '../core/scheduler/job-fires.js';
-import { JobStore, type Job, jobPayload } from '../core/scheduler/jobs.js';
+import { type Job, JobStore, jobPayload } from '../core/scheduler/jobs.js';
 import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
-import { TodoStore } from '../core/turns/todo.js';
 import { CAPPED_MODEL, SCRIPT_MODEL, TurnStore } from '../core/turns/store.js';
-import { jobOutcomeFromTurn, makeJobRunner } from './scheduler-run.js';
-import { makeScheduleTool, scheduleCapability } from './tools/schedule.js';
-import { resumeTurn } from './loop.js';
+import { TodoStore } from '../core/turns/todo.js';
+import { providerMessages } from './loop/provider-checkpoint.js';
 import type { LoopDeps, TurnResult } from './loop.js';
+import { resumeTurn } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatCall, ChatResult, Provider } from './providers/types.js';
-import { providerMessages } from './loop/provider-checkpoint.js';
+import { jobOutcomeFromTurn, makeJobRunner } from './scheduler-run.js';
+import { makeScheduleTool, scheduleCapability } from './tools/schedule.js';
 
 const base: TurnResult = {
   text: '',
@@ -49,7 +49,12 @@ describe('jobOutcomeFromTurn', () => {
       ...base,
       stopped: 'ask',
       text: '',
-      pending: { capability: 'outward.send', prompt: 'mando la mail a Marco?', resource: 'mail:marco', taint: 0 },
+      pending: {
+        capability: 'outward.send',
+        prompt: 'mando la mail a Marco?',
+        resource: 'mail:marco',
+        taint: 0,
+      },
     });
     expect(out.stopped).toBe('ask');
     expect(out.text).toContain('In coda per te');
@@ -92,7 +97,9 @@ describe('jobOutcomeFromTurn', () => {
       text: 'qualcosa è rotto',
       turnId: 't',
     });
-    expect(jobOutcomeFromTurn({ ...base, stopped: 'budget', text: 'cap raggiunto' }).stopped).toBe('budget');
+    expect(jobOutcomeFromTurn({ ...base, stopped: 'budget', text: 'cap raggiunto' }).stopped).toBe(
+      'budget',
+    );
   });
 });
 
@@ -112,7 +119,8 @@ class Scripted implements Provider {
   constructor(private readonly script: ChatResult[]) {}
   async chat(_call?: ChatCall): Promise<ChatResult> {
     const next = this.script[this.calls++];
-    if (!next) throw new Error('lo script è finito — il modello non doveva essere richiamato di nuovo');
+    if (!next)
+      throw new Error('lo script è finito — il modello non doveva essere richiamato di nuovo');
     return next;
   }
 }
@@ -141,7 +149,12 @@ function counters(): NonNullable<Parameters<TurnStore['create']>[0]>['counters']
   };
 }
 
-const SPEC = { cron: '0 8 * * *', timezone: 'Europe/Rome', goal: 'controlla il backup', channel: 'cli' };
+const SPEC = {
+  cron: '0 8 * * *',
+  timezone: 'Europe/Rome',
+  goal: 'controlla il backup',
+  channel: 'cli',
+};
 
 function fixture(script: ChatResult[]) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-scheduler-run-'));
@@ -156,7 +169,12 @@ function fixture(script: ChatResult[]) {
     profile: CONSERVATIVE,
     model: 'test-model',
     tools: [],
-    decide: createDecide({ matrix: POLICY_FLOOR, capabilities: new Map(), budgetExhausted: () => false, hardened: true }),
+    decide: createDecide({
+      matrix: POLICY_FLOOR,
+      capabilities: new Map(),
+      budgetExhausted: () => false,
+      hardened: true,
+    }),
     capabilities: new Map(),
     tracer: new SimpleTracer(new JsonlExporter(home)),
     sessions: new SessionStore(home),
@@ -175,7 +193,8 @@ describe('makeJobRunner — B7 identity resolution', () => {
 
     const outcome = await makeJobRunner(deps, fires)(job, undefined);
 
-    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    if (!('stopped' in outcome))
+      throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
     expect(outcome.stopped).toBe('answered');
     expect(outcome.text).toBe('ecco il brief');
     expect(provider.calls).toBe(1);
@@ -196,12 +215,14 @@ describe('makeJobRunner — B7 identity resolution', () => {
     const job = jobs.add(SPEC);
 
     const first = await makeJobRunner(deps, fires)(job, undefined);
-    if (!('stopped' in first)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(first)}`);
+    if (!('stopped' in first))
+      throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(first)}`);
     expect(first.text).toBe('primo e unico giro');
 
     const second = await makeJobRunner(deps, fires)(job, undefined);
     expect(provider.calls).toBe(1); // the model ran exactly once, not twice
-    if (!('stopped' in second)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(second)}`);
+    if (!('stopped' in second))
+      throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(second)}`);
     expect(second.turnId).toBe(first.turnId);
     // Recovered from the session file the first pass wrote — not re-asked.
     expect(second.text).toBe('primo e unico giro');
@@ -231,13 +252,18 @@ describe('makeJobRunner — B7 identity resolution', () => {
       },
       99999,
     );
-    deps.turns.finish(rec.id, { outcome: 'answered', messages: providerMessages(rec), taint: 0, counters: rec.counters }, rec.claimToken);
+    deps.turns.finish(
+      rec.id,
+      { outcome: 'answered', messages: providerMessages(rec), taint: 0, counters: rec.counters },
+      rec.claimToken,
+    );
     deps.turns.delivered(rec.id, 'sent'); // some other pass already delivered it
 
     const outcome = await makeJobRunner(deps, fires)(job, undefined);
 
     expect(provider.calls).toBe(0);
-    if (!('settleOnly' in outcome)) throw new Error(`atteso settleOnly, ricevuto ${JSON.stringify(outcome)}`);
+    if (!('settleOnly' in outcome))
+      throw new Error(`atteso settleOnly, ricevuto ${JSON.stringify(outcome)}`);
     expect(outcome.turnId).toBe(turnId);
     expect(outcome.outcome).toBe('answered');
     expect(outcome.delivered).toBe(true);
@@ -264,13 +290,18 @@ describe('makeJobRunner — B7 identity resolution', () => {
       },
       99999,
     );
-    deps.turns.finish(rec.id, { outcome: 'answered', messages: providerMessages(rec), taint: 0, counters: rec.counters }, rec.claimToken);
+    deps.turns.finish(
+      rec.id,
+      { outcome: 'answered', messages: providerMessages(rec), taint: 0, counters: rec.counters },
+      rec.claimToken,
+    );
     deps.turns.delivered(rec.id, 'undeliverable');
 
     const outcome = await makeJobRunner(deps, fires)(job, undefined);
 
     expect(provider.calls).toBe(0);
-    if (!('settleOnly' in outcome)) throw new Error(`atteso settleOnly, ricevuto ${JSON.stringify(outcome)}`);
+    if (!('settleOnly' in outcome))
+      throw new Error(`atteso settleOnly, ricevuto ${JSON.stringify(outcome)}`);
     expect(outcome.delivered).toBe(false);
   });
 
@@ -304,13 +335,18 @@ describe('makeJobRunner — B7 identity resolution', () => {
       },
       99999,
     );
-    deps.turns.finish(rec.id, { outcome: 'answered', messages: providerMessages(rec), taint: 0, counters: rec.counters }, rec.claimToken);
+    deps.turns.finish(
+      rec.id,
+      { outcome: 'answered', messages: providerMessages(rec), taint: 0, counters: rec.counters },
+      rec.claimToken,
+    );
     // delivery is still 'pending' — nothing has told the channel yet.
 
     const outcome = await makeJobRunner(deps, fires)(job, undefined);
 
     expect(provider.calls).toBe(0); // never called the model again
-    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    if (!('stopped' in outcome))
+      throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
     expect(outcome.stopped).toBe('answered');
     expect(outcome.text).toBe('la risposta che il crash non ha mai consegnato');
     expect(outcome.turnId).toBe(turnId);
@@ -342,7 +378,8 @@ describe('makeJobRunner — B7 identity resolution', () => {
       // `create` always leaves a fresh row 'running'; the other two statuses
       // this fault point covers are reached the way a real crash/suspend
       // leaves them, not by re-deriving the mechanism here.
-      if (status !== 'running') db.prepare(`UPDATE turns SET status = ? WHERE id = ?`).run(status, turnId);
+      if (status !== 'running')
+        db.prepare(`UPDATE turns SET status = ? WHERE id = ?`).run(status, turnId);
 
       const outcome = await makeJobRunner(deps, fires)(job, undefined);
 
@@ -369,7 +406,8 @@ describe('makeJobRunner — B7 identity resolution', () => {
 
     const outcome = await makeJobRunner(deps, fires)(job, undefined);
 
-    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    if (!('stopped' in outcome))
+      throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
     expect(outcome.turnId).toBe('turn-winner'); // never a freshly minted id
     expect(provider.calls).toBe(1); // completing the interrupted bind runs once
     const rows = db.prepare(`SELECT count(*) AS n FROM turns`).get() as { n: number };
@@ -438,7 +476,8 @@ describe('makeJobRunner — uno script non gira due volte', () => {
 
     const outcome = await makeJobRunner(deps, fires, null, { cwd: '/tmp' })(job, undefined);
 
-    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    if (!('stopped' in outcome))
+      throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
     expect(outcome.stopped).toBe('error');
     expect(outcome.text).toContain('sandbox');
     expect(provider.calls).toBe(0);
@@ -481,7 +520,8 @@ describe('makeJobRunner — uno script non gira due volte', () => {
     expect(reclaimed.map((r) => r.id)).toContain(riga.id);
 
     const esito = await resumeTurn(deps, riga.id);
-    if (!('stopped' in esito)) throw new Error(`atteso un esito terminale, ricevuto ${JSON.stringify(esito)}`);
+    if (!('stopped' in esito))
+      throw new Error(`atteso un esito terminale, ricevuto ${JSON.stringify(esito)}`);
 
     // Il modello non è mai stato toccato, lo script non è stato rieseguito, e
     // il testo dice la sola cosa vera: forse fatto, non rifatto.
@@ -505,7 +545,9 @@ describe('makeJobRunner — uno script non gira due volte', () => {
  */
 describe('makeJobRunner — il tetto per-job (E1)', () => {
   /** `BudgetEngine` visto da `makeJobRunner`: solo il conto, in dollari. */
-  const contatore = (map: Record<string, number>) => ({ jobMonthUsd: (id: string) => map[id] ?? 0 });
+  const contatore = (map: Record<string, number>) => ({
+    jobMonthUsd: (id: string) => map[id] ?? 0,
+  });
 
   it('un job che ha già speso il suo tetto NON chiama il modello, e la riga dice perché', async () => {
     // Lo script è vuoto di proposito: se il modello venisse chiamato,
@@ -514,9 +556,16 @@ describe('makeJobRunner — il tetto per-job (E1)', () => {
     const { deps, db, jobs, fires, provider } = fixture([]);
     const job = jobs.add({ ...SPEC, perJobUsd: 1 });
 
-    const outcome = await makeJobRunner(deps, fires, null, null, contatore({ [job.id]: 1.5 }))(job, undefined);
+    const outcome = await makeJobRunner(
+      deps,
+      fires,
+      null,
+      null,
+      contatore({ [job.id]: 1.5 }),
+    )(job, undefined);
 
-    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    if (!('stopped' in outcome))
+      throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
     // (1) Il modello non è stato chiamato. È la proprietà, il resto è contorno.
     expect(provider.calls).toBe(0);
     // (2) L'esito è durevole e nomina il tetto: un job spento in silenzio
@@ -543,9 +592,16 @@ describe('makeJobRunner — il tetto per-job (E1)', () => {
     const { deps, jobs, fires, provider } = fixture([answer('ecco il brief')]);
     const job = jobs.add({ ...SPEC, perJobUsd: 1 });
 
-    const outcome = await makeJobRunner(deps, fires, null, null, contatore({ [job.id]: 0.4 }))(job, undefined);
+    const outcome = await makeJobRunner(
+      deps,
+      fires,
+      null,
+      null,
+      contatore({ [job.id]: 0.4 }),
+    )(job, undefined);
 
-    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    if (!('stopped' in outcome))
+      throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
     expect(outcome.stopped).toBe('answered');
     expect(provider.calls).toBe(1);
   });
@@ -556,7 +612,8 @@ describe('makeJobRunner — il tetto per-job (E1)', () => {
     const { deps, jobs, fires, provider } = fixture([answer('ecco il brief')]);
     const job = jobs.add(SPEC);
     const outcome = await makeJobRunner(deps, fires)(job, undefined);
-    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    if (!('stopped' in outcome))
+      throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
     expect(outcome.stopped).toBe('answered');
     expect(provider.calls).toBe(1);
   });
@@ -570,7 +627,8 @@ describe('makeJobRunner — il tetto per-job (E1)', () => {
 
     const outcome = await makeJobRunner(deps, fires)(job, undefined);
 
-    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    if (!('stopped' in outcome))
+      throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
     expect(provider.calls).toBe(0);
     expect(outcome.stopped).toBe('budget');
     expect(outcome.text).toContain('non ha modo');
@@ -588,11 +646,25 @@ describe('makeJobRunner — il tetto per-job (E1)', () => {
     const exec = {
       run: async () => {
         eseguito = true;
-        return { stdout: '', stderr: '', code: 0, timedOut: false, truncated: false, durationMs: 0 };
+        return {
+          stdout: '',
+          stderr: '',
+          code: 0,
+          timedOut: false,
+          truncated: false,
+          durationMs: 0,
+        };
       },
     };
-    const outcome = await makeJobRunner(deps, fires, exec, { cwd: '/tmp' }, contatore({}))(job, undefined);
-    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    const outcome = await makeJobRunner(
+      deps,
+      fires,
+      exec,
+      { cwd: '/tmp' },
+      contatore({}),
+    )(job, undefined);
+    if (!('stopped' in outcome))
+      throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
     expect(outcome.stopped).toBe('budget');
     expect(eseguito).toBe(false);
   });
@@ -629,7 +701,14 @@ describe('makeJobRunner — il tetto per-job (E1)', () => {
     expect(turno.job_id).toBe(job.id);
     // E la spesa interattiva resta fuori dal conto del job: la colonna è
     // nullable perché «nessun job» è un valore, non un job chiamato ''.
-    budget.record({ tenant: 'host', capability: 'llm.chat', model: 'test', inputTokens: 1, outputTokens: 1, usd: 9 });
+    budget.record({
+      tenant: 'host',
+      capability: 'llm.chat',
+      model: 'test',
+      inputTokens: 1,
+      outputTokens: 1,
+      usd: 9,
+    });
     expect(budget.jobMonthUsd(job.id)).toBe(0.75);
     expect(budget.monthToDateUsd()).toBe(9.75);
   });
@@ -666,7 +745,9 @@ describe('un fire non arma ricorrenze (S1, production path)', () => {
         if (visti.length === 0) {
           return {
             text: null,
-            toolCalls: [{ id: 'c1', name: 'schedule_recurring', args: { cron: '0 9 * * *', goal: 'figlio' } }],
+            toolCalls: [
+              { id: 'c1', name: 'schedule_recurring', args: { cron: '0 9 * * *', goal: 'figlio' } },
+            ],
             stopReason: 'tool_use',
             usage: { inputTokens: 3, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 },
             model: 'test',
@@ -681,14 +762,19 @@ describe('un fire non arma ricorrenze (S1, production path)', () => {
         };
       },
     };
-    const tool = makeScheduleTool({ jobs, defaultTimezone: 'Europe/Rome', defaultChannel: 'cli' });
+    const tool = makeScheduleTool({ jobs, defaultTimezone: 'Europe/Rome' });
     const caps = new Map([[scheduleCapability.id, scheduleCapability]] as const);
     const deps: LoopDeps = {
       provider,
       profile: CONSERVATIVE,
       model: 'test-model',
       tools: [tool],
-      decide: createDecide({ matrix: POLICY_FLOOR, capabilities: new Map(caps), budgetExhausted: () => false, hardened: true }),
+      decide: createDecide({
+        matrix: POLICY_FLOOR,
+        capabilities: new Map(caps),
+        budgetExhausted: () => false,
+        hardened: true,
+      }),
       capabilities: new Map(caps),
       tracer: new SimpleTracer(new JsonlExporter(home)),
       sessions: new SessionStore(home),
@@ -701,7 +787,8 @@ describe('un fire non arma ricorrenze (S1, production path)', () => {
 
     const outcome = await makeJobRunner(deps, fires)(padre, undefined);
 
-    if (!('stopped' in outcome)) throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
+    if (!('stopped' in outcome))
+      throw new Error(`atteso un JobOutcome, ricevuto ${JSON.stringify(outcome)}`);
     expect(outcome.stopped).toBe('answered');
     // Deterministico: il rifiuto del kernel, non un testo del modello.
     expect(visti.some((t) => t.includes('principal_forbidden'))).toBe(true);
@@ -723,7 +810,13 @@ describe('makeJobRunner — continuable hands the row to the lane (#598 S2)', ()
   it('a fire whose lease ends continuable defers — the diagnostic is not delivered as the answer', async () => {
     // Four empties: three transport retries, then the lease yields. The fifth
     // scripted answer stays queued — proof the runner stopped asking.
-    const { deps, jobs, fires, provider } = fixture([stall(), stall(), stall(), stall(), answer('mai')]);
+    const { deps, jobs, fires, provider } = fixture([
+      stall(),
+      stall(),
+      stall(),
+      stall(),
+      answer('mai'),
+    ]);
     const job = jobs.add(SPEC);
     const scheduledFor = job.nextFireAt.toISOString();
 

@@ -49,7 +49,7 @@ function memoryTool() {
   return {
     db,
     jobs,
-    tool: makeScheduleTool({ jobs, defaultTimezone: 'Europe/Rome', defaultChannel: 'cli' }),
+    tool: makeScheduleTool({ jobs, defaultTimezone: 'Europe/Rome' }),
   };
 }
 
@@ -91,7 +91,7 @@ describe('la richiesta ricorrente crea esattamente un durable job', () => {
     const { jobs, tool } = memoryTool();
     const res = await tool.handler(
       { cron: '0 9 * * *', goal: 'ricordami di bere acqua' },
-      toolContext({ sessionId: 'owner' }),
+      toolContext({ sessionId: 'owner', replyChannel: 'cli' }),
     );
     expect(res.isError).not.toBe(true);
     const righe = jobs.list();
@@ -114,7 +114,7 @@ describe('la richiesta ricorrente crea esattamente un durable job', () => {
     const { jobs, tool } = memoryTool();
     const res = await tool.handler(
       { cron: '0 18 * * 1', timezone: 'Europe/Rome', goal: 'ricordami X' },
-      toolContext({ sessionId: 'owner' }),
+      toolContext({ sessionId: 'owner', replyChannel: 'cli' }),
     );
     expect(res.isError).not.toBe(true);
     expect(jobs.list()[0]?.cron).toBe('0 18 * * 1');
@@ -130,7 +130,10 @@ describe('la richiesta ricorrente crea esattamente un durable job', () => {
       { cron: '0 9 * * *' },
       {},
     ]) {
-      const res = await tool.handler(args, toolContext({ sessionId: 'owner' }));
+      const res = await tool.handler(
+        args,
+        toolContext({ sessionId: 'owner', replyChannel: 'cli' }),
+      );
       expect(res.isError).toBe(true);
       // Nessuna falsa conferma: il marcatore di successo è la prossima
       // esecuzione calcolata, e un errore non deve mai portarlo.
@@ -157,20 +160,22 @@ describe('la richiesta ricorrente crea esattamente un durable job', () => {
     expect(jobs.list()[0]?.channel).toBe('telegram:123');
   });
 
-  it('senza replyChannel il canale è il default di superficie, non del processo', async () => {
+  it('without a surviving reply channel no job is created', async () => {
     const db = new DatabaseCtor(':memory:');
     const jobs = new JobStore(db);
     const tool = makeScheduleTool({
       jobs,
       defaultTimezone: 'Europe/Rome',
-      defaultChannel: 'telegram',
     });
     const res = await tool.handler(
       { cron: '0 9 * * *', goal: 'x' },
       toolContext({ sessionId: 's' }),
     );
-    expect(res.isError).not.toBe(true);
-    expect(jobs.list()[0]?.channel).toBe('telegram');
+    expect(res).toMatchObject({
+      isError: true,
+      content: expect.stringContaining('No job was created.'),
+    });
+    expect(jobs.list()).toEqual([]);
   });
 });
 
@@ -181,6 +186,7 @@ describe('provenance, principal e taint attraversano il confine del job futuro',
       { cron: '0 9 * * *', goal: 'ricordami X' },
       toolContext({
         sessionId: 'owner',
+        replyChannel: 'cli',
         turnId: 'turno-42',
         taint: () => 1,
         intrinsicTaint: () => 0,
@@ -225,11 +231,12 @@ describe('provenance, principal e taint attraversano il confine del job futuro',
       budgetExhausted: () => false,
       systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin.' },
     };
-    const tool = makeScheduleTool({ jobs, defaultTimezone: 'Europe/Rome', defaultChannel: 'cli' });
+    const tool = makeScheduleTool({ jobs, defaultTimezone: 'Europe/Rome' });
     await tool.handler(
       { cron: '0 9 * * *', goal: 'ricordami X' },
       toolContext({
         sessionId: 'owner',
+        replyChannel: 'cli',
         turnId: 'turno-42',
         taint: () => 2,
         intrinsicTaint: () => 0,
@@ -257,10 +264,10 @@ describe('provenance, principal e taint attraversano il confine del job futuro',
     const file = join(dir, 'muffin.db');
     const aperto = new DatabaseCtor(file);
     const jobs = new JobStore(aperto);
-    const tool = makeScheduleTool({ jobs, defaultTimezone: 'Europe/Rome', defaultChannel: 'cli' });
+    const tool = makeScheduleTool({ jobs, defaultTimezone: 'Europe/Rome' });
     const res = await tool.handler(
       { cron: '0 9 * * *', goal: 'ricordami X' },
-      toolContext({ sessionId: 'owner', turnId: 'turno-7' }),
+      toolContext({ sessionId: 'owner', turnId: 'turno-7', replyChannel: 'cli' }),
     );
     expect(res.isError).not.toBe(true);
     const prima = jobs.list()[0];
@@ -357,10 +364,7 @@ it('one-shot arming rejects model-supplied routing, authority and budget fields'
   const db = new DatabaseCtor(':memory:');
   try {
     const jobs = new JobStore(db);
-    const tool = makeScheduleTool(
-      { jobs, defaultTimezone: 'Europe/Rome', defaultChannel: 'cli' },
-      'once',
-    );
+    const tool = makeScheduleTool({ jobs, defaultTimezone: 'Europe/Rome' }, 'once');
     const ctx = toolContext({ replyChannel: 'telegram:123' });
     for (const field of [
       { channel: 'telegram:999' },
@@ -376,6 +380,27 @@ it('one-shot arming rejects model-supplied routing, authority and budget fields'
     db.close();
   }
 });
+
+it.each(['once', 'recurring'] as const)(
+  'does not arm a %s job for a temporary gateway-forwarded terminal',
+  async (mode) => {
+    const db = new DatabaseCtor(':memory:');
+    try {
+      const jobs = new JobStore(db);
+      const tool = makeScheduleTool({ jobs, defaultTimezone: 'Europe/Rome' }, mode);
+      const goal = 'Compare the shipping quotes';
+      const args = mode === 'once' ? { goal } : { goal, cron: '0 9 * * *' };
+      const result = await tool.handler(args, toolContext({ replyChannel: 'forward:request-id' }));
+      expect(result).toMatchObject({
+        isError: true,
+        content: expect.stringContaining('No job was created.'),
+      });
+      expect(jobs.list()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  },
+);
 
 describe('un principal autonomo non arma ricorrenze (S1)', () => {
   /**
@@ -456,7 +481,6 @@ describe('one accepted effect → one Job (effect identity)', () => {
     const tool: RegisteredTool = makeScheduleTool({
       jobs,
       defaultTimezone: 'Europe/Rome',
-      defaultChannel: 'cli',
     });
     const caps = new Map([[scheduleCapability.id, scheduleCapability]] as const);
     const deps: LoopDeps = {
@@ -527,9 +551,8 @@ describe('one accepted effect → one Job (effect identity)', () => {
       const tool = makeScheduleTool({
         jobs,
         defaultTimezone: 'Europe/Rome',
-        defaultChannel: 'cli',
       });
-      const ctx = toolContext({ sessionId: 'owner' });
+      const ctx = toolContext({ sessionId: 'owner', replyChannel: 'cli' });
       const args = { cron: '0 9 * * *', goal: 'acqua' };
       await tool.handler(args, ctx);
       await tool.handler(args, ctx);
