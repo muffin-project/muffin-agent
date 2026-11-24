@@ -1640,6 +1640,11 @@ export async function runDoctor(
         `${modello} non accetta audio: si trascrive in casa — ` +
           prerequisiti.map((x) => (x.ok ? `${x.cosa} ${x.dove}` : x.cosa)).join(' · '),
       );
+    } else if (mancanti.every((x) => x.cosa === 'modello whisper')) {
+      ok(
+        'note vocali',
+        `${modello} non accetta audio. Muffin proverà a scaricare il modello locale alla prima nota da trascrivere.`,
+      );
     } else {
       warn(
         'note vocali',
