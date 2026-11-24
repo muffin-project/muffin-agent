@@ -20,6 +20,7 @@ export const CAPABILITY_DISCOVERY_GUIDANCE =
  */
 export const DEFAULT_CORE_TOOL_NAMES = [
   'fs_read',
+  'fs_write',
   'fs_list',
   'fs_search',
   'memory_search',
