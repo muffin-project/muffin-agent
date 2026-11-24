@@ -383,60 +383,62 @@ async function runClaimedTurn(
       },
     },
   );
-  // #469: principal/grant filtering decides which installed capabilities may
-  // even enter discovery. The profile ceiling is applied only to the model
-  // projection, never to catalogue existence.
   const principalVisibleTools = visibleTools(
     deps.tools,
     input.principal,
     deps.capabilities,
     deps.grants?.get(input.tenant),
   );
-  // #469 judge ADJUST: visibleTools' hostOnly/grants projection was designed
-  // for members and deliberately returns the full catalogue for system
-  // principals. That is not the kernel's authority: autonomous principals
-  // also have sealed forbiddenForSystem exclusions (including namespace
-  // patterns). Ask the SAME kernel snapshot for static denial codes BEFORE
-  // any task preload/search; never replicate the sealed list here.
-  //
-  // A dummy no-resource probe is used ONLY to exclude capabilities the kernel
-  // categorically denies to this principal. Resource/taint/budget decisions
-  // still happen at execution with real args. Direct guesses continue to
-  // resolve against deps.tools, outside this model-visible projection.
-  const eligibleTools =
-    input.principal.kind === 'system'
-      ? principalVisibleTools.filter((tool) => {
-          const decision = snapshot.check(tool.capability, { kind: 'none' }, {});
-          return (
-            decision.effect !== 'deny' ||
-            ![
-              'principal_forbidden',
-              'rot_violation',
-              'safe_mode',
-              'no_capability',
-              'tenant_mismatch',
-            ].includes(decision.code)
-          );
-        })
-      : principalVisibleTools;
+  // Use the same kernel for categorical denials before preload, search or
+  // flat projection. The placeholder request only classifies eligibility.
+  // Keep it outside the execution snapshot's cache so real calls are checked
+  // with their own arguments, resource and current taint.
+  const catalogueDecision = (capability: CapabilityId): Decision =>
+    deps.decide({
+      principal: input.principal,
+      tenant: input.tenant,
+      capability,
+      resource: { kind: 'none' },
+      args: {},
+      taint: snapshot.currentTaint(),
+    });
+  const eligibleTools = principalVisibleTools.filter((tool) => {
+    const decision = catalogueDecision(tool.capability);
+    return (
+      decision.effect !== 'deny' ||
+      ![
+        'principal_forbidden',
+        'rot_violation',
+        'safe_mode',
+        'no_capability',
+        'tenant_mismatch',
+      ].includes(decision.code)
+    );
+  });
   const discoveryTool = eligibleTools.find(
     (tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME,
   );
   const capabilityExposure = createCapabilityExposure({
     eligible: eligibleTools,
-    maxToolsExposed: deps.profile.maxToolsExposed,
-    ...(discoveryTool === undefined ? {} : { discoveryTool }),
+    ...(discoveryTool === undefined
+      ? {}
+      : {
+          discoveryTool,
+          // Discovery is a context operation with no resource derived from its
+          // arguments. It must be callable for a partial menu to be useful.
+          canDiscover: () => catalogueDecision(discoveryTool.capability).effect === 'allow',
+        }),
   });
-  const preloaded =
-    capabilityExposure.pressured && deps.profile.maxToolsExposed > 1
-      ? preloadCapabilitiesForTask(capabilityExposure, input.text, 2)
-      : null;
+  const preloaded = capabilityExposure.pressured
+    ? preloadCapabilitiesForTask(capabilityExposure, input.text, 2)
+    : null;
   const exposed = capabilityExposure.exposed;
+  const initialProjection = capabilityExposure.snapshot();
   turn.setAttributes({
     'muffin.context.class': turnClass,
     'muffin.context.tools_exposed': exposed.length,
-    'muffin.context.tools_hidden': capabilityExposure.hiddenCount,
-    'muffin.context.capability_discovery': capabilityExposure.pressured,
+    'muffin.context.tools_hidden': initialProjection.hiddenCount,
+    'muffin.context.capability_discovery': initialProjection.pressured,
     'muffin.context.tools_preloaded': preloaded?.loaded.length ?? 0,
   });
 
@@ -461,6 +463,7 @@ async function runClaimedTurn(
     ...(input.jobId === undefined ? {} : { jobId: input.jobId }),
     sessionId: input.session.id,
     runtimeInfo: deps.runtimeInfo,
+    capabilityExposure: capabilityExposure.snapshot,
     taint: () => snapshot.currentTaint(),
     intrinsicTaint: () => snapshot.intrinsicTaint(),
     suspend: (spec) => {
@@ -705,7 +708,7 @@ async function runClaimedTurn(
         !deps.memory.store.hasActiveFacts(input.tenant),
     );
 
-    if (capabilityExposure.pressured) {
+    if (initialProjection.pressured) {
       // Local progressive discovery is not provider magic: the model must know
       // that the current schema menu is intentionally partial. Keep that fact
       // in volatile harness context (never owner words), immediately before
