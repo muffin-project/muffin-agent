@@ -2258,6 +2258,20 @@ describe('doctor says whether a voice note would be understood, before the first
     expect(c?.detail).toContain(join(dir, 'models', 'ggml-base.bin'));
   });
 
+  it('describes the first-use download when only the local model is missing', async () => {
+    const dir = conTelegram(home());
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'ffmpeg'), '');
+    writeFileSync(join(bin, 'whisper-cli'), '');
+    const c = await checkWith(dir, 'note vocali', {
+      voce: { accettaAudio: async () => false, path: bin },
+    });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toMatch(/scaricare il modello locale alla prima nota da trascrivere/);
+    expect(c?.remedy).toBeUndefined();
+  });
+
   it('takes the transcription branch when the probe fails, like the runtime does', async () => {
     const dir = conTelegram(home());
     const c = await checkWith(dir, 'note vocali', {

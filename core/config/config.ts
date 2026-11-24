@@ -260,6 +260,8 @@ export const ConfigSchema = z.object({
   embedder: z
     .object({
       kind: z.enum(['ollama', 'openai-compat']),
+      /** Pause vector recall and indexing while keeping the selected route. */
+      enabled: z.boolean().optional(),
       model: z.string().min(1).optional(),
       /**
        * Obbligatoria per `openai-compat`: la dimensione è cotta nel DDL della
@@ -508,10 +510,8 @@ export const paths = (home = muffinHome()) => ({
   /**
    * Dove va il modello whisper, quando `config.audio.whisperModel` non lo dice.
    *
-   * Un percorso e non un file: qui non lo scrive nessuno. Lo scarica l'owner —
-   * 142 MiB per `ggml-base.bin` — oppure `init`, `surface enable` e il primo
-   * uso (`core/audio/trascrivi.ts`), che lo assicurano quando una superficie
-   * vocale è accesa; se manca comunque, `trascrivi` stampa il `curl` esatto.
+   * Local transcription prepares the model when it first needs it.
+   * If that fails, the audio path reports the manual remedy.
    * Dentro la home e non in `rot/`: non e' una cosa dell'identita', e' un
    * pezzo di macchina rimpiazzabile.
    */

@@ -876,6 +876,7 @@ export async function runDoctor(
     // this repository and none of them was ever *consulted* — which is the same
     // failure they were written to prevent, one layer out.
     const chunks = countOrNull(db, 'chunks');
+    const vectorsDisabled = config?.embedder?.enabled === false;
 
     // **Prima** dei conteggi, non dentro il ramo dei conteggi coerenti.
     //
@@ -900,8 +901,9 @@ export async function runDoctor(
     let configurato: Embedder | undefined;
     let configRotta: string | undefined;
     try {
-      configurato =
-        config === null ? undefined : makeEmbedder(config.embedder, (ref) => readSecret(ref, home));
+      if (config !== null && !vectorsDisabled) {
+        configurato = makeEmbedder(config.embedder, (ref) => readSecret(ref, home));
+      }
     } catch (error) {
       // Una config di embedder incompleta non deve far cadere `doctor`: è
       // proprio il momento in cui serve. Ma nemmeno sparire: qui stava un
@@ -916,7 +918,9 @@ export async function runDoctor(
       configRotta = error instanceof Error ? error.message : String(error);
     }
 
-    if (configRotta !== undefined) {
+    if (vectorsDisabled) {
+      ok('vector index', 'embedding disattivati · ricerca testuale attiva');
+    } else if (configRotta !== undefined) {
       fail(
         'vector index',
         `${chunks === null ? 'nessuna tabella chunks' : `${chunks} chunks`}, e config.embedder non è ` +
@@ -1622,6 +1626,11 @@ export async function runDoctor(
         'note vocali',
         `${modello} non accetta audio: si trascrive in casa — ` +
           prerequisiti.map((x) => (x.ok ? `${x.cosa} ${x.dove}` : x.cosa)).join(' · '),
+      );
+    } else if (mancanti.every((x) => x.cosa === 'modello whisper')) {
+      ok(
+        'note vocali',
+        `${modello} non accetta audio. Muffin proverà a scaricare il modello locale alla prima nota da trascrivere.`,
       );
     } else {
       warn(
