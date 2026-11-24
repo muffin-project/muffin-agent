@@ -394,7 +394,8 @@ const MIGRATIONS: Migration[] = [
   },
   {
     version: 12,
-    description: 'memory_proposals.owner_ingress_episode_id — preserve authenticated correction sources',
+    description:
+      'memory_proposals.owner_ingress_episode_id — preserve authenticated correction sources',
     up: (db) => {
       const hasTable = db
         .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_proposals'`)

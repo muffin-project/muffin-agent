@@ -1,32 +1,32 @@
-import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runInit } from '../cli/init.js';
 import { BudgetEngine } from '../core/budget/budget.js';
 import { costUsd } from '../core/budget/pricing.js';
 import {
-  Consolidator,
   CONSOLIDATION_CAPABILITY,
   CONSOLIDATION_DRAIN_MS,
   CONSOLIDATION_IDLE_MS,
+  Consolidator,
   readConsolidation,
 } from '../core/memory/consolidator.js';
-import { EXTRACTION_VERSION } from '../core/memory/schema.js';
 import { ingestPending } from '../core/memory/ingest.js';
 import { sweepDuplicates } from '../core/memory/maintenance.js';
-import type { RecallDeps } from '../core/memory/recall.js';
 import { proposeMemoryRecord } from '../core/memory/proposals.js';
+import type { RecallDeps } from '../core/memory/recall.js';
+import { EXTRACTION_VERSION } from '../core/memory/schema.js';
 import { MemoryStore } from '../core/memory/store.js';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
+import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { TurnStore } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
-import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
-import { runTurn, type LoopDeps } from './loop.js';
+import { type LoopDeps, runTurn } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
 import { lightLane } from './providers/light-lane.js';
 import type { ChatCall, ChatResult, Provider } from './providers/types.js';
@@ -245,7 +245,9 @@ describe('consolidation starts by itself', () => {
     expect(h.store.pendingProposals('host')).toHaveLength(0);
     expect(h.activeFacts().n).toBe(21);
     const triggers = (
-      h.db.prepare(`SELECT trigger FROM consolidation_runs ORDER BY id`).all() as { trigger: string }[]
+      h.db.prepare(`SELECT trigger FROM consolidation_runs ORDER BY id`).all() as {
+        trigger: string;
+      }[]
     ).map((r) => r.trigger);
     expect(triggers).toEqual(['idle', 'drain']);
     expect(h.consolidation.isArmed()).toBe(false);
@@ -256,26 +258,52 @@ describe('consolidation starts by itself', () => {
       reply('{"reasoning":"le due versioni restano aperte","verdict":"review","confidence":0.5}'),
     ]);
     const evidence = h.store.addEpisode({
-      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
-      content: 'il commercialista ora è Lucia', trustTier: 0, createdAt: '2026-08-01T12:00:00Z',
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 't',
+      role: 'user',
+      kind: 'message',
+      content: 'il commercialista ora è Lucia',
+      trustTier: 0,
+      createdAt: '2026-08-01T12:00:00Z',
     });
     const priorEvidence = h.store.addEpisode({
-      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
-      content: 'il commercialista è Marco', trustTier: 0, createdAt: '2026-08-01T11:00:00Z',
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 't',
+      role: 'user',
+      kind: 'message',
+      content: 'il commercialista è Marco',
+      trustTier: 0,
+      createdAt: '2026-08-01T11:00:00Z',
     });
     const ownerId = h.store.upsertEntity('host', 'owner', 'person', '2026-08-01T11:00:00Z');
-    const addMarco = () => h.store.addFact({
-      tenantId: 'host', subjectId: ownerId, predicate: 'accountant', objectValue: 'Marco',
-      episodeId: priorEvidence, trustTier: 0, confidence: 0.9, extractionV: 1,
-      recordedAt: '2026-08-01T11:00:00Z',
-    });
+    const addMarco = () =>
+      h.store.addFact({
+        tenantId: 'host',
+        subjectId: ownerId,
+        predicate: 'accountant',
+        objectValue: 'Marco',
+        episodeId: priorEvidence,
+        trustTier: 0,
+        confidence: 0.9,
+        extractionV: 1,
+        recordedAt: '2026-08-01T11:00:00Z',
+      });
     const olderDuplicate = addMarco();
     const sweepKeeper = addMarco();
     h.store.markExtracted('host', [evidence, priorEvidence], EXTRACTION_VERSION);
     proposeMemoryRecord(h.store, {
-      tenantId: 'host', subject: 'owner', subjectKind: 'person', predicate: 'accountant',
-      object: 'Lucia', producer: 'owner-stated', sourceEpisodeIds: [evidence], ownerIngressEpisodeId: evidence,
-      content: 'il commercialista ora è Lucia', confidence: 0.95,
+      tenantId: 'host',
+      subject: 'owner',
+      subjectKind: 'person',
+      predicate: 'accountant',
+      object: 'Lucia',
+      producer: 'owner-stated',
+      sourceEpisodeIds: [evidence],
+      ownerIngressEpisodeId: evidence,
+      content: 'il commercialista ora è Lucia',
+      confidence: 0.95,
     });
 
     const result = await h.consolidation.runNow('manual');
@@ -283,9 +311,7 @@ describe('consolidation starts by itself', () => {
     expect(result.report?.needsReview).toHaveLength(1);
     expect(h.store.factById('host', olderDuplicate)?.expiredAt).not.toBeNull();
     expect(h.store.factById('host', sweepKeeper)?.expiredAt).toBeNull();
-    expect(h.store.openContradictions('host')).toMatchObject([
-      { existingFactId: sweepKeeper },
-    ]);
+    expect(h.store.openContradictions('host')).toMatchObject([{ existingFactId: sweepKeeper }]);
   });
 
   it('embeds the episode too — the half of recall nothing else feeds', async () => {
@@ -359,7 +385,9 @@ describe('a backlog drains itself', () => {
 
     expect(h.store.stats('host').pending).toBe(0);
     const triggers = (
-      h.db.prepare(`SELECT trigger FROM consolidation_runs ORDER BY id`).all() as { trigger: string }[]
+      h.db.prepare(`SELECT trigger FROM consolidation_runs ORDER BY id`).all() as {
+        trigger: string;
+      }[]
     ).map((r) => r.trigger);
     expect(triggers).toEqual(['idle', 'drain']);
     // And it stops: nothing is behind the short page, so re-arming would be a
@@ -402,7 +430,10 @@ describe('the memory lane is inside the budget', () => {
     await h.consolidation.settled();
 
     expect(h.budget.monthToDateUsd()).toBe(0);
-    const rows = h.db.prepare(`SELECT model, usd FROM spend`).all() as { model: string; usd: number }[];
+    const rows = h.db.prepare(`SELECT model, usd FROM spend`).all() as {
+      model: string;
+      usd: number;
+    }[];
     expect(rows).toEqual([{ model: 'qwen/qwen3.8-27b', usd: 0 }]);
   });
 

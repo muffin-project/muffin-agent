@@ -13,7 +13,12 @@ import { fileURLToPath } from 'node:url';
 import type Database from 'better-sqlite3';
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import { type ChatCall, type ChatResult, type Provider, ProviderError } from '../../agent/providers/types.js';
+import {
+  type ChatCall,
+  type ChatResult,
+  type Provider,
+  ProviderError,
+} from '../../agent/providers/types.js';
 import { JsonlExporter, SimpleTracer } from '../tracing/tracer.js';
 import { type IngestDeps, reconcilePendingProposals, reconcileProposal } from './ingest.js';
 import { resolveContradiction, sweepDuplicates } from './maintenance.js';
@@ -885,14 +890,38 @@ describe('MemoryProposal — duplicate tier promotion is ordered with reconcilia
     `;
     const reconcile = spawn(
       'node',
-      ['--import', 'tsx', '--input-type=module', '-e', reconcileScript, file, String(proposalId), reconcileReady, reconcileGo, reconcileDone],
+      [
+        '--import',
+        'tsx',
+        '--input-type=module',
+        '-e',
+        reconcileScript,
+        file,
+        String(proposalId),
+        reconcileReady,
+        reconcileGo,
+        reconcileDone,
+      ],
       { stdio: ['ignore', 'ignore', 'pipe'] },
     );
     let reconcileError = '';
     reconcile.stderr.on('data', (chunk) => (reconcileError += String(chunk)));
     const stage = spawn(
       'node',
-      ['--import', 'tsx', '--input-type=module', '-e', stageScript, file, String(sourceEpisode), stageReady, stageGo, stagePaused, stageRelease, stageDone],
+      [
+        '--import',
+        'tsx',
+        '--input-type=module',
+        '-e',
+        stageScript,
+        file,
+        String(sourceEpisode),
+        stageReady,
+        stageGo,
+        stagePaused,
+        stageRelease,
+        stageDone,
+      ],
       { stdio: ['ignore', 'ignore', 'pipe'] },
     );
     let stageError = '';

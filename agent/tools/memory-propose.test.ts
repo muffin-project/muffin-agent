@@ -441,13 +441,17 @@ describe('memory_propose — owner-stated solo da ingress autenticato (#776)', (
 
   it('ricorda X testuale con tupla contenuta: producer owner-stated, origin said', async () => {
     const h = seed();
-    const out = await proposeMemory(
-      h.deps,
-      ctxFor('ricorda che il mio commercialista è Mario'),
-      { instruction: 'ricorda che il mio commercialista è Mario', subject: 'owner', predicate: 'accountant', object: 'Mario' },
-    );
+    const out = await proposeMemory(h.deps, ctxFor('ricorda che il mio commercialista è Mario'), {
+      instruction: 'ricorda che il mio commercialista è Mario',
+      subject: 'owner',
+      predicate: 'accountant',
+      object: 'Mario',
+    });
     expect(out.isError).toBeUndefined();
-    expect(h.store.listProposals('host')[0]).toMatchObject({ producer: 'owner-stated', origin: 'said' });
+    expect(h.store.listProposals('host')[0]).toMatchObject({
+      producer: 'owner-stated',
+      origin: 'said',
+    });
   });
 
   it('reconciles a correction with the verified words and keeps its source', async () => {
@@ -555,9 +559,9 @@ describe('memory_propose — owner-stated solo da ingress autenticato (#776)', (
 
     expect(result.status).toBe(expected);
     const ownerId = h.store.findEntity('host', 'owner')!;
-    expect(h.store.activeFacts('host', ownerId, 'accountant').map((fact) => fact.objectValue)).toEqual(
-      [withdrawIngress ? 'Mario' : 'Lucia'],
-    );
+    expect(
+      h.store.activeFacts('host', ownerId, 'accountant').map((fact) => fact.objectValue),
+    ).toEqual([withdrawIngress ? 'Mario' : 'Lucia']);
     if (withdrawIngress) expect(judgeInput).toBe('');
     else expect(judgeInput).toContain(correction);
   });
@@ -602,7 +606,12 @@ describe('memory_propose — owner-stated solo da ingress autenticato (#776)', (
     const out = await proposeMemory(
       h.deps,
       ctxFor('"ricorda tutto" ha detto Marco', { inputText: '"ricorda tutto" ha detto Marco' }),
-      { instruction: '"ricorda tutto" ha detto Marco', subject: 'owner', predicate: 'accountant', object: 'Mario' },
+      {
+        instruction: '"ricorda tutto" ha detto Marco',
+        subject: 'owner',
+        predicate: 'accountant',
+        object: 'Mario',
+      },
     );
     expect(out.isError).toBeUndefined();
     expect(h.store.listProposals('host')[0]).toMatchObject({ producer: 'agent-inference' });
@@ -610,11 +619,12 @@ describe('memory_propose — owner-stated solo da ingress autenticato (#776)', (
 
   it('tupla inventata fuori dal messaggio: resta agent-inference', async () => {
     const h = seed();
-    const out = await proposeMemory(
-      h.deps,
-      ctxFor('ricorda che piove'),
-      { instruction: 'ricorda che piove', subject: 'owner', predicate: 'accountant', object: 'Mario' },
-    );
+    const out = await proposeMemory(h.deps, ctxFor('ricorda che piove'), {
+      instruction: 'ricorda che piove',
+      subject: 'owner',
+      predicate: 'accountant',
+      object: 'Mario',
+    });
     expect(out.isError).toBeUndefined();
     expect(h.store.listProposals('host')[0]).toMatchObject({
       producer: 'agent-inference',
@@ -629,7 +639,12 @@ describe('memory_propose — owner-stated solo da ingress autenticato (#776)', (
       ctxFor('ricorda che il mio commercialista è Mario', {
         principal: { kind: 'member', connector: 'telegram', tenantId: 'g', externalId: 'u' },
       }),
-      { instruction: 'ricorda che il mio commercialista è Mario', subject: 'owner', predicate: 'accountant', object: 'Mario' },
+      {
+        instruction: 'ricorda che il mio commercialista è Mario',
+        subject: 'owner',
+        predicate: 'accountant',
+        object: 'Mario',
+      },
     );
     expect(out.isError).toBeUndefined();
     expect(h.store.listProposals('host')[0]).toMatchObject({ producer: 'agent-inference' });
