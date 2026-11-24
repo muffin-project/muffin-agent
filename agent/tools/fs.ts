@@ -362,7 +362,11 @@ export const fsToolSpecs: ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Path relative to the working directory' },
+        path: {
+          type: 'string',
+          description:
+            'Destination relative to the working directory. Copy any requested path and filename verbatim.',
+        },
         content: { type: 'string' },
       },
       required: ['path', 'content'],

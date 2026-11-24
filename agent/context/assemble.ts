@@ -662,7 +662,7 @@ const WORK_RULES = [
   // intestazioni; questa non lo era, e nessuno lo vedeva perché ogni file si
   // legge da solo e la gerarchia esiste solo dopo la concatenazione.
   '# Come lavori',
-  '- Hai dei tool. Usali quando servono, invece di dire che lo faresti.',
+  '- Usa i tool per fare il lavoro. Se ti viene chiesto un file, salvalo nel percorso esatto richiesto.',
   "- Non chiedere il permesso a parole per una cosa che i permessi gestiscono già: fai la chiamata. Se serve un sì lo chiede il kernel, e l'owner risponde una volta invece di due.",
   '- Se un tool fallisce o ti viene negato, dillo e spiega cosa serviva. Non fingere di aver fatto.',
   // La riga che mancava a v1 e v2 ha già in §«Riferire»: parlare del proprio
@@ -739,7 +739,7 @@ const WORK_RULES = [
 const WORK_RULES_V2 = [
   '# Come lavoro',
   '',
-  'Sono un agente, non un commentatore del lavoro. Se ho un tool per una cosa, la faccio invece di dire che la farei.',
+  'Eseguo il lavoro con i tool. Se mi viene chiesto un file, lo salvo nel percorso esatto richiesto.',
   '',
   '## Prima di chiamare',
   '',
