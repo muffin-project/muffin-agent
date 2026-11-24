@@ -21,7 +21,12 @@ import type { IngressPort } from '../connectors/shared/ingress/types.js';
 import { TelegramApi } from '../connectors/telegram/api.js';
 import { type ConnectorDeps, TelegramConnector } from '../connectors/telegram/connector.js';
 import { TelegramDeliveryStore } from '../connectors/telegram/delivery.js';
-import { TELEGRAM_ID, telegramSurface } from '../connectors/telegram/surface.js';
+import {
+  TELEGRAM_ID,
+  telegramAddress,
+  telegramDeliveryResult,
+  telegramSurface,
+} from '../connectors/telegram/surface.js';
 import { UpdateInbox } from '../connectors/telegram/updates.js';
 import { decidiVoce, type Voce } from '../core/audio/voce.js';
 import {
@@ -49,6 +54,7 @@ import {
   telegramOwner,
 } from '../core/rot/owner.js';
 import { Pausa } from '../core/runtime/pausa.js';
+import type { Deliver } from '../core/scheduler/scheduler.js';
 import { adoptOwnerState } from '../core/surface/adopt-owner.js';
 import { type CliWriter, cliSurface } from '../core/surface/cli.js';
 import { SurfaceRegistry } from '../core/surface/registry.js';
@@ -889,6 +895,7 @@ export function connectSurfaces(
    */
   stop: (budgetMs?: number) => Promise<void>;
   registry: SurfaceRegistry;
+  deliverToChannel: Deliver;
   deliver: LaneDeliver;
   attachStream: AttachStream;
   salute: SaluteSuperfici;
@@ -1085,6 +1092,21 @@ export function connectSurfaces(
     }
   });
 
+  const isTelegramChannel = (channel: string): boolean =>
+    channel === TELEGRAM_ID || telegramAddress(channel, undefined) !== null;
+  const deliverToChannel: Deliver = async (channel, text, turn) => {
+    if (turn?.recovered && isTelegramChannel(channel)) {
+      const record = runtime.deps.turns.get(turn.id);
+      if (record !== null && record.jobId !== null && record.replyTo?.channel === channel) {
+        // A prior receipt can be reconciled even if Telegram lost its binding
+        // or credentials before startup. Reading it authorizes no new send.
+        const receipt = telegramDelivery().recordedOutcome(record.id, record.leaseIndex);
+        if (receipt !== undefined) return telegramDeliveryResult(receipt);
+      }
+    }
+    return registry.deliver(channel, text, turn);
+  };
+
   return {
     lines,
     salute,
@@ -1095,6 +1117,7 @@ export function connectSurfaces(
     stop: (budgetMs = DRAIN_BUDGET_MS) =>
       Promise.all(stops.map((s) => s(budgetMs))).then(() => undefined),
     registry,
+    deliverToChannel,
     /**
      * The lane's delivery, over whichever surfaces are up.
      *
@@ -1109,9 +1132,9 @@ export function connectSurfaces(
       if (
         typeof turn.jobId === 'string' &&
         typeof channel === 'string' &&
-        registry.find(channel)?.id === TELEGRAM_ID
+        isTelegramChannel(channel)
       ) {
-        const result = await registry.deliver(channel, text, {
+        const result = await deliverToChannel(channel, text, {
           id: turn.id,
           ...(recovered ? { recovered } : {}),
         });
@@ -1431,14 +1454,16 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
       )
         return 'possibly_sent';
       const target = address['chatId'];
-      const ownerAtStart = pairedPrivateChat();
       const jobId = record.jobId;
-      const hasExplicitRoute = (chatId: number): boolean => {
-        const channel = `telegram:${chatId}`;
-        if (jobId === null || record.replyTo?.['channel'] !== channel) return false;
+      const channel = record.replyTo?.['channel'];
+      const declaredAddress =
+        typeof channel === 'string' ? telegramAddress(channel, undefined) : null;
+      const hasExplicitRoute = (): boolean => {
+        if (jobId === null) return false;
         const job = runtime.jobs.get(jobId);
         return (
-          job?.channel === channel &&
+          job !== null &&
+          job.channel === channel &&
           job.origin.surface === 'cli' &&
           job.origin.tenant === 'host' &&
           job.origin.principal === 'owner' &&
@@ -1448,25 +1473,34 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
       if (
         !record.ownerQuestionFinal &&
         record.replyTo?.scheduledDeliveryVersion === SCHEDULED_DELIVERY_VERSION &&
-        typeof target === 'number' &&
+        declaredAddress !== null &&
+        declaredAddress.chatId === target &&
+        declaredAddress.threadId === address['threadId'] &&
         Number.isSafeInteger(target) &&
         target > 0 &&
-        ownerAtStart !== undefined &&
-        target !== ownerAtStart &&
-        hasExplicitRoute(target)
+        hasExplicitRoute()
       ) {
-        if (delivery.parts(turn.id, record.leaseIndex).some((part) => part.chatId !== target)) {
-          throw new Error('Scheduled delivery plan does not match the registered chat');
+        const ownerAtStart = pairedPrivateChat();
+        if (ownerAtStart !== undefined && target !== ownerAtStart) {
+          const parts = delivery.parts(turn.id, record.leaseIndex);
+          if (
+            parts.some(
+              (part) =>
+                part.chatId !== target || part.threadId !== (declaredAddress.threadId ?? null),
+            )
+          ) {
+            throw new Error('Scheduled delivery plan does not match the registered address');
+          }
+          // The registered CLI job supplies the destination. The live binding
+          // and persisted route still have to agree at every Bot API attempt.
+          const scheduledApi = new TelegramApi(
+            token,
+            base,
+            (chatId) =>
+              chatId === target && pairedPrivateChat() === ownerAtStart && hasExplicitRoute(),
+          );
+          return connector.deliverTo(turn.id, address, text, scheduledApi);
         }
-        // CLI jobs name their destination explicitly. Keep the live owner
-        // binding and the recorded job route in force at the Bot API boundary.
-        const scheduledApi = new TelegramApi(
-          token,
-          base,
-          (chatId) =>
-            chatId === target && pairedPrivateChat() === ownerAtStart && hasExplicitRoute(chatId),
-        );
-        return connector.deliverTo(turn.id, address, text, scheduledApi);
       }
       return connector.deliverTo(turn.id, address, text);
     }),

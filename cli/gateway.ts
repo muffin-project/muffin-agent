@@ -57,7 +57,6 @@ import { reviewBootLine } from '../core/memory/maintenance.js';
 import { Pausa } from '../core/runtime/pausa.js';
 import { type Deliver, Scheduler } from '../core/scheduler/scheduler.js';
 import { makeTraceRetentionTick } from '../core/scheduler/trace-retention.js';
-import type { SurfaceRegistry } from '../core/surface/registry.js';
 import type { SaluteSuperfici } from '../core/surface/salute.js';
 import { notDelivered } from '../core/surface/types.js';
 import { type LaneEvent, TurnLane } from '../core/turns/lane.js';
@@ -1055,16 +1054,10 @@ export async function cmdGatewayRun(
   runtime.approvers.set('cli', (request, where) => forward.approve(request, where));
 
   /**
-   * The registry exists only after the claim is won — `connectSurfaces` starts
-   * polling Telegram, and a second gateway must not do that before it finds out
-   * it lost. So the scheduler is handed an indirection rather than the registry,
-   * and the window before surfaces are up reports itself as what it is.
-   *
-   * "Not connected yet" is a *state*, not the old lie: it comes back as
-   * `{ delivered: false }`, so a job that somehow fires in that window is
-   * recorded as undelivered instead of silently marked run.
+   * Attach delivery only after winning the claim and starting the surfaces.
+   * A job that fires during startup gets an explicit disconnected outcome.
    */
-  let registry: SurfaceRegistry | null = null;
+  let deliverToChannel: Deliver | null = null;
   /**
    * Assegnato dopo, letto pigramente dal socket: il canale di controllo si apre
    * **prima** delle superfici di proposito (vedi `serveControlSocket` qui
@@ -1073,9 +1066,9 @@ export async function cmdGatewayRun(
    */
   let saluteSuperfici: SaluteSuperfici | null = null;
   const deliver: Deliver = async (channel, text, turn) =>
-    registry === null
+    deliverToChannel === null
       ? notDelivered('le superfici non sono ancora connesse')
-      : registry.deliver(channel, text, turn);
+      : deliverToChannel(channel, text, turn);
 
   const pausa = new Pausa(runtime.db);
   /**
@@ -1385,7 +1378,7 @@ export async function cmdGatewayRun(
   attachStreamFromLane = surfaces.attachStream;
   // The scheduler has been holding an indirection to this since before the
   // claim; from here on a due job reaches whatever is actually connected.
-  registry = surfaces.registry;
+  deliverToChannel = surfaces.deliverToChannel;
   saluteSuperfici = surfaces.salute;
   // DAY-1 requirement B14, same as runRepl: a file the model produces during a job's
   // turn can reach the owner as a real attachment. I canali `forward:<id>` non
