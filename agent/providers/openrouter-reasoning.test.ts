@@ -4,7 +4,10 @@ import { OpenRouterReasoningDiscovery } from './openrouter-reasoning.js';
 const BASE = 'https://openrouter.ai/api/v1';
 
 function response(data: unknown): Response {
-  return new Response(JSON.stringify({ data }), { status: 200, headers: { 'content-type': 'application/json' } });
+  return new Response(JSON.stringify({ data }), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
 describe('OpenRouter reasoning discovery', () => {
@@ -13,7 +16,15 @@ describe('OpenRouter reasoning discovery', () => {
     const discovery = new OpenRouterReasoningDiscovery({
       fetch: async () => {
         calls += 1;
-        return response({ id: 'qwen/qwen3.8-27b', reasoning: { mandatory: false, default_enabled: true, default_effort: 'xhigh', supported_efforts: ['xhigh', 'medium', 'low'] } });
+        return response({
+          id: 'qwen/qwen3.8-27b',
+          reasoning: {
+            mandatory: false,
+            default_enabled: true,
+            default_effort: 'xhigh',
+            supported_efforts: ['xhigh', 'medium', 'low'],
+          },
+        });
       },
       now: () => 100,
       ttlMs: 1_000,
@@ -34,7 +45,8 @@ describe('OpenRouter reasoning discovery', () => {
     const discovery = new OpenRouterReasoningDiscovery({
       fetch: async () => {
         calls += 1;
-        if (calls === 1) return response({ reasoning: { mandatory: false, supported_efforts: ['low'] } });
+        if (calls === 1)
+          return response({ reasoning: { mandatory: false, supported_efforts: ['low'] } });
         throw new Error('metadata unavailable');
       },
       now: () => now,
@@ -58,11 +70,18 @@ describe('OpenRouter reasoning discovery', () => {
     expect(result.capabilities.support).toBe('unknown');
   });
 
-  it('treats openrouter/free as a dynamic router without a fixed reasoning capability', async () => {
-    const discovery = new OpenRouterReasoningDiscovery({ fetch: async () => response({ id: 'openrouter/free' }) });
+  it('treats openrouter/free as a dynamic router: off is sendable, no fixed levels or budget', async () => {
+    const discovery = new OpenRouterReasoningDiscovery({
+      fetch: async () => response({ id: 'openrouter/free' }),
+    });
     const result = await discovery.resolve(BASE, 'openrouter/free');
 
-    expect(result.capabilities.support).toBe('unsupported');
+    expect(result.capabilities).toEqual({
+      support: 'supported',
+      canDisable: true,
+      supportsMaxTokens: false,
+      mandatory: false,
+    });
     expect(result.source).toBe('openrouter-live');
   });
 });
