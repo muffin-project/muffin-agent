@@ -712,6 +712,68 @@ describe('muffin model', () => {
     }
   });
 
+  it('turns embedding off without a probe and restores the saved route on demand', async () => {
+    const h = home();
+    const endpoint = await embeddingEndpoint(4);
+    try {
+      const embedder = {
+        kind: 'ollama' as const,
+        model: 'fixture-embedding',
+        dimensions: 4,
+        baseUrl: endpoint.baseUrl,
+        fallback: { kind: 'ollama' as const, model: 'fixture-fallback', dimensions: 4 },
+      };
+      const config = { ...loadConfig(h), embedder };
+      saveConfig(config, h);
+
+      const { sink } = raccogli();
+      expect(await cmdModel(h, ['embed', 'off'], { out: sink })).toBe(0);
+      expect(loadConfig(h)).toEqual({ ...config, embedder: { ...embedder, enabled: false } });
+      expect(endpoint.requests).toEqual([]);
+
+      const status = raccogli();
+      expect(await cmdModel(h, [], { out: status.sink })).toBe(0);
+      expect(status.out.join('\n')).toMatch(/embed +off/);
+      expect(await cmdModel(h, ['embed', 'on'], { out: sink })).toBe(0);
+      expect(loadConfig(h)).toEqual({ ...config, embedder: { ...embedder, enabled: true } });
+      expect(endpoint.requests).toEqual([
+        {
+          path: '/api/embeddings',
+          body: { model: 'fixture-embedding', prompt: 'muffin' },
+        },
+      ]);
+    } finally {
+      await endpoint.close();
+    }
+  });
+
+  it('preserves a disabled embedder when reactivating it fails', async () => {
+    const h = home();
+    const { sink } = raccogli();
+    const probe = vi.fn(async () => 1024);
+    expect(await cmdModel(h, ['embed', 'off'], { out: sink, probe })).toBe(0);
+    expect(probe).not.toHaveBeenCalled();
+    const disabled = loadConfig(h);
+    expect(disabled.embedder?.enabled).toBe(false);
+    expect(
+      await cmdModel(h, ['embed', 'on'], {
+        out: sink,
+        probe: async () => {
+          throw new Error('embedder endpoint unavailable');
+        },
+      }),
+    ).toBe(1);
+    expect(loadConfig(h)).toEqual(disabled);
+    expect(await cmdModel(h, ['embed', 'replacement'], { out: sink, probe: async () => 16 })).toBe(
+      0,
+    );
+    expect(loadConfig(h).embedder).toMatchObject({
+      enabled: true,
+      model: 'replacement',
+      dimensions: 16,
+    });
+  });
+
   it('keeps the existing embedder when OpenAI refuses the synthetic probe', async () => {
     const h = home();
     const before = loadConfig(h);

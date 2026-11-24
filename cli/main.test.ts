@@ -2,7 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import DatabaseCtor from 'better-sqlite3';
 import { afterAll, describe, expect, it } from 'vitest';
 import { MemoryStore } from '../core/memory/store.js';
@@ -66,6 +66,58 @@ function cwdSenzaDotenv(): string {
   homes.push(cwd);
   return cwd;
 }
+
+describe('text setup with a voice-capable surface', () => {
+  it('pairs Telegram and re-runs init without contacting the speech-model host', () => {
+    const { dir, xdg } = scratchHome();
+    const requests = join(dir, 'setup-requests.txt');
+    const network = join(dir, 'setup-network.mjs');
+    writeFileSync(requests, '');
+    writeFileSync(
+      network,
+      `import { appendFileSync } from 'node:fs';
+globalThis.fetch = async (input) => {
+  const url = new URL(input instanceof Request ? input.url : String(input));
+  if (url.origin === 'http://127.0.0.1:9' && url.pathname.endsWith('/getMe')) {
+    appendFileSync(${JSON.stringify(requests)}, 'telegram getMe\\n');
+    return Response.json({
+      ok: true,
+      result: { id: 101, is_bot: true, first_name: 'fixture', username: 'fixture_bot' },
+    });
+  }
+  appendFileSync(${JSON.stringify(requests)}, url.hostname + '\\n');
+  throw new Error('No other endpoint is available during this text setup');
+};`,
+    );
+    const env = {
+      MUFFIN_HOME: dir,
+      XDG_CONFIG_HOME: xdg,
+      NODE_OPTIONS: `--import=${pathToFileURL(network).href}`,
+    };
+
+    expect(muffin(env, ['init'], 'sk-ant-fixture').code).toBe(0);
+    expect(muffin(env, ['secret', 'set', 'telegram_token'], '123:fixture-only').code).toBe(0);
+    const enabled = muffin(env, [
+      'surface',
+      'enable',
+      'telegram',
+      '--api-base',
+      'http://127.0.0.1:9',
+      '--owner',
+      '202',
+    ]);
+    expect(enabled.code, enabled.err).toBe(0);
+    expect(enabled.out).toContain('telegram abilitata');
+    const initAgain = muffin(env, ['init'], 'sk-ant-fixture');
+    expect(initAgain.code, initAgain.err).toBe(0);
+
+    const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'));
+    expect(config.surfaces.enabled).toContain('telegram');
+    expect(config.surfaces.telegram.ownerUserId).toBe(202);
+    expect(existsSync(join(dir, 'models', 'ggml-base.bin'))).toBe(false);
+    expect(readFileSync(requests, 'utf8').split('\n').filter(Boolean)).toEqual(['telegram getMe']);
+  }, 40_000);
+});
 
 describe('muffin init infers the provider from the key — headless, no TTY required', () => {
   it('an OpenRouter-shaped key ends up as openai-compat with the OpenRouter base URL, and says so', () => {
