@@ -16,6 +16,7 @@ import {
   CAPABILITY_DISCOVERY_GUIDANCE,
   CAPABILITY_SEARCH_TOOL_NAME,
   createCapabilityExposure,
+  DEFAULT_CORE_TOOL_NAMES,
   preloadCapabilitiesForTask,
 } from '../capability-exposure.js';
 import { tenantClass, visibleTools } from '../context/assemble.js';
@@ -417,8 +418,27 @@ async function runClaimedTurn(
   const discoveryTool = eligibleTools.find(
     (tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME,
   );
+  const wakeBarrier =
+    options.wokenFromWait === true ? decodeWaitFor(options.waitForAtWake ?? record.waitFor) : null;
+  // An approval replay asks for the same invocation. Rebuild its schema menu
+  // from the last tool batch checkpointed in this turn. The current eligible
+  // catalogue still controls which names can be shown after the pause.
+  const pendingBatch =
+    wakeBarrier?.kind === 'approval'
+      ? run.messages.findLast(
+          (message) =>
+            message.role === 'assistant' &&
+            message.content.some((block) => block.type === 'tool_use'),
+        )
+      : undefined;
+  const resumedToolNames =
+    pendingBatch?.content.filter((block) => block.type === 'tool_use').map((call) => call.name) ??
+    [];
   const capabilityExposure = createCapabilityExposure({
     eligible: eligibleTools,
+    ...(resumedToolNames.length === 0
+      ? {}
+      : { coreNames: [...DEFAULT_CORE_TOOL_NAMES, ...resumedToolNames] }),
     ...(discoveryTool === undefined
       ? {}
       : {
@@ -758,7 +778,7 @@ async function runClaimedTurn(
     const lostClaim = await reconcile(scope);
     if (lostClaim !== null) return lostClaim;
     if (options.wokenFromWait === true) {
-      const waitFor = decodeWaitFor(options.waitForAtWake ?? record.waitFor);
+      const waitFor = wakeBarrier;
       // Lo stesso giudizio che dà la lane quando sceglie chi svegliare, con lo
       // stesso registro sotto: senza `answered` una barriera d'approvazione
       // risulterebbe non soddisfatta qui, e il turno si risveglierebbe con
