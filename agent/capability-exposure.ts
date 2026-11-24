@@ -2,8 +2,8 @@ export const CAPABILITY_SEARCH_TOOL_NAME = 'capability_search';
 
 /**
  * Volatile harness guidance shown only when the current turn is actually using
- * progressive capability projection. The ordinary under-cap path sees neither
- * this text nor the discovery schema.
+ * progressive capability projection. The full projection needs neither this
+ * text nor the discovery schema.
  */
 export const CAPABILITY_DISCOVERY_GUIDANCE =
   '[Il menu tool di questo turno è una proiezione parziale del catalogo autorizzato. ' +
@@ -56,8 +56,8 @@ export type CapabilityDiscoveryPort = {
    * defence-in-depth rule for forbidden calls.
    */
   readonly searchAndLoad: (query: string, maxResults: number) => CapabilityLoadResult;
-  /** Replace the current dynamic selection with the batch's matches at the next round boundary. */
-  readonly activatePending: () => void;
+  /** Apply the batch at the model boundary and return whether discovery remains available. */
+  readonly activatePending: () => boolean;
   /** Current model-visible projection, for truthful runtime inspection. */
   readonly snapshot: () => CapabilityExposureSnapshot;
 };
@@ -145,9 +145,9 @@ function takeCore<T extends CapabilityTool>(
  *
  * There is no numeric cap. Tools named in the core stay visible. Every other
  * eligible tool stays reachable: when a discovery tool exists it is not in
- * the first schema list and loads by deterministic lexical search; when
- * discovery is absent the eligible catalogue is shown whole, because a
- * missing search door must not hide an authorized tool.
+ * the first schema list and loads by deterministic lexical search. The
+ * eligible catalogue is shown whole when discovery is absent or the turn
+ * cannot use it.
  *
  * eligible must already be principal/grant filtered. Execution remains on the
  * normal tool path and therefore gets the kernel's full policy re-check.
@@ -155,6 +155,7 @@ function takeCore<T extends CapabilityTool>(
 export function createCapabilityExposure<T extends CapabilityTool>(input: {
   readonly eligible: readonly T[];
   readonly discoveryTool?: T | undefined;
+  readonly canDiscover?: (() => boolean) | undefined;
   readonly coreNames?: readonly string[] | undefined;
 }): CapabilityExposure<T> {
   const discoveryName = input.discoveryTool?.spec.name;
@@ -183,6 +184,8 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
   const exposed = [...fixed];
 
   let pending: Map<string, T> | null = null;
+  let loaded: T[] = [];
+  let discoveryAvailable = true;
 
   const discovery: CapabilityDiscoveryPort = {
     searchAndLoad(query, maxResults) {
@@ -209,17 +212,24 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
     },
 
     activatePending() {
-      if (pending === null) return;
-      exposed.splice(fixed.length);
-      exposed.push(...pending.values());
-      pending = null;
+      const available = input.canDiscover?.() ?? true;
+      const selectionChanged = pending !== null;
+      if (pending !== null) {
+        loaded = [...pending.values()];
+        pending = null;
+      }
+      if (available !== discoveryAvailable || (available && selectionChanged)) {
+        discoveryAvailable = available;
+        exposed.splice(0, exposed.length, ...(available ? [...fixed, ...loaded] : catalog));
+      }
+      return discoveryAvailable;
     },
 
     snapshot() {
       return {
         visible: exposed.map((tool) => tool.spec.name),
-        pressured: true,
-        hiddenCount: searchable.length,
+        pressured: discoveryAvailable,
+        hiddenCount: discoveryAvailable ? searchable.length : 0,
       };
     },
   };
@@ -247,6 +257,5 @@ export function preloadCapabilitiesForTask<T extends CapabilityTool>(
 ): CapabilityLoadResult | null {
   if (!exposure.pressured || exposure.discovery === undefined) return null;
   const result = exposure.discovery.searchAndLoad(query, maxResults);
-  exposure.discovery.activatePending();
-  return result;
+  return exposure.discovery.activatePending() ? result : null;
 }

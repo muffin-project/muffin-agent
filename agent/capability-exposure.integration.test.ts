@@ -399,6 +399,97 @@ describe('#469 production-path capability discovery', () => {
     },
   );
 
+  it.each([false, true])(
+    'uses full eligible projection whenever discovery is denied by taint (already tainted: %s)',
+    async (alreadyTainted) => {
+      const home = mkdtempSync(join(tmpdir(), 'muffin-capability-discovery-taint-'));
+      const db = new DatabaseCtor(':memory:');
+      const reader = inertTool('fs_read');
+      const available = inertTool('host_inspect_probe');
+      const sealed = inertTool('sealed_setting');
+      const invoked = vi.fn(available.tool.handler);
+      const capabilities = new Map<string, CapabilityDecl>([
+        [reader.decl.id, reader.decl],
+        [available.decl.id, { ...available.decl, effect: 'host' }],
+        [sealed.decl.id, sealed.decl],
+        [capabilityDiscoveryCapability.id, capabilityDiscoveryCapability],
+      ]);
+      const provider = new Scripted([
+        ...(alreadyTainted ? [] : [toolCall('read', 'fs_read', {})]),
+        toolCall('host', 'host_inspect_probe', {}),
+        toolCall('guess-search', 'capability_search', { query: 'host_inspect_probe' }),
+        answer('done'),
+      ]);
+      const sessions = new SessionStore(home);
+
+      try {
+        const result = await runTurn(
+          {
+            provider,
+            profile: { ...CONSERVATIVE, recovery: [] },
+            model: 'test-model',
+            tools: [
+              { ...reader.tool, handler: () => ({ content: 'Untrusted source.', tier: 2 }) },
+              { ...available.tool, handler: invoked },
+              sealed.tool,
+              makeCapabilitySearchTool(),
+            ],
+            capabilities,
+            decide: createDecide({
+              matrix: {
+                ...POLICY_FLOOR,
+                neverAtRuntime: new Set([...POLICY_FLOOR.neverAtRuntime, sealed.decl.id]),
+                rows: {
+                  ...POLICY_FLOOR.rows,
+                  context: { ...POLICY_FLOOR.rows.context, denyAbove: 1 },
+                },
+              },
+              capabilities,
+              budgetExhausted: () => false,
+              hardened: true,
+            }),
+            tracer: new SimpleTracer(new JsonlExporter(home)),
+            sessions,
+            turns: new TurnStore(db),
+            todos: new TodoStore(db),
+            budgetExhausted: () => false,
+            systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite.' },
+          },
+          {
+            principal: owner,
+            tenant: 'host',
+            surface: 'cli',
+            session: sessions.open('capability-discovery-taint'),
+            text: 'Begin.',
+            ...(alreadyTainted ? { contentTaint: 2 } : {}),
+          },
+        );
+
+        expect(result.stopped).toBe('answered');
+        expect(invoked).toHaveBeenCalledOnce();
+        const [first, ...remaining] = provider.seen;
+        if (!alreadyTainted) {
+          expect(first?.tools?.map(({ name }) => name)).toEqual(['fs_read', 'capability_search']);
+          expect(JSON.stringify(first?.messages)).toContain(CAPABILITY_DISCOVERY_GUIDANCE);
+        }
+        for (const request of alreadyTainted ? provider.seen : remaining) {
+          expect(request.tools?.map(({ name }) => name)).toEqual(['fs_read', 'host_inspect_probe']);
+          expect(JSON.stringify(request.messages)).not.toContain(CAPABILITY_DISCOVERY_GUIDANCE);
+        }
+        expect(provider.seen.at(-1)?.messages.flatMap((message) => message.content)).toContainEqual(
+          expect.objectContaining({
+            type: 'tool_result',
+            toolCallId: 'guess-search',
+            isError: true,
+            content: expect.stringContaining('taint_exceeded'),
+          }),
+        );
+      } finally {
+        db.close();
+      }
+    },
+  );
+
   it('keeps forbidden tools out of discovery while direct guesses still meet the kernel', async () => {
     const home = mkdtempSync(join(tmpdir(), 'muffin-capability-authority-'));
     const db = new DatabaseCtor(':memory:');

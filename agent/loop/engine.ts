@@ -392,15 +392,17 @@ async function runClaimedTurn(
   // flat projection. The placeholder request only classifies eligibility.
   // Keep it outside the execution snapshot's cache so real calls are checked
   // with their own arguments, resource and current taint.
-  const eligibleTools = principalVisibleTools.filter((tool) => {
-    const decision = deps.decide({
+  const catalogueDecision = (capability: CapabilityId): Decision =>
+    deps.decide({
       principal: input.principal,
       tenant: input.tenant,
-      capability: tool.capability,
+      capability,
       resource: { kind: 'none' },
       args: {},
       taint: snapshot.currentTaint(),
     });
+  const eligibleTools = principalVisibleTools.filter((tool) => {
+    const decision = catalogueDecision(tool.capability);
     return (
       decision.effect !== 'deny' ||
       ![
@@ -417,17 +419,25 @@ async function runClaimedTurn(
   );
   const capabilityExposure = createCapabilityExposure({
     eligible: eligibleTools,
-    ...(discoveryTool === undefined ? {} : { discoveryTool }),
+    ...(discoveryTool === undefined
+      ? {}
+      : {
+          discoveryTool,
+          // Discovery is a context operation with no resource derived from its
+          // arguments. It must be callable for a partial menu to be useful.
+          canDiscover: () => catalogueDecision(discoveryTool.capability).effect === 'allow',
+        }),
   });
   const preloaded = capabilityExposure.pressured
     ? preloadCapabilitiesForTask(capabilityExposure, input.text, 2)
     : null;
   const exposed = capabilityExposure.exposed;
+  const initialProjection = capabilityExposure.discovery?.snapshot();
   turn.setAttributes({
     'muffin.context.class': turnClass,
     'muffin.context.tools_exposed': exposed.length,
-    'muffin.context.tools_hidden': capabilityExposure.hiddenCount,
-    'muffin.context.capability_discovery': capabilityExposure.pressured,
+    'muffin.context.tools_hidden': initialProjection?.hiddenCount ?? capabilityExposure.hiddenCount,
+    'muffin.context.capability_discovery': initialProjection?.pressured ?? false,
     'muffin.context.tools_preloaded': preloaded?.loaded.length ?? 0,
   });
 
@@ -696,7 +706,7 @@ async function runClaimedTurn(
         !deps.memory.store.hasActiveFacts(input.tenant),
     );
 
-    if (capabilityExposure.pressured) {
+    if (initialProjection?.pressured === true) {
       // Local progressive discovery is not provider magic: the model must know
       // that the current schema menu is intentionally partial. Keep that fact
       // in volatile harness context (never owner words), immediately before
