@@ -1,4 +1,3 @@
-import DatabaseCtor from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
 import {
   existsSync,
@@ -13,9 +12,27 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
-import { arrivalsSummary, atomicSymlink, channelLagNote, cmdUpdate, fetchFailureRemedy, findCheckoutRoot, findOwnedLaunchers, noteDopoLoSwing, offerGatewayRestart, repairRoutingStep, restartVerdict, run, runUpdate, runningInContainerImage, describeBuild } from './update.js';
-import { loadConfig, saveConfig, type Config } from '../core/config/config.js';
+import { type Config, loadConfig, saveConfig } from '../core/config/config.js';
+import { STOP_TIMEOUT_SEC } from '../core/gateway/unit.js';
+import {
+  arrivalsSummary,
+  atomicSymlink,
+  channelLagNote,
+  cmdUpdate,
+  describeBuild,
+  fetchFailureRemedy,
+  findCheckoutRoot,
+  findOwnedLaunchers,
+  noteDopoLoSwing,
+  offerGatewayRestart,
+  repairRoutingStep,
+  restartVerdict,
+  run,
+  runningInContainerImage,
+  runUpdate,
+} from './update.js';
 
 /**
  * `muffin update` — release built alongside (git worktree), never in place;
@@ -32,7 +49,9 @@ type FakeResult = { status: number; stdout: string; stderr: string };
 type FakeGit = (args: string[], cwd: string) => FakeResult;
 
 const ok = (): FakeResult => ({ status: 0, stdout: '', stderr: '' });
-const fail = (stderr: string): (() => FakeResult) => () => ({ status: 1, stdout: '', stderr });
+const fail =
+  (stderr: string): (() => FakeResult) =>
+  () => ({ status: 1, stdout: '', stderr });
 
 function dir(prefix: string): string {
   // Resolved once, here: `runUpdate` realpath-resolves the checkout it finds
@@ -44,7 +63,8 @@ function dir(prefix: string): string {
 
 function sh(cmd: string, args: string[], cwd: string): string {
   const r = spawnSync(cmd, args, { cwd, encoding: 'utf8' });
-  if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} in ${cwd} failed:\n${r.stderr || r.stdout}`);
+  if (r.status !== 0)
+    throw new Error(`${cmd} ${args.join(' ')} in ${cwd} failed:\n${r.stderr || r.stdout}`);
   return r.stdout;
 }
 
@@ -192,13 +212,19 @@ describe('findOwnedLaunchers / atomicSymlink', () => {
 
 describe('fetchFailureRemedy', () => {
   it('recognizes an auth failure and points at the deploy key/token', () => {
-    expect(fetchFailureRemedy('fatal: Authentication failed for \'https://...\'')).toMatch(/deploy key|token/);
-    expect(fetchFailureRemedy('fatal: Could not read from remote repository.')).toMatch(/deploy key|token/);
-    expect(fetchFailureRemedy("remote: Invalid username or password.")).toMatch(/deploy key|token/);
+    expect(fetchFailureRemedy("fatal: Authentication failed for 'https://...'")).toMatch(
+      /deploy key|token/,
+    );
+    expect(fetchFailureRemedy('fatal: Could not read from remote repository.')).toMatch(
+      /deploy key|token/,
+    );
+    expect(fetchFailureRemedy('remote: Invalid username or password.')).toMatch(/deploy key|token/);
   });
 
   it('falls back to a generic connectivity remedy for anything else', () => {
-    expect(fetchFailureRemedy('fatal: unable to access: could not resolve host github.com')).toMatch(/deploy key|token/);
+    expect(
+      fetchFailureRemedy('fatal: unable to access: could not resolve host github.com'),
+    ).toMatch(/deploy key|token/);
     expect(fetchFailureRemedy('fatal: some unrelated plumbing error')).not.toMatch(/deploy key/);
   });
 });
@@ -231,11 +257,18 @@ describe('runUpdate — happy path (bootstrap: no prior release recorded)', () =
     expect(readlinkSync(join(bindir, 'muffin'))).toBe(join(releaseDir, 'dist', 'cli', 'main.js'));
     // the main worktree is exactly as it was
     expect(readFileSync(join(f.installed, 'version.txt'), 'utf8').trim()).toBe('v1');
-    expect(realGit(['status', '--porcelain', '--untracked-files=no'], f.installed).stdout.trim()).toBe('');
+    expect(
+      realGit(['status', '--porcelain', '--untracked-files=no'], f.installed).stdout.trim(),
+    ).toBe('');
 
-    const current = JSON.parse(readFileSync(join(f.installed, '.releases', 'current'), 'utf8')) as { sha: string; entry: string };
+    const current = JSON.parse(readFileSync(join(f.installed, '.releases', 'current'), 'utf8')) as {
+      sha: string;
+      entry: string;
+    };
     expect(current.entry).toBe(join(releaseDir, 'dist', 'cli', 'main.js'));
-    const previous = JSON.parse(readFileSync(join(f.installed, '.releases', 'previous'), 'utf8')) as { sha: string; entry: string };
+    const previous = JSON.parse(
+      readFileSync(join(f.installed, '.releases', 'previous'), 'utf8'),
+    ) as { sha: string; entry: string };
     expect(previous.entry).toBe(entry0); // bootstrap: "previous" is the main worktree's own build
   });
 
@@ -247,8 +280,12 @@ describe('runUpdate — happy path (bootstrap: no prior release recorded)', () =
     mkdirSync(home, { recursive: true });
     const db = new DatabaseCtor(join(home, 'muffin.db'));
     db.pragma('journal_mode = WAL');
-    db.exec(`CREATE TABLE schema_version (version INTEGER PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL)`);
-    db.prepare(`INSERT INTO schema_version (version, description, applied_at) VALUES (1, 'baseline', ?)`).run(new Date().toISOString());
+    db.exec(
+      `CREATE TABLE schema_version (version INTEGER PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL)`,
+    );
+    db.prepare(
+      `INSERT INTO schema_version (version, description, applied_at) VALUES (1, 'baseline', ?)`,
+    ).run(new Date().toISOString());
     db.close();
 
     const result = runUpdate({
@@ -262,7 +299,9 @@ describe('runUpdate — happy path (bootstrap: no prior release recorded)', () =
 
     expect(result.code).toBe(0);
     const backupStep = result.steps.find((s) => s.name === 'backup');
-    expect(backupStep?.detail).toMatch(/memoria.*episodi.*job.*budget.*indice del vault|copre il database/);
+    expect(backupStep?.detail).toMatch(
+      /memoria.*episodi.*job.*budget.*indice del vault|copre il database/,
+    );
     expect(backupStep?.detail).toMatch(/NON copre/);
     expect(backupStep?.detail).toContain(join(home, 'vault'));
     expect(backupStep?.detail).toContain(join(home, 'secrets'));
@@ -306,7 +345,7 @@ describe('noteDopoLoSwing', () => {
     expect(riga).toContain('bbbbbbb');
   });
 
-  it('la riga sul riavvio c\'è sempre, e parla di sessioni in primo piano — non del gateway', () => {
+  it("la riga sul riavvio c'è sempre, e parla di sessioni in primo piano — non del gateway", () => {
     for (const args of [
       { releaseSha: 'a'.repeat(40), checkoutSha: 'a'.repeat(40), behind: 0, checkoutRoot: '/r' },
       { releaseSha: 'a'.repeat(40), checkoutSha: 'd'.repeat(40), behind: 2, checkoutRoot: '/r' },
@@ -321,7 +360,12 @@ describe('noteDopoLoSwing', () => {
   });
 
   it('senza un HEAD leggibile non inventa una distanza', () => {
-    const righe = noteDopoLoSwing({ releaseSha: 'a'.repeat(40), checkoutSha: null, behind: 0, checkoutRoot: '/r' });
+    const righe = noteDopoLoSwing({
+      releaseSha: 'a'.repeat(40),
+      checkoutSha: null,
+      behind: 0,
+      checkoutRoot: '/r',
+    });
     expect(righe.some((r) => /git -C/.test(r))).toBe(false);
   });
 });
@@ -400,7 +444,10 @@ describe('runUpdate — failures never touch the running tree', () => {
     const f = makeFixture();
     const { bindir, entry0 } = seedLauncher(f.installed);
     const home = dir('muffin-update-home-');
-    const fakeGit: FakeGit = (args, cwd) => (args[0] === 'fetch' ? fail("fatal: Authentication failed for 'https://example/repo.git'")() : realGit(args, cwd));
+    const fakeGit: FakeGit = (args, cwd) =>
+      args[0] === 'fetch'
+        ? fail("fatal: Authentication failed for 'https://example/repo.git'")()
+        : realGit(args, cwd);
 
     const result = runUpdate({ moduleDir: f.installed, home, bindirs: [bindir], git: fakeGit });
 
@@ -413,7 +460,10 @@ describe('runUpdate — failures never touch the running tree', () => {
   });
 
   it('refuses honestly when the running module is not inside a git checkout at all', () => {
-    const result = runUpdate({ moduleDir: dir('muffin-update-notgit2-'), home: dir('muffin-update-home-') });
+    const result = runUpdate({
+      moduleDir: dir('muffin-update-notgit2-'),
+      home: dir('muffin-update-home-'),
+    });
     expect(result.code).toBe(1);
     expect(result.steps[0]?.done).toBe(false);
     expect(result.steps[0]?.detail).toMatch(/non sembra un checkout git/);
@@ -451,7 +501,14 @@ describe('runUpdate — release pruning across cycles', () => {
     const f = makeFixture();
     const { bindir } = seedLauncher(f.installed);
     const home = dir('muffin-update-home-');
-    const deps = { moduleDir: f.installed, home, bindirs: [bindir], npmCi: ok, smokeTest: ok, readNewSchemaVersion: () => 1 };
+    const deps = {
+      moduleDir: f.installed,
+      home,
+      bindirs: [bindir],
+      npmCi: ok,
+      smokeTest: ok,
+      readNewSchemaVersion: () => 1,
+    };
 
     pushNewVersion(f, 'v2');
     expect(runUpdate(deps).code).toBe(0);
@@ -480,16 +537,29 @@ describe('runUpdate — release pruning across cycles', () => {
 describe('runUpdate --rollback', () => {
   it('refuses when there is no previous release recorded', () => {
     const f = makeFixture();
-    const result = runUpdate({ moduleDir: f.installed, home: dir('muffin-update-home-'), rollback: true });
+    const result = runUpdate({
+      moduleDir: f.installed,
+      home: dir('muffin-update-home-'),
+      rollback: true,
+    });
     expect(result.code).toBe(1);
-    expect(result.steps.find((s) => s.name === 'rollback')?.detail).toMatch(/nessuna release precedente/);
+    expect(result.steps.find((s) => s.name === 'rollback')?.detail).toMatch(
+      /nessuna release precedente/,
+    );
   });
 
   it('flips back to the previous release, and a second rollback toggles forward again', () => {
     const f = makeFixture();
     const { bindir, entry0 } = seedLauncher(f.installed);
     const home = dir('muffin-update-home-');
-    const deps = { moduleDir: f.installed, home, bindirs: [bindir], npmCi: ok, smokeTest: ok, readNewSchemaVersion: () => 1 };
+    const deps = {
+      moduleDir: f.installed,
+      home,
+      bindirs: [bindir],
+      npmCi: ok,
+      smokeTest: ok,
+      readNewSchemaVersion: () => 1,
+    };
 
     pushNewVersion(f, 'v2');
     expect(runUpdate(deps).code).toBe(0);
@@ -512,16 +582,33 @@ describe('runUpdate --rollback', () => {
 
     pushNewVersion(f, 'v2');
     expect(
-      runUpdate({ moduleDir: f.installed, home, bindirs: [bindir], npmCi: ok, smokeTest: ok, readNewSchemaVersion: () => 1 }).code,
+      runUpdate({
+        moduleDir: f.installed,
+        home,
+        bindirs: [bindir],
+        npmCi: ok,
+        smokeTest: ok,
+        readNewSchemaVersion: () => 1,
+      }).code,
     ).toBe(0);
 
     mkdirSync(home, { recursive: true });
     const db = new DatabaseCtor(join(home, 'muffin.db'));
-    db.exec(`CREATE TABLE schema_version (version INTEGER PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL)`);
-    db.prepare(`INSERT INTO schema_version (version, description, applied_at) VALUES (5, 'ahead', ?)`).run(new Date().toISOString());
+    db.exec(
+      `CREATE TABLE schema_version (version INTEGER PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL)`,
+    );
+    db.prepare(
+      `INSERT INTO schema_version (version, description, applied_at) VALUES (5, 'ahead', ?)`,
+    ).run(new Date().toISOString());
     db.close();
 
-    const rb = runUpdate({ moduleDir: f.installed, home, bindirs: [bindir], rollback: true, readNewSchemaVersion: () => 1 });
+    const rb = runUpdate({
+      moduleDir: f.installed,
+      home,
+      bindirs: [bindir],
+      rollback: true,
+      readNewSchemaVersion: () => 1,
+    });
 
     expect(rb.code).toBe(1);
     const step = rb.steps.find((s) => s.name === 'rollback');
@@ -558,7 +645,12 @@ describe('run — a spawnSync timeout must not swallow its own detail', () => {
  */
 describe('restartVerdict — three outcomes, three sentences', () => {
   it('restarted and verified: the state changed, the command also said ok', () => {
-    const v = restartVerdict({ pidBefore: 88175, pidAfter: 65671, commandOk: true, commandDetail: '' });
+    const v = restartVerdict({
+      pidBefore: 88175,
+      pidAfter: 65671,
+      commandOk: true,
+      commandDetail: '',
+    });
     expect(v.restarted).toBe(true);
     expect(v.line).toMatch(/riavviato — verificato/);
     expect(v.line).toContain('88175');
@@ -574,7 +666,7 @@ describe('restartVerdict — three outcomes, three sentences', () => {
     });
     expect(v.restarted).toBe(true);
     expect(v.line).toMatch(/riavviato — verificato/);
-    expect(v.line).toMatch(/scontro transitorio/);
+    expect(v.line).toContain('Il supervisore ha segnalato un errore.');
     expect(v.line).toContain('launchctl: qualcosa di transitorio');
   });
 
@@ -586,15 +678,32 @@ describe('restartVerdict — three outcomes, three sentences', () => {
       commandDetail: 'Bootstrap failed: 5: Input/output error',
     });
     expect(v.restarted).toBe(false);
-    expect(v.line).toMatch(/il riavvio non è avvenuto/);
+    expect(v.line).toMatch(/Riavvio non confermato.*serve ancora il pid 88175/);
     expect(v.line).toContain('Bootstrap failed: 5: Input/output error');
   });
 
   it('the command claimed success but the state disagrees: still "not restarted", said plainly', () => {
-    const v = restartVerdict({ pidBefore: 88175, pidAfter: 88175, commandOk: true, commandDetail: '' });
+    const v = restartVerdict({
+      pidBefore: 88175,
+      pidAfter: 88175,
+      commandOk: true,
+      commandDetail: '',
+    });
     expect(v.restarted).toBe(false);
-    expect(v.line).toMatch(/il riavvio non è avvenuto/);
-    expect(v.line).toMatch(/uscito 0, ma nessun processo nuovo/);
+    expect(v.line).toMatch(/Riavvio non confermato.*serve ancora il pid 88175/);
+    expect(v.line).toContain('muffin gateway status');
+  });
+
+  it('reports the absence of a live gateway after the supervisor times out', () => {
+    const v = restartVerdict({
+      pidBefore: 88175,
+      pidAfter: null,
+      commandOk: false,
+      commandDetail: 'spawnSync launchctl ETIMEDOUT',
+    });
+    expect(v.restarted).toBe(false);
+    expect(v.line).toContain('nessun processo attivo rilevato');
+    expect(v.line).toContain('ETIMEDOUT');
   });
 });
 
@@ -605,7 +714,9 @@ describe('offerGatewayRestart', () => {
       out += String(chunk);
       return true;
     });
-    return fn().finally(() => spy.mockRestore()).then(() => out);
+    return fn()
+      .finally(() => spy.mockRestore())
+      .then(() => out);
   }
 
   /** Instant in tests — nothing here should ever wait on a real timer. */
@@ -636,7 +747,12 @@ describe('offerGatewayRestart', () => {
         yes: false,
         platform: 'linux',
         gatewayRunning: false,
-        supervisorProbes: { unitFileExists: () => true, systemdEnabled: () => true, systemdFailed: () => false, lingerEnabled: () => true },
+        supervisorProbes: {
+          unitFileExists: () => true,
+          systemdEnabled: () => true,
+          systemdFailed: () => false,
+          lingerEnabled: () => true,
+        },
         promptFn: async () => 'n',
       }),
     );
@@ -644,22 +760,29 @@ describe('offerGatewayRestart', () => {
     expect(out).toMatch(/crash/);
   });
 
-  it('uses launchctl kickstart on darwin', async () => {
+  it('uses the service stop budget for launchctl kickstart on darwin', async () => {
     let restarted: string[] | null = null;
-    await captureErr(() =>
+    let bootStarted = false;
+    let bootChecks = 0;
+    const output = await captureErr(() =>
       offerGatewayRestart(dir('muffin-update-home-'), {
         yes: true,
         platform: 'darwin',
         gatewayRunning: false,
         supervisorProbes: { unitFileExists: () => true, launchdLoaded: () => true },
-        restart: (argv) => {
+        restart: (argv, timeoutMs) => {
           restarted = argv;
+          expect(timeoutMs).toBe(STOP_TIMEOUT_SEC * 1000);
+          bootStarted = true;
           return { status: 0, stdout: '', stderr: '' };
         },
-        readGatewayPid: pidSequence([1111, 2222]),
-        sleep: noSleep,
+        readGatewayPid: () => (bootStarted ? (bootChecks >= 24 ? 2222 : null) : 1111),
+        sleep: async () => {
+          bootChecks++;
+        },
       }),
     );
+    expect(output).toContain('adesso serve pid 2222');
     expect(restarted?.[0]).toBe('launchctl');
     expect(restarted?.[1]).toBe('kickstart');
     expect(restarted?.[2]).toBe('-k');
@@ -703,13 +826,17 @@ describe('offerGatewayRestart', () => {
           platform: 'linux',
           gatewayRunning: true,
           supervisorProbes: engaged,
-          restart: () => ({ status: 1, stdout: '', stderr: 'Failed to restart muffin-gateway.service: Unit is masked.' }),
+          restart: () => ({
+            status: 1,
+            stdout: '',
+            stderr: 'Failed to restart muffin-gateway.service: Unit is masked.',
+          }),
           readGatewayPid: pidSequence([88175]), // never changes
           sleep: noSleep,
           verifyAttempts: 2,
         }),
       );
-      expect(out).toMatch(/il riavvio non è avvenuto: il gateway servito adesso è ancora lo stesso di prima \(pid 88175\)/);
+      expect(out).toMatch(/Riavvio non confermato.*serve ancora il pid 88175/);
       // Objective 3: the detail must reach the owner, never swallowed.
       expect(out).toContain('Failed to restart muffin-gateway.service: Unit is masked.');
       // Case 2 is the one that must still carry the "still lands eventually" note.
@@ -729,7 +856,7 @@ describe('offerGatewayRestart', () => {
         }),
       );
       expect(out).toMatch(/gateway riavviato — verificato: pid 88175 → adesso serve pid 65671\./);
-      expect(out).toMatch(/scontro transitorio/);
+      expect(out).toContain('Il supervisore ha segnalato un errore.');
       // Nothing failed from the owner's point of view — no "still on the old build" note.
       expect(out).not.toMatch(/prossimo riavvio/);
     });
@@ -741,7 +868,11 @@ describe('offerGatewayRestart', () => {
           platform: 'linux',
           gatewayRunning: true,
           supervisorProbes: engaged,
-          restart: () => ({ status: 1, stdout: '', stderr: 'una riga di dettaglio molto specifica 4f2a91' }),
+          restart: () => ({
+            status: 1,
+            stdout: '',
+            stderr: 'una riga di dettaglio molto specifica 4f2a91',
+          }),
           readGatewayPid: pidSequence([88175]),
           sleep: noSleep,
           verifyAttempts: 1,
@@ -834,26 +965,35 @@ describe('describeBuild', () => {
     };
 
   it('porta il commit e la sua data', () => {
-    const b = describeBuild('/qualunque', runner({
-      'log -1 --format=%H %cs': { status: 0, stdout: 'abc123def4567890 2026-08-27\n' },
-      'status --porcelain': { status: 0, stdout: '' },
-    }));
+    const b = describeBuild(
+      '/qualunque',
+      runner({
+        'log -1 --format=%H %cs': { status: 0, stdout: 'abc123def4567890 2026-08-27\n' },
+        'status --porcelain': { status: 0, stdout: '' },
+      }),
+    );
     expect(b).toEqual({ sha: 'abc123def4567890', date: '2026-08-27', dirty: false });
   });
 
   it('un checkout modificato non è quel commit, e lo dice', () => {
-    const b = describeBuild('/qualunque', runner({
-      'log -1 --format=%H %cs': { status: 0, stdout: 'abc123def4567890 2026-08-27\n' },
-      'status --porcelain': { status: 0, stdout: ' M cli/main.ts\n' },
-    }));
+    const b = describeBuild(
+      '/qualunque',
+      runner({
+        'log -1 --format=%H %cs': { status: 0, stdout: 'abc123def4567890 2026-08-27\n' },
+        'status --porcelain': { status: 0, stdout: ' M cli/main.ts\n' },
+      }),
+    );
     expect(b?.dirty).toBe(true);
   });
 
   it('uno `status` che fallisce non rende la build pulita', () => {
     // Nel dubbio si dichiara toccata: l'errore che costa è il contrario.
-    const b = describeBuild('/qualunque', runner({
-      'log -1 --format=%H %cs': { status: 0, stdout: 'abc123def4567890 2026-08-27\n' },
-    }));
+    const b = describeBuild(
+      '/qualunque',
+      runner({
+        'log -1 --format=%H %cs': { status: 0, stdout: 'abc123def4567890 2026-08-27\n' },
+      }),
+    );
     expect(b?.dirty).toBe(true);
   });
 
@@ -862,9 +1002,12 @@ describe('describeBuild', () => {
   });
 
   it('una risposta senza data non è mezza valida', () => {
-    const b = describeBuild('/qualunque', runner({
-      'log -1 --format=%H %cs': { status: 0, stdout: 'abc123def4567890\n' },
-    }));
+    const b = describeBuild(
+      '/qualunque',
+      runner({
+        'log -1 --format=%H %cs': { status: 0, stdout: 'abc123def4567890\n' },
+      }),
+    );
     expect(b).toBeNull();
   });
 });
@@ -990,7 +1133,13 @@ describe('le release non si annidano', () => {
     pushNewVersion(f, 'v2');
     const { bindir } = seedLauncher(f.installed);
     const home = dir('muffin-nesting-');
-    const deps = { home, bindirs: [bindir], npmCi: ok, smokeTest: ok, readNewSchemaVersion: () => 1 };
+    const deps = {
+      home,
+      bindirs: [bindir],
+      npmCi: ok,
+      smokeTest: ok,
+      readNewSchemaVersion: () => 1,
+    };
 
     runUpdate({ ...deps, moduleDir: f.installed });
     const dentro = join(f.installed, '.releases', releaseDirNames(f.installed)[0]!);
@@ -1023,7 +1172,9 @@ describe('le release non si annidano', () => {
  */
 describe('gli script fanno quello che dice il loro nome', () => {
   const scripts = (
-    JSON.parse(readFileSync(join(dirname(new URL(import.meta.url).pathname), '..', 'package.json'), 'utf8')) as {
+    JSON.parse(
+      readFileSync(join(dirname(new URL(import.meta.url).pathname), '..', 'package.json'), 'utf8'),
+    ) as {
       scripts: Record<string, string>;
     }
   ).scripts;
@@ -1065,7 +1216,7 @@ describe('gli script fanno quello che dice il loro nome', () => {
  * nessuno ha fatto, ed è precisamente la classe di bugia che questi test
  * esistono per impedire.
  */
-describe('il canale dice sempre cosa c\'è sull\'altro ramo', () => {
+describe("il canale dice sempre cosa c'è sull'altro ramo", () => {
   const MAIN = 'a'.repeat(40);
 
   const canaleRunner =
@@ -1074,8 +1225,13 @@ describe('il canale dice sempre cosa c\'è sull\'altro ramo', () => {
       const key = args.join(' ');
       const r = map[key];
       if (r) return { ...r, stderr: '' };
-      if (key === 'worktree list --porcelain') return { status: 0, stdout: `worktree ${root}\n`, stderr: '' };
-      return { status: 1, stdout: '', stderr: `git finto: nessuna risposta mappata per \`git ${key}\`` };
+      if (key === 'worktree list --porcelain')
+        return { status: 0, stdout: `worktree ${root}\n`, stderr: '' };
+      return {
+        status: 1,
+        stdout: '',
+        stderr: `git finto: nessuna risposta mappata per \`git ${key}\``,
+      };
     };
 
   /** Il canale `main` non ha niente di nuovo, e `dev` è avanti di sette: il caso dell'owner. */
@@ -1088,14 +1244,21 @@ describe('il canale dice sempre cosa c\'è sull\'altro ramo', () => {
         'rev-parse HEAD': { status: 0, stdout: `${MAIN}\n` },
         [`rev-list --count ${MAIN}..${MAIN}`]: { status: 0, stdout: '0\n' },
         'fetch origin +refs/heads/dev:refs/remotes/origin/dev': { status: 0, stdout: '' },
-        'rev-list --count refs/remotes/origin/main..refs/remotes/origin/dev': { status: 0, stdout: '7\n' },
+        'rev-list --count refs/remotes/origin/main..refs/remotes/origin/dev': {
+          status: 0,
+          stdout: '7\n',
+        },
       },
       root,
     );
 
   it('«già aggiornato» nomina quanti commit aspettano, e su quale ramo', () => {
     const root = dir('muffin-canale-');
-    const result = runUpdate({ moduleDir: root, home: dir('muffin-canale-home-'), git: settePronti(root) });
+    const result = runUpdate({
+      moduleDir: root,
+      home: dir('muffin-canale-home-'),
+      git: settePronti(root),
+    });
 
     expect(result.code).toBe(0);
     expect(result.steps.some((s) => /già aggiornato/.test(s.detail))).toBe(true);
@@ -1112,7 +1275,12 @@ describe('il canale dice sempre cosa c\'è sull\'altro ramo', () => {
   it('la riga arriva anche a chi legge i passi mentre succedono, non solo nel riepilogo', () => {
     const root = dir('muffin-canale-live-');
     const vivi: string[] = [];
-    runUpdate({ moduleDir: root, home: dir('muffin-canale-home-'), git: settePronti(root), onStep: (s) => void vivi.push(s.name) });
+    runUpdate({
+      moduleDir: root,
+      home: dir('muffin-canale-home-'),
+      git: settePronti(root),
+      onStep: (s) => void vivi.push(s.name),
+    });
     expect(vivi).toContain('canale');
   });
 
@@ -1141,7 +1309,7 @@ describe('il canale dice sempre cosa c\'è sull\'altro ramo', () => {
     expect(canale?.detail).not.toMatch(/\d+ commit/); // nessun numero inventato
   });
 
-  it('leggendo `dev` dice che non c\'è nessun canale più avanti', () => {
+  it("leggendo `dev` dice che non c'è nessun canale più avanti", () => {
     const root = dir('muffin-canale-dev-');
     const result = runUpdate({
       moduleDir: root,
@@ -1161,7 +1329,9 @@ describe('il canale dice sempre cosa c\'è sull\'altro ramo', () => {
 
     expect(result.code).toBe(0);
     expect(result.steps.find((s) => s.name === 'fetch')?.detail).toContain('origin/dev');
-    expect(result.steps.find((s) => s.name === 'canale')?.detail).toMatch(/non c'è nessun canale più avanti/);
+    expect(result.steps.find((s) => s.name === 'canale')?.detail).toMatch(
+      /non c'è nessun canale più avanti/,
+    );
   });
 });
 
@@ -1174,8 +1344,10 @@ describe('channelLagNote', () => {
     expect(t).toContain('--channel dev');
   });
 
-  it('quando non c\'è niente in attesa lo dice, invece di tacere', () => {
-    expect(channelLagNote({ channel: 'main', upstream: 'dev', ahead: 0 })).toMatch(/niente in attesa/);
+  it("quando non c'è niente in attesa lo dice, invece di tacere", () => {
+    expect(channelLagNote({ channel: 'main', upstream: 'dev', ahead: 0 })).toMatch(
+      /niente in attesa/,
+    );
   });
 
   it('una distanza non misurata resta non misurata', () => {
@@ -1193,7 +1365,7 @@ describe('channelLagNote', () => {
  * propria macchina. I soggetti stanno fra il marker vecchio e quello nuovo, e
  * il comando li aveva già entrambi in mano.
  */
-describe('runUpdate — l\'elenco di cosa è arrivato', () => {
+describe("runUpdate — l'elenco di cosa è arrivato", () => {
   it('porta i soggetti veri fra il marker vecchio e quello nuovo', () => {
     const f = makeFixture();
     pushNewVersion(f, 'v2');
@@ -1217,13 +1389,16 @@ describe('runUpdate — l\'elenco di cosa è arrivato', () => {
     for (const label of ['v2', 'v3', 'v4']) expect(novita?.detail).toContain(label);
   });
 
-  it('quando `git log` non risponde degrada al conteggio, e l\'update resta riuscito', () => {
+  it("quando `git log` non risponde degrada al conteggio, e l'update resta riuscito", () => {
     const f = makeFixture();
     pushNewVersion(f, 'v2');
     const { bindir, entry0 } = seedLauncher(f.installed);
     // Il caso vero: un marker che punta a un commit che non c'è più (potato,
     // o scritto da una release più vecchia). L'elenco manca; la release no.
-    const senzaLog: FakeGit = (args, cwd) => (args[0] === 'log' ? { status: 1, stdout: '', stderr: 'fatal: bad revision' } : realGit(args, cwd));
+    const senzaLog: FakeGit = (args, cwd) =>
+      args[0] === 'log'
+        ? { status: 1, stdout: '', stderr: 'fatal: bad revision' }
+        : realGit(args, cwd);
 
     const result = runUpdate({
       moduleDir: f.installed,
@@ -1245,7 +1420,8 @@ describe('runUpdate — l\'elenco di cosa è arrivato', () => {
   });
 });
 
-describe('arrivalsSummary', () => {  it('taglia a un numero sano e conta il resto', () => {
+describe('arrivalsSummary', () => {
+  it('taglia a un numero sano e conta il resto', () => {
     const subjects = Array.from({ length: 25 }, (_, i) => `soggetto ${i + 1}`);
     const t = arrivalsSummary({ subjects, fallbackCount: 25, max: 10 });
     expect(t.split('\n').filter((l) => l.startsWith('  · ')).length).toBe(10);
@@ -1272,7 +1448,12 @@ describe('repairRoutingStep', () => {
     saveConfig(
       {
         schemaVersion: 2,
-        provider: { kind: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1', apiKeyRef: 'secret://k', routing },
+        provider: {
+          kind: 'openai-compat',
+          baseUrl: 'https://openrouter.ai/api/v1',
+          apiKeyRef: 'secret://k',
+          routing,
+        },
         models,
         rot: { mode: 'single-user' },
         traces: { retentionDays: 90 },
@@ -1296,7 +1477,10 @@ describe('repairRoutingStep', () => {
   });
 
   it('senza rete o senza config non tocca niente e non fallisce', () => {
-    const h = casa({ main: 'google/gemma-4-31b-it', light: 'qwen/qwen3.8-flash' }, { only: ['chutes'] });
+    const h = casa(
+      { main: 'google/gemma-4-31b-it', light: 'qwen/qwen3.8-flash' },
+      { only: ['chutes'] },
+    );
     const offline = repairRoutingStep(h, () => {
       throw new Error('fetch failed');
     });
@@ -1314,7 +1498,12 @@ describe('repairRoutingStep', () => {
     saveConfig(
       {
         schemaVersion: 2,
-        provider: { kind: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1', apiKeyRef: 'secret://k', routing: { only: ['chutes'] } },
+        provider: {
+          kind: 'openai-compat',
+          baseUrl: 'https://openrouter.ai/api/v1',
+          apiKeyRef: 'secret://k',
+          routing: { only: ['chutes'] },
+        },
         models: { main: 'google/gemma-4-31b-it', light: 'google/gemma-4-26b-a4b-it' },
         rot: { mode: 'single-user' },
         traces: { retentionDays: 90 },
