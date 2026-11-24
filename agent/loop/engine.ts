@@ -16,6 +16,7 @@ import {
   CAPABILITY_DISCOVERY_GUIDANCE,
   CAPABILITY_SEARCH_TOOL_NAME,
   createCapabilityExposure,
+  DEFAULT_CORE_TOOL_NAMES,
   preloadCapabilitiesForTask,
 } from '../capability-exposure.js';
 import { tenantClass, visibleTools } from '../context/assemble.js';
@@ -420,6 +421,9 @@ async function runClaimedTurn(
   );
   const capabilityExposure = createCapabilityExposure({
     eligible: eligibleTools,
+    ...(/https?:\/\//i.test(input.text)
+      ? { coreNames: [...DEFAULT_CORE_TOOL_NAMES, 'http_get'] }
+      : {}),
     ...(discoveryTool === undefined
       ? {}
       : {
