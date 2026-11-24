@@ -678,7 +678,7 @@ describe('restartVerdict — three outcomes, three sentences', () => {
       commandDetail: 'Bootstrap failed: 5: Input/output error',
     });
     expect(v.restarted).toBe(false);
-    expect(v.line).toMatch(/Riavvio non confermato.*serve ancora il pid 88175/);
+    expect(v.line).toMatch(/Riavvio non confermato.*il registro riporta ancora il pid 88175/);
     expect(v.line).toContain('Bootstrap failed: 5: Input/output error');
   });
 
@@ -690,7 +690,7 @@ describe('restartVerdict — three outcomes, three sentences', () => {
       commandDetail: '',
     });
     expect(v.restarted).toBe(false);
-    expect(v.line).toMatch(/Riavvio non confermato.*serve ancora il pid 88175/);
+    expect(v.line).toMatch(/Riavvio non confermato.*il registro riporta ancora il pid 88175/);
     expect(v.line).toContain('muffin gateway status');
   });
 
@@ -702,7 +702,7 @@ describe('restartVerdict — three outcomes, three sentences', () => {
       commandDetail: 'spawnSync launchctl ETIMEDOUT',
     });
     expect(v.restarted).toBe(false);
-    expect(v.line).toContain('nessun processo attivo rilevato');
+    expect(v.line).toContain('nessun nuovo gateway ha risposto sul socket');
     expect(v.line).toContain('ETIMEDOUT');
   });
 });
@@ -777,6 +777,7 @@ describe('offerGatewayRestart', () => {
           return { status: 0, stdout: '', stderr: '' };
         },
         readGatewayPid: () => (bootStarted ? (bootChecks >= 24 ? 2222 : null) : 1111),
+        readGatewaySocketPid: async () => 2222,
         sleep: async () => {
           bootChecks++;
         },
@@ -786,6 +787,24 @@ describe('offerGatewayRestart', () => {
     expect(restarted?.[0]).toBe('launchctl');
     expect(restarted?.[1]).toBe('kickstart');
     expect(restarted?.[2]).toBe('-k');
+  });
+
+  it('reports an unconfirmed restart when the replacement does not answer', async () => {
+    const output = await captureErr(() =>
+      offerGatewayRestart(dir('muffin-update-home-'), {
+        yes: true,
+        platform: 'darwin',
+        gatewayRunning: true,
+        supervisorProbes: { unitFileExists: () => true, launchdLoaded: () => true },
+        restart: () => ({ status: 0, stdout: '', stderr: '' }),
+        readGatewayPid: pidSequence([1111, 2222]),
+        readGatewaySocketPid: async () => null,
+        sleep: noSleep,
+        verifyAttempts: 1,
+      }),
+    );
+    expect(output).toContain('Riavvio non confermato');
+    expect(output).not.toContain('adesso serve pid 2222');
   });
 
   /**
@@ -811,6 +830,7 @@ describe('offerGatewayRestart', () => {
           supervisorProbes: engaged,
           restart: () => ({ status: 0, stdout: '', stderr: '' }),
           readGatewayPid: pidSequence([88175, 88175, 65671]),
+          readGatewaySocketPid: async () => 65671,
           sleep: noSleep,
         }),
       );
@@ -836,7 +856,7 @@ describe('offerGatewayRestart', () => {
           verifyAttempts: 2,
         }),
       );
-      expect(out).toMatch(/Riavvio non confermato.*serve ancora il pid 88175/);
+      expect(out).toMatch(/Riavvio non confermato.*il registro riporta ancora il pid 88175/);
       // Objective 3: the detail must reach the owner, never swallowed.
       expect(out).toContain('Failed to restart muffin-gateway.service: Unit is masked.');
       // Case 2 is the one that must still carry the "still lands eventually" note.
@@ -852,6 +872,7 @@ describe('offerGatewayRestart', () => {
           supervisorProbes: engaged,
           restart: () => ({ status: 1, stdout: '', stderr: '' }),
           readGatewayPid: pidSequence([88175, 88175, 65671]),
+          readGatewaySocketPid: async () => 65671,
           sleep: noSleep,
         }),
       );
