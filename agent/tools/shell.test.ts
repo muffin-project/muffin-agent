@@ -1,4 +1,12 @@
-import { mkdtempSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -298,7 +306,10 @@ describe('shell_run argument boundary', () => {
     try {
       for (const make of [makeShellTool, makeShellWriteTool]) {
         const exec = fakeExec();
-        const out = await make(exec, { root }).handler({ command: 'cat canary.txt', cwd: 'link' }, ctx);
+        const out = await make(exec, { root }).handler(
+          { command: 'cat canary.txt', cwd: 'link' },
+          ctx,
+        );
         expect(out.isError).toBe(true);
         expect(out.content).toContain('escapes');
         expect(exec.calls.length).toBe(0);
@@ -459,3 +470,50 @@ describe('what a command hands back is disk content', () => {
     }
   });
 });
+
+it.each(['workspace changed', 'cancelled'] as const)(
+  'refuses the approved scope before launch when %s during setup',
+  async (state) => {
+    const fixture = mkdtempSync(join(tmpdir(), 'muffin-approved-directory-'));
+    const workspace = join(fixture, 'project');
+    mkdirSync(workspace);
+    try {
+      const cancellation = new AbortController();
+      let started = false;
+      const tool = makeShellWriteTool(
+        {
+          run: async ({ validateScope }) => {
+            if (state === 'cancelled') {
+              cancellation.abort();
+            } else {
+              renameSync(workspace, join(fixture, 'previous'));
+              mkdirSync(workspace);
+            }
+            validateScope?.();
+            started = true;
+            return OUTCOME;
+          },
+        },
+        { root: workspace },
+      );
+      const args = { command: 'printf 42', cwd: '.' };
+      const approvedScope = tool.approvalScope?.(args);
+      if (approvedScope === undefined)
+        throw new Error('expected the shell to pin its approval scope');
+      const outcome = await tool.handler(args, {
+        ...ctx,
+        approvedScope,
+        signal: cancellation.signal,
+      });
+      expect(started).toBe(false);
+      expect(outcome).toMatchObject({
+        isError: true,
+        content: expect.stringContaining(
+          state === 'cancelled' ? 'annullato prima di partire' : 'cartella approvata è cambiata',
+        ),
+      });
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  },
+);

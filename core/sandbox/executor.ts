@@ -1,5 +1,16 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  type Dirent,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -61,6 +72,8 @@ export type ExecRequest = {
   writeScope: readonly string[];
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** Recheck a caller's approved directory identity across async setup. */
+  validateScope?: () => void;
 };
 
 /**
@@ -288,8 +301,8 @@ function isMissingDependency(detail: string): boolean {
  *
  * Every config this module builds — session, per-call, self-test — reads its
  * `network` block from here, so direct IP/proxy egress is one function to
-  * check and one function to break. `sys.shell` asks every time since ADR-0091
-  * because even scoped reads disclose data. On Linux the same function requests
+ * check and one function to break. `sys.shell` asks every time since ADR-0091
+ * because even scoped reads disclose data. On Linux the same function requests
  * srt's AF_UNIX seccomp filter; whether it held is proven behaviorally by the
  * self-test before any caller's command runs.
  *
@@ -533,7 +546,7 @@ function resolveIfSymlink(path: string): string {
 function nestedGitHooksDirs(root: string, depth: number = NESTED_GIT_HOOKS_SEARCH_DEPTH): string[] {
   const found: string[] = [];
   const walk = (dir: string, remaining: number): void => {
-    let entries;
+    let entries: Dirent[];
     try {
       entries = readdirSync(dir, { withFileTypes: true });
     } catch {
@@ -1026,10 +1039,10 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
     };
     const doorSummary = `direct:${doors.direct ?? 'denied'} alias:${aliasReplaced ? 'created' : 'denied'} hardlink:${doors.hardlink ? 'allowed' : 'denied'} pre:${doors.pre ? 'allowed' : 'denied'} rename:${doors.rename ? 'allowed' : 'denied'}`;
     const unprotected =
-      (doors.direct ??
+      doors.direct ??
       (doors.hardlink ? 'hardlink into hooks' : null) ??
       (doors.pre ? 'write through a pre-existing hooks symlink' : null) ??
-      (doors.rename ? 'rename into hooks' : null));
+      (doors.rename ? 'rename into hooks' : null);
     if (unprotected) {
       return {
         reason: 'git_hooks_unprotected',
@@ -1277,6 +1290,7 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
 
   private async execute(req: ExecRequest): Promise<ExecResult> {
     await this.ensureInit();
+    req.validateScope?.();
     const scratch = this.scratch();
     const timeoutMs = Math.min(req.timeoutMs ?? EXEC_DEFAULT_TIMEOUT_MS, EXEC_MAX_TIMEOUT_MS);
     const readScope = buildReadScope([req.cwd, ...req.writeScope, scratch]);
@@ -1377,6 +1391,7 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
   ): Promise<ExecResult> {
     return new Promise((resolvePromise, rejectPromise) => {
       const [programma = '', ...argomenti] = argv;
+      req.validateScope?.();
       const child = spawn(programma, argomenti, {
         cwd: req.cwd,
         env,
