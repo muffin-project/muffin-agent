@@ -194,15 +194,13 @@ describe('#469 production-path capability discovery', () => {
       CAPABILITY_DISCOVERY_GUIDANCE,
     );
     expect(firstNames).not.toContain('event_watch_create');
-    expect(firstNames.length).toBeLessThanOrEqual(6);
 
     const secondNames = provider.seen[1]?.tools?.map((tool) => tool.name) ?? [];
     expect(secondNames).toContain('capability_search');
-    expect(secondNames.length).toBeLessThanOrEqual(6);
 
     const thirdNames = provider.seen[2]?.tools?.map((tool) => tool.name) ?? [];
     expect(thirdNames).toContain('event_watch_create');
-    expect(thirdNames.length).toBeLessThanOrEqual(6);
+    expect(thirdNames).toContain('capability_search');
     expect(JSON.stringify(provider.seen[0]?.messages ?? [])).toContain(
       'Valuta separatamente ogni azione ed effetto richiesto',
     );
@@ -431,7 +429,6 @@ describe('#469 production-path capability discovery', () => {
       const visible = request.tools?.map((tool) => tool.name) ?? [];
       expect(visible).not.toContain('schedule_recurring');
       expect(visible).not.toContain('outward_email_send');
-      expect(visible.length).toBeLessThanOrEqual(4);
     }
     const forbiddenDiscovery = provider.seen[1]?.messages
       .flatMap((message) => message.content)
@@ -467,7 +464,7 @@ describe('#469 production-path capability discovery', () => {
     expect(provider.seen[3]?.tools?.map((tool) => tool.name)).toContain('event_watch_create');
   });
 
-  it('load-bearing mutation: removing the discovery door makes the beyond-cap task unrecoverable', async () => {
+  it('without the discovery door an authorized tool stays on the request', async () => {
     const home = mkdtempSync(join(tmpdir(), 'muffin-capability-mutation-'));
     const db = new DatabaseCtor(':memory:');
     const core = [
@@ -525,24 +522,18 @@ describe('#469 production-path capability discovery', () => {
       systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite.' },
     };
 
-    await expect(
-      runTurn(deps, {
-        principal: owner,
-        tenant: 'host',
-        surface: 'cli',
-        session: sessions.open('capability-mutation'),
-        text: 'crea un trigger su un evento esterno',
-      }),
-    ).rejects.toThrow(
-      'capability_search is required when the authorized catalogue exceeds maxToolsExposed',
-    );
+    await runTurn(deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session: sessions.open('capability-mutation'),
+      text: 'crea un trigger su un evento esterno',
+    });
 
-    // The expected failure is at the production projection boundary itself:
-    // without the discovery door the runtime refuses to silently fall back to
-    // registration-order truncation. No provider call and no hidden handler
-    // execution occur.
-    expect(hiddenCalls).toBe(0);
-    expect(provider.seen).toHaveLength(0);
+    // Without the discovery door the authorized tool is on the first request.
+    // Dropping it because a count was exceeded is the failure this replaces.
+    expect(provider.seen[0]?.tools?.map((tool) => tool.name)).toContain('event_watch_create');
+    expect(hiddenCalls).toBe(1);
   });
 
   it('keeps the under-cap fast path free of discovery schema and guidance', async () => {

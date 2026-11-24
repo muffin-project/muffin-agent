@@ -26,20 +26,15 @@ describe('#469 current-catalog exposure measurement', () => {
         runtime.deps.capabilities,
         runtime.deps.grants?.get('host'),
       );
-      const discoveryTool = eligible.find(
-        (tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME,
-      );
+      const discoveryTool = eligible.find((tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME);
       expect(discoveryTool).toBeDefined();
 
       const maxToolsExposed = 10;
-      const flat = eligible.filter(
-        (tool) => tool.spec.name !== CAPABILITY_SEARCH_TOOL_NAME,
-      );
+      const flat = eligible.filter((tool) => tool.spec.name !== CAPABILITY_SEARCH_TOOL_NAME);
       expect(flat.length).toBeGreaterThan(maxToolsExposed);
 
       const projection = createCapabilityExposure({
         eligible,
-        maxToolsExposed,
         discoveryTool: discoveryTool!,
       });
       expect(projection.pressured).toBe(true);
@@ -80,7 +75,7 @@ describe('#469 current-catalog exposure measurement', () => {
           projection.exposed.some((tool) => tool.spec.name === expected),
           'failed query: ' + query + ' -> ' + expected,
         ).toBe(true);
-        expect(projection.exposed.length).toBeLessThanOrEqual(maxToolsExposed);
+        expect(projection.exposed.length).toBeLessThan(flat.length);
       }
 
       const metrics = {
