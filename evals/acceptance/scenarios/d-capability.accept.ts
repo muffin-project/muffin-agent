@@ -106,12 +106,6 @@ describe('acceptance · D · capability e sicurezza', () => {
       // sono: il file c'è, e si può tornare indietro.
       const inst = await install({
         main: [
-          {
-            tool: {
-              name: 'capability_search',
-              args: { query: 'write text content to a file', max_results: 1 },
-            },
-          },
           { tool: { name: 'fs_write', args: { path: 'nuovo.txt', content: 'ciao' } } },
           { text: 'fatto, ho scritto nuovo.txt' },
         ],
@@ -125,12 +119,11 @@ describe('acceptance · D · capability e sicurezza', () => {
         ]);
         if (r.code !== 0) throw new Error(`il turno non completa: exit ${r.code}\n${r.err}`);
 
-        const [before, after] = inst.provider.main();
-        if (!before?.tools.includes('capability_search') || before.tools.includes('fs_write')) {
-          throw new Error(`expected discovery before file writing: ${before?.tools.join(', ')}`);
-        }
-        if (!after?.tools.includes('fs_write')) {
-          throw new Error(`file writing was not loaded by discovery: ${after?.tools.join(', ')}`);
+        const [firstCall] = inst.provider.main();
+        if (!firstCall?.tools.includes('fs_write')) {
+          throw new Error(
+            `first turn did not expose the native writer: ${firstCall?.tools.join(', ')}`,
+          );
         }
 
         const file = join(inst.workspace, 'nuovo.txt');

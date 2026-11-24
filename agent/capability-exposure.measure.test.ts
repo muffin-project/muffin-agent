@@ -66,10 +66,16 @@ describe('#469 current-catalog exposure measurement', () => {
         expect(availableNames.has(expected), 'representative tool missing: ' + expected).toBe(true);
       }
 
-      let hits = 0;
+      const immediatelyVisible = new Set(projection.exposed.map((tool) => tool.spec.name));
+      let directHits = 0;
+      let discoveryHits = 0;
       for (const [query, expected] of cases) {
+        if (immediatelyVisible.has(expected)) {
+          directHits += 1;
+          continue;
+        }
         const result = projection.discovery!.searchAndLoad(query, 3);
-        if (result.loaded.some((entry) => entry.name === expected)) hits += 1;
+        if (result.loaded.some((entry) => entry.name === expected)) discoveryHits += 1;
         projection.discovery!.activatePending();
         expect(
           projection.exposed.some((tool) => tool.spec.name === expected),
@@ -78,6 +84,7 @@ describe('#469 current-catalog exposure measurement', () => {
         expect(projection.exposed.length).toBeLessThan(flat.length);
       }
 
+      const hits = directHits + discoveryHits;
       const metrics = {
         fullToolCount: flat.length,
         initialToolCount,
@@ -86,6 +93,8 @@ describe('#469 current-catalog exposure measurement', () => {
         schemaByteReductionPct: Number((reduction * 100).toFixed(1)),
         representativeTasks: cases.length,
         selectionHits: hits,
+        directHits,
+        discoveryHits,
         selectionSuccessPct: Number(((hits / cases.length) * 100).toFixed(1)),
         extraDiscoveryModelRoundsPerHiddenTask: 1,
       };
