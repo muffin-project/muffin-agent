@@ -23,7 +23,6 @@ import { type ConnectorDeps, TelegramConnector } from '../connectors/telegram/co
 import { TelegramDeliveryStore } from '../connectors/telegram/delivery.js';
 import { TELEGRAM_ID, telegramSurface } from '../connectors/telegram/surface.js';
 import { UpdateInbox } from '../connectors/telegram/updates.js';
-import { assicuraVoce } from '../core/audio/trascrivi.js';
 import { decidiVoce, type Voce } from '../core/audio/voce.js';
 import {
   type Config,
@@ -333,20 +332,6 @@ export async function cmdSurfaceEnable(
     process.stderr.write(`superficie sconosciuta: ${id}\n${SURFACE_USAGE}`);
     return 78;
   }
-  // Abilitare una superficie vocale rende possibile la prima nota vocale: il
-  // modello whisper, se manca, arriva adesso con una riga che lo dice — non
-  // minuti di silenzio alla prima nota. Un gancio che fallisce non deve mai
-  // ribaltare un enable riuscito: il rimedio rumoroso a runtime resta.
-  if ((id === 'telegram' || id === 'discord') && codice === 0) {
-    try {
-      const riga = await assicuraVoce(home, loadConfig(home));
-      if (riga !== null) process.stderr.write(`${riga}\n`);
-    } catch (error) {
-      process.stderr.write(
-        `voce: controllo modello whisper saltato (${error instanceof Error ? error.message : String(error)})\n`,
-      );
-    }
-  }
   return codice;
 }
 
@@ -653,9 +638,7 @@ export function voceFor(runtime: Runtime, home: string): (percorso: string) => P
       carica: loadAudio,
       misuraAudio: audioAccettato,
       whisperModel: modello,
-      // Il percorso di produzione scarica il modello se manca: è il senso di
-      // "sempre installato" — nei test e negli eval resta spento, e l'assenza
-      // resta un rimedio misurabile invece di una richiesta di rete.
+      // Prepare the local model only for an attachment that needs local transcription.
       provisiona: true,
       ...(audio?.whisperBin === undefined ? {} : { whisperBin: audio.whisperBin }),
       ...(audio?.ffmpegBin === undefined ? {} : { ffmpegBin: audio.ffmpegBin }),
