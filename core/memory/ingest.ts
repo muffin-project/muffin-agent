@@ -1067,12 +1067,18 @@ export async function reconcileProposalLocked(
   }
   const withdrawn = deps.store.withdrawnEpisodes(tenantId, proposal.sourceEpisodeIds);
   const usable = proposal.sourceEpisodeIds.filter((id) => !withdrawn.includes(id));
-  // The first source of an owner statement is the authenticated ingress. A
-  // supporting citation cannot carry its authority or its wording after it is withdrawn.
-  const ownerIngressWithdrawn =
-    proposal.producer === 'owner-stated' && usable[0] !== proposal.sourceEpisodeIds[0];
-  if (usable.length === 0 || ownerIngressWithdrawn) {
-    const detail = `evidenza ritirata prima della riconciliazione (episodi ${withdrawn.join(', ')}).`;
+  // Legacy owner proposals did not preserve which source carried the instruction.
+  // Do not guess that an additional citation authorizes the change.
+  const ownerIngress = proposal.ownerIngressEpisodeId;
+  const missingOwnerIngress = proposal.producer === 'owner-stated' && ownerIngress === null;
+  if (
+    missingOwnerIngress ||
+    usable.length === 0 ||
+    (ownerIngress !== null && !usable.includes(ownerIngress))
+  ) {
+    const detail = missingOwnerIngress
+      ? 'La proposta precedente non identifica la richiesta originale. Se è ancora valida, ripeti la richiesta.'
+      : `evidenza ritirata prima della riconciliazione (episodi ${withdrawn.join(', ')}).`;
     deps.store.resolveProposal(tenantId, proposalId, { status: 'rejected', factIds: [], detail, decidedAt: at });
     return { proposalId, status: 'rejected', factIds: [], report: rep };
   }
@@ -1091,7 +1097,7 @@ export async function reconcileProposalLocked(
     // re-tiered episode wash the proposal's taint after the fact.
     trustTier: proposal.trustTier,
     origin: proposal.origin,
-    episodeId: usable[0]!,
+    episodeId: ownerIngress ?? usable[0]!,
   };
 
   const existing = deps.store.activeFacts(tenantId, subjectId, proposal.predicate);

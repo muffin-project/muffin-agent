@@ -199,6 +199,7 @@ export type MemoryProposalRecord = {
   validFrom: string | null;
   producer: string;
   sourceEpisodeIds: number[];
+  ownerIngressEpisodeId: number | null;
   content: string;
   trustTier: TrustTier;
   confidence: number;
@@ -223,6 +224,7 @@ type ProposalRow = {
   valid_from: string | null;
   producer: string;
   source_episodes: string;
+  owner_ingress_episode_id: number | null;
   content: string;
   trust_tier: TrustTier;
   confidence: number;
@@ -237,7 +239,7 @@ type ProposalRow = {
 };
 
 const PROPOSAL_SELECT = `SELECT id, tenant_id, identity_key, subject, subject_kind, predicate,
-    object_value, valid_from, producer, source_episodes, content, trust_tier,
+    object_value, valid_from, producer, source_episodes, owner_ingress_episode_id, content, trust_tier,
     confidence, origin, importance, pinned_request, status, resulting_fact_ids,
     detail, proposed_at, decided_at
   FROM memory_proposals`;
@@ -272,6 +274,12 @@ export class MemoryStore {
     // so a new column in the schema above would never reach an existing
     // database. Columns added after the first release go here as well as there.
     ensureColumn(db, 'episodes', 'superseded_at', 'superseded_at TEXT');
+    ensureColumn(
+      db,
+      'memory_proposals',
+      'owner_ingress_episode_id',
+      'owner_ingress_episode_id INTEGER REFERENCES episodes(id)',
+    );
     // Both carry a non-null default so the existing rows migrate in place: an
     // ALTER that adds NOT NULL without one is rejected outright. `said` is the
     // honest backfill rather than a convenient one — extraction has never been
@@ -1506,6 +1514,7 @@ export class MemoryStore {
     validFrom: string | null;
     producer: string;
     sourceEpisodeIds: number[];
+    ownerIngressEpisodeId?: number | undefined;
     content: string;
     trustTier: number;
     confidence: number;
@@ -1526,16 +1535,17 @@ export class MemoryStore {
         .prepare(
           `INSERT OR IGNORE INTO memory_proposals
              (tenant_id, identity_key, subject, subject_kind, predicate, object_value,
-              valid_from, producer, source_episodes, content, trust_tier, confidence,
+              valid_from, producer, source_episodes, owner_ingress_episode_id, content, trust_tier, confidence,
               origin, importance, pinned_request, status, proposed_at)
            VALUES (@tenantId, @identityKey, @subject, @subjectKind, @predicate, @objectValue,
-              @validFrom, @producer, @sourceEpisodes, @content, @trustTier, @confidence,
+              @validFrom, @producer, @sourceEpisodes, @ownerIngressEpisodeId, @content, @trustTier, @confidence,
               @origin, @importance, @pinnedRequest, 'pending', @proposedAt)`,
         )
         .run({
           ...input,
           validFrom: input.validFrom ?? null,
           sourceEpisodes: JSON.stringify(input.sourceEpisodeIds),
+          ownerIngressEpisodeId: input.ownerIngressEpisodeId ?? null,
           pinnedRequest: input.pinnedRequest ? 1 : 0,
         });
       const row = this.db
@@ -1575,6 +1585,7 @@ export class MemoryStore {
       validFrom: row.valid_from,
       producer: row.producer,
       sourceEpisodeIds: JSON.parse(row.source_episodes) as number[],
+      ownerIngressEpisodeId: row.owner_ingress_episode_id,
       content: row.content,
       trustTier: row.trust_tier,
       confidence: row.confidence,

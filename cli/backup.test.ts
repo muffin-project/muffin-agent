@@ -120,7 +120,7 @@ describe('restoreFrom — refusals first, escape hatch always', () => {
     // a semantic compatibility marker. All nine still run and stamp.
     // Migration 11 (todos.armed_turn_id) no-ops here too — no `todos` table —
     // and still stamps, like the rest.
-    expect(applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
   });
 
   it('refuses while the gateway is alive', () => {

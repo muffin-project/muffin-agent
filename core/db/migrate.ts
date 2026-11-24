@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type Database from 'better-sqlite3';
 import DatabaseCtor from 'better-sqlite3';
 import { ensurePrivateDir, tightenPrivateFile } from '../config/private-fs.js';
+import { ensureColumn } from '../lock/durable.js';
 import { TURN_TABLE_SCHEMA } from '../turns/schema.js';
 
 /**
@@ -389,6 +390,22 @@ const MIGRATIONS: Migration[] = [
         db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>
       ).some((c) => c.name === 'armed_turn_id');
       if (!hasColumn) db.exec(`ALTER TABLE todos ADD COLUMN armed_turn_id TEXT`);
+    },
+  },
+  {
+    version: 12,
+    description: 'memory_proposals.owner_ingress_episode_id — preserve authenticated correction sources',
+    up: (db) => {
+      const hasTable = db
+        .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_proposals'`)
+        .get();
+      if (hasTable === undefined) return;
+      ensureColumn(
+        db,
+        'memory_proposals',
+        'owner_ingress_episode_id',
+        'owner_ingress_episode_id INTEGER REFERENCES episodes(id)',
+      );
     },
   },
 ];

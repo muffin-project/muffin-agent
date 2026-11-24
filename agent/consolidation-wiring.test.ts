@@ -274,7 +274,7 @@ describe('consolidation starts by itself', () => {
     h.store.markExtracted('host', [evidence, priorEvidence], EXTRACTION_VERSION);
     proposeMemoryRecord(h.store, {
       tenantId: 'host', subject: 'owner', subjectKind: 'person', predicate: 'accountant',
-      object: 'Lucia', producer: 'owner-stated', sourceEpisodeIds: [evidence],
+      object: 'Lucia', producer: 'owner-stated', sourceEpisodeIds: [evidence], ownerIngressEpisodeId: evidence,
       content: 'il commercialista ora è Lucia', confidence: 0.95,
     });
 
