@@ -815,6 +815,48 @@ export async function waitForGatewayPid(
 
 export type RestartVerdict = { restarted: boolean; line: string };
 
+export type GatewayRestartOptions = {
+  restart?: (argv: string[], timeoutMs: number) => SpawnResult;
+  readGatewayPid?: () => number | null;
+  sleep?: (ms: number) => Promise<void>;
+  verifyAttempts?: number;
+  verifyIntervalMs?: number;
+};
+
+/** One supervisor request and one observed replacement, shared by restart and update. */
+export async function restartSupervisedGateway(
+  home: string,
+  request: ReturnType<typeof restartCommand>,
+  opts: GatewayRestartOptions,
+): Promise<RestartVerdict> {
+  const { printable, argv, timeoutMs } = request;
+  const readPid = opts.readGatewayPid ?? (() => currentGatewayPid(home));
+  const restart = opts.restart ?? ((args, limit) => run(args[0]!, args.slice(1), home, limit));
+  process.stderr.write(`${printable}\n`);
+  const pidBefore = readPid();
+  const deadline = performance.now() + timeoutMs;
+  const command = restart(argv, timeoutMs);
+  const intervalMs = Math.max(1, opts.verifyIntervalMs ?? 750);
+  // A successful supervisor request can return while the new gateway is
+  // still starting. Use the remaining service window to see its claim.
+  const attempts =
+    opts.verifyAttempts ??
+    (command.status === 0
+      ? Math.ceil(Math.max(0, deadline - performance.now()) / intervalMs)
+      : undefined);
+  const pidAfter = await waitForGatewayPid(readPid, pidBefore, {
+    attempts,
+    intervalMs,
+    sleep: opts.sleep,
+  });
+  return restartVerdict({
+    pidBefore,
+    pidAfter,
+    commandOk: command.status === 0,
+    commandDetail: (command.stderr || command.stdout).trim(),
+  });
+}
+
 /**
  * Le tre frasi diverse per tre esiti diversi — mai la stessa consolazione per
  * casi opposti. Misurato il 03/09/2026: tutte e tre le strade stampavano
@@ -871,21 +913,12 @@ export async function offerGatewayRestart(
     yes: boolean;
     platform: NodeJS.Platform;
     promptFn?: typeof promptLine;
-    restart?: (argv: string[], timeoutMs: number) => SpawnResult;
     /** Same injection seam `cli/doctor.ts` uses for `checkSupervisor` — real OS probes by default, overridden so a test never shells out to a real systemctl/launchctl. */
     supervisorProbes?: Partial<SupervisorProbes>;
     gatewayRunning?: boolean;
-    /** «Chi sta servendo, adesso?» — reale `currentGatewayPid(home)` di default, una coda in test. */
-    readGatewayPid?: () => number | null;
-    /** Timer reali di default; istantaneo nei test — vedi `waitForGatewayPid`. */
-    sleep?: (ms: number) => Promise<void>;
-    verifyAttempts?: number;
-    verifyIntervalMs?: number;
-  },
+  } & GatewayRestartOptions,
 ): Promise<void> {
   const promptFn = opts.promptFn ?? promptLine;
-  const restart =
-    opts.restart ?? ((argv, timeoutMs) => run(argv[0]!, argv.slice(1), home, timeoutMs));
   const readGatewayPid = opts.readGatewayPid ?? (() => currentGatewayPid(home));
   const status = checkSupervisor(
     opts.platform,
@@ -913,30 +946,12 @@ export async function offerGatewayRestart(
     return;
   }
 
-  const { printable, argv, timeoutMs } = restartCommand(opts.platform);
-  /**
-   * Verifica lo stato dopo, non l'output (regola della casa). Il comando che
-   * muta il supervisore viene comunque eseguito ed emesso — l'owner deve
-   * poterlo rilanciare a mano — ma l'esito che si stampa non è più il suo
-   * exit status: è se il pid che serve adesso è diverso da quello di prima.
-   * Le tre frasi che ne escono sono decise in `restartVerdict`, che questa
-   * funzione chiama e basta.
-   */
+  const command = restartCommand(opts.platform);
+  const { printable } = command;
   const doRestart = async (): Promise<void> => {
-    process.stderr.write(`\n${printable}\n`);
-    const pidBefore = readGatewayPid();
-    const r = restart(argv, timeoutMs);
-    const commandDetail = (r.stderr || r.stdout).trim();
-    const pidAfter = await waitForGatewayPid(readGatewayPid, pidBefore, {
-      attempts: opts.verifyAttempts,
-      intervalMs: opts.verifyIntervalMs,
-      sleep: opts.sleep,
-    });
-    const verdict = restartVerdict({
-      pidBefore,
-      pidAfter,
-      commandOk: r.status === 0,
-      commandDetail,
+    const verdict = await restartSupervisedGateway(home, command, {
+      ...opts,
+      readGatewayPid,
     });
     process.stderr.write(`${verdict.line}\n`);
     if (!verdict.restarted) carryOn();

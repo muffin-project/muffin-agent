@@ -1153,18 +1153,21 @@ describe('muffin gateway restart', () => {
 
   it('su darwin attende il budget di arresto del servizio per launchctl kickstart', async () => {
     let restarted: string[] | null = null;
-    let servingPid = 1111;
+    let bootStarted = false;
+    let bootChecks = 0;
     const code = await cmdGatewayRestart(home(), {
       platform: 'darwin',
       supervisorProbes: { unitFileExists: () => true, launchdLoaded: () => true },
       restart: (argv, timeoutMs) => {
         restarted = argv;
         expect(timeoutMs).toBe(STOP_TIMEOUT_SEC * 1000);
-        servingPid = 2222;
+        bootStarted = true;
         return { status: 0, stdout: '', stderr: '' };
       },
-      readGatewayPid: () => servingPid,
-      sleep: noSleep,
+      readGatewayPid: () => (bootStarted ? (bootChecks >= 24 ? 2222 : null) : 1111),
+      sleep: async () => {
+        bootChecks++;
+      },
     });
     expect(code).toBe(0);
     expect(restarted?.[0]).toBe('launchctl');

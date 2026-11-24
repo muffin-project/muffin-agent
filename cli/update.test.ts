@@ -762,7 +762,8 @@ describe('offerGatewayRestart', () => {
 
   it('uses the service stop budget for launchctl kickstart on darwin', async () => {
     let restarted: string[] | null = null;
-    let servingPid = 1111;
+    let bootStarted = false;
+    let bootChecks = 0;
     const output = await captureErr(() =>
       offerGatewayRestart(dir('muffin-update-home-'), {
         yes: true,
@@ -772,11 +773,13 @@ describe('offerGatewayRestart', () => {
         restart: (argv, timeoutMs) => {
           restarted = argv;
           expect(timeoutMs).toBe(STOP_TIMEOUT_SEC * 1000);
-          servingPid = 2222;
+          bootStarted = true;
           return { status: 0, stdout: '', stderr: '' };
         },
-        readGatewayPid: () => servingPid,
-        sleep: noSleep,
+        readGatewayPid: () => (bootStarted ? (bootChecks >= 24 ? 2222 : null) : 1111),
+        sleep: async () => {
+          bootChecks++;
+        },
       }),
     );
     expect(output).toContain('adesso serve pid 2222');
