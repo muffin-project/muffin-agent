@@ -30,6 +30,10 @@ citation titles and URLs as untrusted tool results. The main turn independently
 opens sources through the native HTTP reader. The connection alone does not
 activate hosted search. No separate API key, automatic provider fallback,
 history forwarding, or widening of the ordinary turn's tool list is required.
+The endpoint cannot redirect and its permission is checked again immediately
+before dispatch. A live attempt never automatically repeats a request after
+transport or parsing failure. Crash recovery retains the existing rerunnable
+read semantics of `sys.search`.
 
 Verification profile **CRITICAL**, because this introduces a new destination
 for search queries through the existing egress contract. Falsify the choice

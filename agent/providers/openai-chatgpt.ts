@@ -169,40 +169,42 @@ export class OpenAIChatGPTProvider implements Provider {
     signal: AbortSignal,
     options: { maxResults?: number | undefined; beforeSend?: () => void } = {},
   ): Promise<HostedSearchHit[]> {
-    const { response, refusal } = await this.complete(
-      {
-        model,
-        system: [
-          {
-            type: 'text',
-            text: 'Use hosted web search for the supplied query. Return a brief answer with citations to the sources found.',
-          },
-        ],
-        messages: [{ role: 'user', origin: 'owner', content: [{ type: 'text', text: query }] }],
-        // The plan API has no remote output-token control. The caller supplies the deadline.
-        maxOutputTokens: 0,
-        stream: false,
-        signal,
-      },
-      options,
-    ).catch((error: unknown) => {
-      // The server may already have performed a search when the stream fails.
-      // Retrying this tool automatically can charge the connected plan again.
+    try {
+      const { response, refusal } = await this.complete(
+        {
+          model,
+          system: [
+            {
+              type: 'text',
+              text: 'Use hosted web search for the supplied query. Return a brief answer with citations to the sources found.',
+            },
+          ],
+          messages: [{ role: 'user', origin: 'owner', content: [{ type: 'text', text: query }] }],
+          // The plan API has no remote output-token control. The caller supplies the deadline.
+          maxOutputTokens: 0,
+          stream: false,
+          signal,
+        },
+        options,
+      );
+      if (
+        refusal ||
+        !response.output.some(
+          (item) => item.type === 'web_search_call' && item.status === 'completed',
+        )
+      ) {
+        throw new ProviderError('ChatGPT returned no completed web search', false);
+      }
+      return webCitations(response, options.maxResults ?? 5);
+    } catch (error) {
+      // The server may already have performed a search when transport or
+      // parsing fails. An automatic retry could charge the connected plan again.
       const detail =
         error instanceof ProviderError || error instanceof ProviderStreamError
           ? error.message
-          : 'ChatGPT web search failed';
+          : 'ChatGPT returned an unreadable web search result';
       throw new ProviderError(detail, false);
-    });
-    if (
-      refusal ||
-      !response.output.some(
-        (item) => item.type === 'web_search_call' && item.status === 'completed',
-      )
-    ) {
-      throw new ProviderError('ChatGPT returned no completed web search', false);
     }
-    return webCitations(response, options.maxResults ?? 5);
   }
 
   // No public chatStream: the loop's non-stream fallback would issue another

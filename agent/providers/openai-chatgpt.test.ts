@@ -181,6 +181,25 @@ describe('ChatGPT as a bounded web search backend', () => {
     });
   });
 
+  it('does not retry a completed action with unreadable citation metadata', async () => {
+    const h = harness([
+      done([
+        search,
+        {
+          ...message,
+          content: [{ type: 'output_text', text: 'Unverified prose', annotations: null }],
+        },
+      ]),
+    ]);
+    await expect(
+      h.provider.searchWeb(CALL.model, 'public notice', AbortSignal.timeout(2000)),
+    ).rejects.toMatchObject({
+      message: 'ChatGPT returned an unreadable web search result',
+      retryable: false,
+    });
+    expect(h.requests).toHaveLength(1);
+  });
+
   it('never promotes a hosted action or an incomplete result into ordinary chat output', async () => {
     const completed = harness([done([search, message])]);
     await expect(completed.provider.chat(CALL)).rejects.toThrow();
