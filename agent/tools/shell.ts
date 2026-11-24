@@ -7,6 +7,7 @@ import {
   EXEC_DEFAULT_TIMEOUT_MS,
   EXEC_MAX_TIMEOUT_MS,
   type ExecResult,
+  type ReadOnlyExecRequest,
   type SandboxExecutor,
 } from '../../core/sandbox/executor.js';
 import type { RegisteredTool } from '../loop.js';
@@ -270,6 +271,7 @@ function shellInvocation(root: string, args: unknown) {
   const cwd = resolve(root, requested);
   let rootResolved: string;
   let cwdResolved: string;
+  let scope: string;
   const invalid = () =>
     new Error(
       `cwd escapes the project or is unavailable: ${requested}. Use "." for the project root.`,
@@ -280,9 +282,18 @@ function shellInvocation(root: string, args: unknown) {
     cwdResolved = realpathSync(cwd);
     // The canonical check precedes stat. A symlink cannot make its outside
     // target a permitted directory or reveal whether that target exists.
-    if (!withinWorkspace(rootResolved, cwdResolved) || !statSync(cwdResolved).isDirectory()) {
-      throw invalid();
-    }
+    if (!withinWorkspace(rootResolved, cwdResolved)) throw invalid();
+    const workspace = statSync(rootResolved, { bigint: true });
+    const directory = statSync(cwdResolved, { bigint: true });
+    if (!workspace.isDirectory() || !directory.isDirectory()) throw invalid();
+    scope = JSON.stringify([
+      rootResolved,
+      workspace.dev.toString(),
+      workspace.ino.toString(),
+      cwdResolved,
+      directory.dev.toString(),
+      directory.ino.toString(),
+    ]);
   } catch {
     throw invalid();
   }
@@ -292,7 +303,7 @@ function shellInvocation(root: string, args: unknown) {
     timeoutMs: parsed.data.timeout_ms,
     cwdResolved,
     rootResolved,
-    scope: JSON.stringify([rootResolved, cwdResolved]),
+    scope,
   };
 }
 
@@ -303,14 +314,13 @@ function shellInvocation(root: string, args: unknown) {
  * The lane is the `esegui` closure and nothing else — one function per tool,
  * captured at construction, never a branch on an argument the model wrote.
  */
+class ApprovedShellUnavailable extends Error {}
+
 function makeLane(
   spec: ToolSpec,
   capability: CapabilityDecl,
   scope: ShellScope,
-  esegui: (
-    req: { command: string; cwd: string; timeoutMs?: number },
-    workspaceRoot: string,
-  ) => Promise<ExecResult>,
+  esegui: (req: ReadOnlyExecRequest, workspaceRoot: string) => Promise<ExecResult>,
 ): RegisteredTool {
   return {
     capability: capability.id,
@@ -329,22 +339,42 @@ function makeLane(
         };
       }
       const approvedScope = ctx.approvedScope;
-      if (approvedScope !== undefined && approvedScope !== invocation.scope) {
-        return { content: 'approved working directory changed', isError: true, tier: 0 };
-      }
+      const validateScope =
+        approvedScope === undefined
+          ? undefined
+          : () => {
+              if (ctx.signal?.aborted) {
+                throw new ApprovedShellUnavailable(
+                  'Il comando è stato annullato prima di partire.',
+                );
+              }
+              try {
+                if (shellInvocation(scope.root, args).scope === approvedScope) return;
+              } catch {
+                // A removed directory is also a change to the approved scope.
+              }
+              throw new ApprovedShellUnavailable(
+                'La cartella approvata è cambiata. Non ho eseguito il comando.',
+              );
+            };
       const { command, timeoutMs } = invocation;
 
       let result: ExecResult;
       try {
+        validateScope?.();
         result = await esegui(
           {
             command,
             cwd: approvedScope === undefined ? invocation.cwd : invocation.cwdResolved,
             ...(timeoutMs === undefined ? {} : { timeoutMs }),
+            ...(validateScope === undefined ? {} : { validateScope }),
           },
           approvedScope === undefined ? scope.root : invocation.rootResolved,
         );
       } catch (error) {
+        if (error instanceof ApprovedShellUnavailable) {
+          return { content: error.message, isError: true, tier: 0 };
+        }
         // `ensureInit()` throws `sandbox unavailable: …` when containment
         // cannot be proved on this host — the case ADR-0074 punto 4 names by hand:
         // *«dove il sandbox non può garantire il confine, la shell in sola
