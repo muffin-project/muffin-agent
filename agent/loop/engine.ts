@@ -1,4 +1,3 @@
-import { speakerAttributedContent } from '../../core/memory/authorship.js';
 import { recall, recallTaint, renderForPrompt } from '../../core/memory/recall.js';
 import { memoryWriteCapability } from '../../core/policy/doors.js';
 import type { CapabilityId, Decision, DecisionRequest } from '../../core/policy/types.js';
@@ -221,6 +220,9 @@ async function runClaimedTurn(
      */
     session: options.session ?? deps.sessions.open(record.sessionId),
     text: record.inputText ?? lastUserText(messages),
+    // Older checkpoints did not separate the sender's words from context.
+    authoredText:
+      typeof persistedInput?.authoredText === 'string' ? persistedInput.authoredText : '',
     // Event wakes run as `system:automation`, but their input contains matched
     // external data. Preserve the marker; legacy automation rows fail closed
     // as external rather than acquiring owner provenance on recovery.
@@ -274,14 +276,8 @@ async function runClaimedTurn(
   // `resumeTurn` §2. On a fresh turn the two agree by construction, which is
   // exactly why deriving it looked safe for as long as nothing resumed.
   const snapshot = makeSnapshot(deps.decide, input.principal, input.tenant, record.taint);
-  // Connector input includes fenced context alongside the sender's own words.
-  // Only the authored portion may establish URL provenance, including on resume.
   const inputOrigin = input.inputOrigin ?? 'owner';
-  snapshot.recordInput(
-    inputOrigin === 'owner' ? speakerAttributedContent(input.text) : input.text,
-    undefined,
-    inputOrigin,
-  );
+  snapshot.recordInput(input.authoredText ?? '', undefined, inputOrigin);
   const turnClass = tenantClass(input.principal, input.tenant);
 
   /**

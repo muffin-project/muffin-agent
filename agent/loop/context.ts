@@ -1,6 +1,12 @@
-import { ambienteSection, tenantClass, type IstanzaFacts } from '../context/assemble.js';
+import { ambienteSection, type IstanzaFacts, tenantClass } from '../context/assemble.js';
 import type { ReinjectedHistory } from '../context/history-taint.js';
-import type { AudioBlock, ContentBlock, ImageBlock, Message, MessageOrigin } from '../providers/types.js';
+import type {
+  AudioBlock,
+  ContentBlock,
+  ImageBlock,
+  Message,
+  MessageOrigin,
+} from '../providers/types.js';
 import { harnessMessage, inputMessage, provenanceMessage } from './message-origin.js';
 import type { TurnInput } from './types.js';
 
@@ -35,7 +41,10 @@ export function primoMessaggio(input: TurnInput): ContentBlock[] {
  * duplicata che cresce è una riga che diverge — l'audio è esattamente la
  * crescita che quel commento prevedeva.
  */
-export function media(input: { images?: ImageBlock[]; audios?: AudioBlock[] }): (ImageBlock | AudioBlock)[] {
+export function media(input: {
+  images?: ImageBlock[];
+  audios?: AudioBlock[];
+}): (ImageBlock | AudioBlock)[] {
   return [...(input.images ?? []), ...(input.audios ?? [])];
 }
 
@@ -203,7 +212,8 @@ export function flattenSemantic(ctx: SemanticContext): Message[] {
  * acted on as if it were clean.
  */
 export function assembleSemantic(args: SemanticArgs): SemanticContext {
-  const { input, recalled, spoken, adesso, modello, profilo, istanza, timeZone, undoneTraceIds } = args;
+  const { input, recalled, spoken, adesso, modello, profilo, istanza, timeZone, undoneTraceIds } =
+    args;
   const firstEncounter = args.firstEncounter ?? false;
   const { kept, dropped } = spoken;
 
@@ -260,7 +270,8 @@ export function assembleSemantic(args: SemanticArgs): SemanticContext {
      * lettura, così una sessione che ha già scritto la riga su disco (JSONL,
      * append-only) non deve mai essere toccata per restare vera.
      */
-    const disfatto = m.role === 'assistant' && m.traceId !== undefined && undoneTraceIds.has(m.traceId);
+    const disfatto =
+      m.role === 'assistant' && m.traceId !== undefined && undoneTraceIds.has(m.traceId);
     history.push({
       role: m.role as 'user' | 'assistant',
       content: [
@@ -318,6 +329,7 @@ export function assembleSemantic(args: SemanticArgs): SemanticContext {
   const owner = inputMessage(
     [...media(input), { type: 'text', text: input.text }],
     input.inputOrigin ?? 'owner',
+    input.authoredText,
   );
 
   return { announcement, history, memory, runtime, owner };
@@ -382,7 +394,9 @@ function measureBlocks(content: ContentBlock[]): { blocks: number; bytes: number
 
 export function describeAssembly(ctx: SemanticContext): AssemblySectionDescriptor[] {
   const sections: { key: SemanticSectionKey; message: Message }[] = [
-    ...(ctx.announcement === null ? [] : [{ key: 'announcement' as const, message: ctx.announcement }]),
+    ...(ctx.announcement === null
+      ? []
+      : [{ key: 'announcement' as const, message: ctx.announcement }]),
     ...ctx.history.map((message) => ({ key: 'history' as const, message })),
     ...(ctx.memory === null ? [] : [{ key: 'memory' as const, message: ctx.memory }]),
     { key: 'runtime' as const, message: ctx.runtime },

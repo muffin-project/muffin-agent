@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { Message, MessageOrigin, Update } from '@grammyjs/types';
 import DatabaseCtor from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { LoopDeps } from '../../agent/loop.js';
+import { type LoopDeps, resumeTurn } from '../../agent/loop.js';
 import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
 import { buildRuntime } from '../../agent/runtime.js';
 import { runInit } from '../../cli/init.js';
@@ -127,6 +127,7 @@ const callTool = (name: string, args: Record<string, unknown>): ChatResult => ({
 function harness(
   script: ChatResult[] = [],
   observeDecision?: (request: DecisionRequest, decision: Decision) => Decision,
+  defer = false,
 ) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-fwdtaint-'));
   const workspace = mkdtempSync(join(tmpdir(), 'muffin-fwdtaint-ws-'));
@@ -151,16 +152,20 @@ function harness(
     sendMessageDraft: async () => true,
   } as unknown as TelegramApi;
 
+  const loopFor = (target: ReturnType<typeof buildRuntime>): LoopDeps => ({
+    ...target.deps,
+    provider,
+    ...(observeDecision === undefined
+      ? {}
+      : { decide: (request) => observeDecision(request, target.deps.decide(request)) }),
+  });
+  const lane = new ModelLane();
+  if (defer) lane.take('fixture');
   const connector = new TelegramConnector({
-    loop: {
-      ...runtime.deps,
-      provider,
-      ...(observeDecision === undefined
-        ? {}
-        : { decide: (request) => observeDecision(request, runtime.deps.decide(request)) }),
-    } satisfies LoopDeps,
+    loop: loopFor(runtime),
     sessions: runtime.deps.sessions,
-    lane: new ModelLane(),
+    lane,
+    ...(defer ? { onWork: () => {} } : {}),
     inbox: new UpdateInbox(runtime.db),
     delivery: new TelegramDeliveryStore(runtime.db),
     api,
@@ -171,13 +176,18 @@ function harness(
     config,
   });
 
-  return { connector, seen, runtime };
+  return { connector, seen, runtime, home, workspace, loopFor };
 }
 
 describe('Telegram request URL authorship', () => {
-  it.each(['quoted', 'forwarded'] as const)(
-    'keeps %s links visible without treating them as sender-authored',
-    async (source) => {
+  it.each([
+    ['quoted', 'on a fresh turn'],
+    ['forwarded', 'on a fresh turn'],
+    ['quoted', 'after reopening a queued turn'],
+  ] as const)(
+    'keeps %s links visible without treating them as sender-authored %s',
+    async (source, run) => {
+      const defer = run === 'after reopening a queued turn';
       const ownUrl = 'https://sender.example.invalid/conditions';
       const otherUrl = 'https://reference.example.invalid/help';
       const observed = new Map<
@@ -199,6 +209,7 @@ describe('Telegram request URL authorship', () => {
           }
           return decision;
         },
+        defer,
       );
       const chat = { id: OWNER, type: 'private' as const, first_name: 'Owner' };
       const update = {
@@ -222,14 +233,31 @@ describe('Telegram request URL authorship', () => {
             : { forward_origin: FORWARD_ORIGIN, text: otherUrl }),
         },
       } as unknown as Update;
+      let activeRuntime = h.runtime;
       try {
         await deliver(h, [update]);
+        if (defer) {
+          expect(h.seen).toHaveLength(0);
+          const stored = h.runtime.db.prepare('SELECT id, input_text AS text FROM turns').get() as {
+            id: string;
+            text: string;
+          };
+          // Simulate a presentation delimiter lost during persistence.
+          const damagedText = stored.text.replace(/\ncitato_[0-9a-f]{12}>>>/, '');
+          expect(damagedText).not.toBe(stored.text);
+          h.runtime.db
+            .prepare('UPDATE turns SET input_text = ? WHERE id = ?')
+            .run(damagedText, stored.id);
+          activeRuntime = buildRuntime(h.home, h.workspace);
+          h.runtime.close();
+          await resumeTurn(h.loopFor(activeRuntime), stored.id);
+        }
         expect(JSON.stringify(h.seen[0]?.messages)).toContain(otherUrl);
         expect(observed.get(otherUrl)).toEqual({ quoted: false, effect: 'ask' });
         if (source === 'quoted')
           expect(observed.get(ownUrl)).toEqual({ quoted: true, effect: 'allow' });
       } finally {
-        h.runtime.close();
+        activeRuntime.close();
       }
     },
   );
