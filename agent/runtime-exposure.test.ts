@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest';
 import { runInit } from '../cli/init.js';
 import { CAPABILITY_SEARCH_TOOL_NAME, createCapabilityExposure } from './capability-exposure.js';
 import { visibleTools } from './context/assemble.js';
-import { loadProfiles, selectProfile } from './profiles/profile.js';
 import { baseToolOrder, buildRuntime } from './runtime.js';
 import { WORK_MESSAGE_TOOL_NAME } from './tools/work-message.js';
 
@@ -41,7 +40,7 @@ function realRuntime(): {
   return { names, runtime, close: () => runtime.close() };
 }
 
-function ownerProjection(runtime: ReturnType<typeof buildRuntime>, maxToolsExposed: number) {
+function ownerProjection(runtime: ReturnType<typeof buildRuntime>) {
   const principal = { kind: 'owner', connector: 'cli', externalId: 'local' } as const;
   const eligible = visibleTools(
     runtime.deps.tools.filter((tool) => tool.spec.name !== WORK_MESSAGE_TOOL_NAME),
@@ -52,7 +51,6 @@ function ownerProjection(runtime: ReturnType<typeof buildRuntime>, maxToolsExpos
   const discoveryTool = eligible.find((tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME);
   return createCapabilityExposure({
     eligible,
-    maxToolsExposed,
     ...(discoveryTool === undefined ? {} : { discoveryTool }),
   });
 }
@@ -108,53 +106,21 @@ describe('quali tool vede davvero un turno', () => {
     );
   });
 
-  it('su consumer-local resta il fast path ordinario finché il catalogo entra nel profilo', () => {
-    const profiles = loadProfiles(join(import.meta.dirname, 'profiles'));
-    const profile = selectProfile('qwen3.8-27b', profiles);
-    expect(profile.maxToolsExposed).toBe(23);
-
+  it('il catalogo reale mostra il nucleo e carica sys_inspect, senza un tetto numerico', () => {
     const rt = realRuntime();
     try {
-      const projection = ownerProjection(rt.runtime, profile.maxToolsExposed);
-      expect(projection.pressured).toBe(false);
-      expect(projection.discovery).toBeUndefined();
-      expect(projection.exposed.map((tool) => tool.spec.name)).not.toContain(
-        CAPABILITY_SEARCH_TOOL_NAME,
-      );
-    } finally {
-      rt.close();
-    }
-  });
-
-  it('su conservative il tetto limita gli schema ma non rende irraggiungibile sys_inspect', () => {
-    const rt = realRuntime();
-    try {
-      const projection = ownerProjection(rt.runtime, 10);
+      const projection = ownerProjection(rt.runtime);
       expect(projection.pressured).toBe(true);
-      expect(projection.exposed.length).toBeLessThanOrEqual(10);
       expect(projection.exposed.map((tool) => tool.spec.name)).toContain(
         CAPABILITY_SEARCH_TOOL_NAME,
       );
+      expect(projection.exposed.map((tool) => tool.spec.name)).toContain('fs_read');
       expect(projection.exposed.map((tool) => tool.spec.name)).not.toContain('sys_inspect');
 
       const found = projection.discovery?.searchAndLoad('inspect current runtime', 2);
       expect(found?.loaded.map((tool) => tool.name)).toContain('sys_inspect');
       projection.discovery?.activatePending();
       expect(projection.exposed.map((tool) => tool.spec.name)).toContain('sys_inspect');
-      expect(projection.exposed.length).toBeLessThanOrEqual(10);
-    } finally {
-      rt.close();
-    }
-  });
-
-  it('su un profilo frontier il catalogo resta sul fast path statico', () => {
-    const profiles = loadProfiles(join(import.meta.dirname, 'profiles'));
-    const profile = selectProfile('claude-sonnet-5', profiles);
-    const rt = realRuntime();
-    try {
-      const projection = ownerProjection(rt.runtime, profile.maxToolsExposed);
-      expect(projection.pressured).toBe(false);
-      expect(projection.discovery).toBeUndefined();
     } finally {
       rt.close();
     }
