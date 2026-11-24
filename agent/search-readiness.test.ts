@@ -1,41 +1,53 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { runInit } from '../cli/init.js';
-import { loadConfig, saveConfig } from '../core/config/config.js';
+import { loadConfig, paths, saveConfig, writeSecret } from '../core/config/config.js';
 import type { Principal } from '../core/policy/types.js';
+import { seal } from '../core/rot/verify.js';
 import { runTurn } from './loop.js';
 import type { ChatCall, Provider } from './providers/types.js';
 import { buildRuntime } from './runtime.js';
 
+const OWNER: Principal = { kind: 'owner', connector: 'telegram', externalId: 'owner' };
+const GROUP = 'group:telegram:100';
+const MEMBER: Principal = {
+  kind: 'member',
+  connector: 'telegram',
+  externalId: 'member',
+  tenantId: GROUP,
+};
+
 it.each([
-  {
-    principal: { kind: 'owner', connector: 'telegram', externalId: 'owner' } satisfies Principal,
-    tenant: 'host',
-    diagnostic: true,
-  },
-  {
-    principal: {
-      kind: 'member',
-      connector: 'telegram',
-      externalId: 'member',
-      tenantId: 'group:telegram:100',
-    } satisfies Principal,
-    tenant: 'group:telegram:100',
-    diagnostic: false,
-  },
-])('provides search readiness only in its owner context ($tenant)', async (scene) => {
+  { principal: OWNER, tenant: 'host', state: 'missing', reason: 'credenziale' },
+  { principal: OWNER, tenant: 'host', state: 'egress', reason: 'accesso di rete' },
+  { principal: OWNER, tenant: 'host', state: 'ready', reason: null },
+  { principal: OWNER, tenant: 'host', state: 'unconfigured', reason: null },
+  { principal: MEMBER, tenant: GROUP, state: 'missing', reason: null },
+])('reports configured search readiness for $tenant when $state', async (scene) => {
   const root = mkdtempSync(join(tmpdir(), 'muffin-search-readiness-'));
   const home = join(root, 'home');
   runInit({ home, apiKey: 'sk-never-used' });
-  saveConfig(
-    {
-      ...loadConfig(home),
-      search: { provider: 'tavily', apiKeyRef: 'secret://unconnected_tavily' },
-    },
-    home,
-  );
+  if (scene.state !== 'unconfigured') {
+    saveConfig(
+      {
+        ...loadConfig(home),
+        search: { provider: 'tavily', apiKeyRef: 'secret://fixture_search_reference' },
+      },
+      home,
+    );
+  }
+  if (scene.state === 'egress' || scene.state === 'ready') {
+    writeSecret('fixture_search_reference', 'fixture-search-key', home);
+  }
+  if (scene.state === 'ready') {
+    writeFileSync(
+      join(paths(home).rot, 'egress.json'),
+      JSON.stringify({ schemaVersion: 1, allow: ['api.tavily.com'] }),
+    );
+    seal(home, '1', new Date());
+  }
   const runtime = buildRuntime(home, root);
   try {
     const calls: ChatCall[] = [];
@@ -65,9 +77,14 @@ it.each([
     const first = calls[0];
     expect(first).toBeDefined();
     const messages = JSON.stringify(first?.messages);
-    expect(messages.includes('Ricerca web indisponibile')).toBe(scene.diagnostic);
-    expect(messages.includes('unconnected_tavily')).toBe(scene.diagnostic);
-    expect(first?.tools?.map((tool) => tool.name)).not.toContain('web_search');
+    expect(messages).not.toContain('fixture_search_reference');
+    expect(messages).not.toContain(join(home, 'secrets'));
+    expect(messages).not.toContain('fixture-search-key');
+    expect(messages.includes('Ricerca web indisponibile')).toBe(scene.reason !== null);
+    if (scene.reason !== null) expect(messages).toContain(scene.reason);
+    expect(runtime.deps.tools.some((tool) => tool.spec.name === 'web_search')).toBe(
+      scene.state === 'ready',
+    );
   } finally {
     runtime.close();
     rmSync(root, { recursive: true, force: true });

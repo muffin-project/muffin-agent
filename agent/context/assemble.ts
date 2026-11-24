@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { type PromptVersion, paths } from '../../core/config/config.js';
 import type { CapabilityDecl, CapabilityId, Principal, TenantId } from '../../core/policy/types.js';
 import { renderTodos, type TodoItem } from '../../core/turns/todo.js';
+import type { SearchStartupBlocker } from '../tools/search.js';
 import { estimateTokens, type PrefixBlockReport, prefixBreakdown } from './tokens.js';
 
 /**
@@ -233,8 +234,8 @@ export type IstanzaFacts = {
   jobAttivi: number;
   /** `null` quando il root of trust è integro — stessa condizione di `sys_inspect`, non un errore. */
   safeMode: { reason: string } | null;
-  /** Boot diagnosis when the configured web search tool could not be registered. */
-  webSearchUnavailable?: string;
+  /** Safe category, without the local diagnostic's paths and secret reference. */
+  webSearchUnavailable?: SearchStartupBlocker;
 };
 
 /**
@@ -393,7 +394,10 @@ function istanzaRighe(f: IstanzaFacts): string[] {
     ...(f.webSearchUnavailable === undefined
       ? []
       : [
-          `- Ricerca web indisponibile (${f.webSearchUnavailable}). La lettura di URL noti segue le regole di accesso del turno.`,
+          f.webSearchUnavailable === 'credential'
+            ? '- Ricerca web indisponibile. La credenziale del servizio configurato manca o non è leggibile.'
+            : '- Ricerca web indisponibile. L’accesso di rete del servizio configurato non è autorizzato.',
+          '- Se ti serve trovare una fonte e non hai uno strumento adatto, chiedi un URL. Leggere un URL noto segue le regole di accesso del turno.',
         ]),
   ];
 }
