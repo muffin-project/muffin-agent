@@ -429,9 +429,23 @@ async function runClaimedTurn(
           canDiscover: () => catalogueDecision(discoveryTool.capability).effect === 'allow',
         }),
   });
-  const preloaded = capabilityExposure.pressured
-    ? preloadCapabilitiesForTask(capabilityExposure, input.text, 2)
-    : null;
+  const readerName = 'http_get';
+  // A link in the direct owner request is a selection hint only. Resolve and
+  // authorize the actual URL in the ordinary tool call.
+  const preferReader =
+    input.principal.kind === 'owner' &&
+    input.inputOrigin !== 'external' &&
+    input.text.match(/\bhttps?:\/\/[^\s<>"'`]+/gi)?.some((url) => URL.canParse(url)) &&
+    eligibleTools.some((tool) => tool.spec.name === readerName) &&
+    !capabilityExposure.exposed.some((tool) => tool.spec.name === readerName);
+  const preloaded =
+    capabilityExposure.pressured
+      ? preloadCapabilitiesForTask(
+          capabilityExposure,
+          preferReader ? readerName : input.text,
+          preferReader ? 1 : 2,
+        )
+      : null;
   const exposed = capabilityExposure.exposed;
   const initialProjection = capabilityExposure.snapshot();
   turn.setAttributes({
