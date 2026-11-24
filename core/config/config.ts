@@ -260,6 +260,8 @@ export const ConfigSchema = z.object({
   embedder: z
     .object({
       kind: z.enum(['ollama', 'openai-compat']),
+      /** Pause vector recall and indexing while keeping the selected route. */
+      enabled: z.boolean().optional(),
       model: z.string().min(1).optional(),
       /**
        * Obbligatoria per `openai-compat`: la dimensione è cotta nel DDL della

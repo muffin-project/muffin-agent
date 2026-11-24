@@ -75,7 +75,16 @@ Muffin never switches to another paid provider automatically. ChatGPT-plan usage
 is managed in [ChatGPT Settings](https://chatgpt.com/settings/usage), separately
 from Muffin's API-dollar estimates.
 
-## Embeddings without Ollama
+## Embedding selection
+
+Run `muffin model embed off` and restart the gateway to pause embedding
+requests and use full-text memory search. The stored vectors and selected
+embedding route are kept. To resume, run `muffin model embed on` and restart
+the gateway after its test succeeds. Selecting a model explicitly also
+activates embeddings after verification. `muffin doctor` reports the configured
+mode.
+
+To use the OpenAI API as your embedding provider:
 
 ```sh
 muffin secret set openai_api_key

@@ -22,7 +22,7 @@ import { buildEndpointsUrl, parseEndpointTags } from '../core/config/endpoints.j
 import { type EndpointEvidence, resolveModelSwitch } from '../core/config/model-resolve.js';
 import { PROVIDERS, type ProviderEntry, providerFor } from '../core/config/providers.js';
 import { askGateway } from '../core/gateway/control-socket.js';
-import { makeEmbedder } from '../core/memory/embed.js';
+import { makeEmbedder, OllamaEmbedder } from '../core/memory/embed.js';
 import { openChatGPTBrowser } from './chatgpt-browser.js';
 import { ensureOpenRouterSecret, probeSavedRoute } from './openrouter-connect.js';
 import { promptLine, promptSecret } from './prompt.js';
@@ -405,6 +405,10 @@ function mostra(config: Config, out: (l: string) => void): void {
   out(`main       ${config.models.main} · ${label('main')} — ${rate('main')}${route('main')}`);
   out(`light      ${config.models.light} · ${label('light')} — ${rate('light')}${route('light')}`);
   const emb = config.embedder;
+  if (emb?.enabled === false) {
+    out('embed      off · ricerca testuale attiva');
+    return;
+  }
   out(
     emb === undefined
       ? 'embed      ollama:qwen3-embedding:0.6b (default) · 1024 dim'
@@ -549,7 +553,20 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
     return 2;
   }
   const directOpenAIEmbeddings = lane === 'embed' && primo === '--openai';
-  const slug = directOpenAIEmbeddings ? 'text-embedding-3-small' : primo;
+  let slug = directOpenAIEmbeddings ? 'text-embedding-3-small' : primo;
+  if (lane === 'embed' && primo === 'on') {
+    if (original.embedder?.enabled !== false) {
+      out('Embedding già attivi.');
+      return 0;
+    }
+    slug =
+      original.embedder.model ??
+      (original.embedder.kind === 'ollama' ? new OllamaEmbedder().model : undefined);
+    if (slug === undefined) {
+      out('Indica il modello con `muffin model embed <slug>` per riattivare gli embedding.');
+      return 2;
+    }
+  }
   const selectedProvider =
     requestedEndpoint !== undefined
       ? endpointConfigFor(laneProvider, requestedEndpoint, requestedKeyRef)
@@ -808,12 +825,24 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
 
   if (slug === undefined || slug.startsWith('-')) {
     out(
-      'uso: muffin model [main|light|embed] <slug> · muffin model embed --openai · muffin model [main|light] [--provider <id>|--endpoint <url>] <slug> · muffin model [main|light] --list [filtro] [--provider <id>] · muffin model --select',
+      'uso: muffin model [main|light|embed] <slug> · muffin model embed <off|on|--openai> · muffin model [main|light] [--provider <id>|--endpoint <url>] <slug> · muffin model [main|light] --list [filtro] [--provider <id>] · muffin model --select',
     );
     return 2;
   }
 
   if (lane === 'embed') {
+    if (primo === 'off') {
+      saveConfig(
+        {
+          ...config,
+          embedder: { ...(config.embedder ?? { kind: 'ollama' }), enabled: false },
+        },
+        home,
+      );
+      out('Embedding disattivati. La ricerca testuale resta attiva.');
+      out('Riavvia il gateway per applicare il cambio a un’istanza in esecuzione.');
+      return 0;
+    }
     // The OpenAI shortcut replaces the entire embedding route. The probe sends
     // a synthetic string and measures dimensions before committing the switch.
     const selected: NonNullable<Config['embedder']> = directOpenAIEmbeddings
@@ -824,6 +853,7 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
           dimensions: 1536,
         }
       : { ...(config.embedder ?? { kind: 'ollama' }), model: slug };
+    if (selected.enabled === false) selected.enabled = true;
     let dim: number;
     try {
       dim = await (deps.probe ?? probeDimensions)({ ...config, embedder: selected }, slug, home);
