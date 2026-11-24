@@ -27,6 +27,7 @@ import {
   withActivityAllowance,
   withoutActivityAllowance,
 } from '../providers/activity-allowance.js';
+import { ReasoningConfigurationError } from '../providers/reasoning.js';
 import { type ContentBlock, type Message, ProviderError } from '../providers/types.js';
 import { buildContext, userAudios, userImages } from './context.js';
 import {
@@ -813,7 +814,7 @@ async function runClaimedTurn(
   } catch (error) {
     if (error instanceof ActivityAllowanceError)
       return releaseContinuable(scope, 'activity_budget', 0);
-    if (error instanceof ProviderError) {
+    if (error instanceof ProviderError || error instanceof ReasoningConfigurationError) {
       // Retry exhaustion is a yielded lease, not a connector exception — when
       // another attempt could still help. A retryable transport failure (or a
       // malformed-output cascade that spent itself in the loop) releases the
@@ -821,7 +822,7 @@ async function runClaimedTurn(
       // diagnostic is execution truth, delivered structurally, not a message
       // Muffin supposedly said. Only a non-retryable provider failure stays
       // terminal, on the pre-existing path below.
-      if (error.retryable) {
+      if (error instanceof ProviderError && error.retryable) {
         return releaseContinuable(
           scope,
           error.source === 'output' ? 'recovery_exhausted' : 'provider_transport',
@@ -830,8 +831,7 @@ async function runClaimedTurn(
             : MAX_TRANSPORT_RETRIES - scope.run.transportRetriesLeft,
         );
       }
-      // Retry exhaustion is a terminal turn result, not a connector exception.
-      // Persist a marked copy in TurnRecord before delivery so a failed send or
+      // Persist the terminal diagnostic before delivery so a failed send or
       // restart can recover this exact notice without invoking the provider.
       const text = providerErrorReply(error);
       scope.run.messages.push(markProviderErrorReplyForRecovery(text));
