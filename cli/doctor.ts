@@ -1493,7 +1493,9 @@ export async function runDoctor(
   } catch {
     egressPerRicerca = { allow: [] };
   }
-  const ricerca = diagnoseConfiguredSearch(config, egressPerRicerca, home, (ref) => readSecret(ref, home));
+  const ricerca = diagnoseConfiguredSearch(config, egressPerRicerca, home, (ref) =>
+    readSecret(ref, home),
+  );
   if (config.search !== undefined) {
     if (ricerca.on) {
       ok('capacità: web_search', `${ricerca.backend.id} — attivo`);

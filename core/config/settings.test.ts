@@ -4,7 +4,12 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runInit } from '../../cli/init.js';
 import { loadConfig, saveConfig } from './config.js';
-import { describeSettableKnobs, formatSetOutcome, SETTABLE_CONFIG_KEYS, setConfigKnob } from './settings.js';
+import {
+  describeSettableKnobs,
+  formatSetOutcome,
+  SETTABLE_CONFIG_KEYS,
+  setConfigKnob,
+} from './settings.js';
 
 /**
  * `setConfigKnob` — la funzione sola dietro `muffin config set`, `/config set`
@@ -25,7 +30,7 @@ describe('setConfigKnob — le chiavi escluse restano escluse', () => {
     const dir = home();
     const outcome = setConfigKnob(dir, 'non.esiste', '1');
     expect(outcome.ok).toBe(false);
-    if (!outcome.ok) expect(outcome.reason).toContain('non è un\'impostazione modificabile');
+    if (!outcome.ok) expect(outcome.reason).toContain("non è un'impostazione modificabile");
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -58,7 +63,12 @@ describe('setConfigKnob — traces.retentionDays', () => {
   it('scrive un intero positivo e lo si rilegge da un loadConfig fresco', () => {
     const dir = home();
     const outcome = setConfigKnob(dir, 'traces.retentionDays', '45');
-    expect(outcome).toMatchObject({ ok: true, key: 'traces.retentionDays', previous: '90', next: '45' });
+    expect(outcome).toMatchObject({
+      ok: true,
+      key: 'traces.retentionDays',
+      previous: '90',
+      next: '45',
+    });
     expect(loadConfig(dir).traces.retentionDays).toBe(45);
     rmSync(dir, { recursive: true, force: true });
   });
@@ -94,7 +104,10 @@ describe('setConfigKnob — search.maxResults', () => {
 
   it('scrive solo il numero quando la ricerca esiste già, senza toccare provider/chiave', () => {
     const dir = home();
-    const withSearch = { ...loadConfig(dir), search: { provider: 'tavily' as const, apiKeyRef: 'secret://search_key' } };
+    const withSearch = {
+      ...loadConfig(dir),
+      search: { provider: 'tavily' as const, apiKeyRef: 'secret://search_key' },
+    };
     saveConfig(withSearch, dir);
     const outcome = setConfigKnob(dir, 'search.maxResults', '7');
     expect(outcome).toMatchObject({ ok: true, next: '7' });
@@ -107,7 +120,10 @@ describe('setConfigKnob — search.maxResults', () => {
 
   it('rifiuta fuori dal range 1-20', () => {
     const dir = home();
-    saveConfig({ ...loadConfig(dir), search: { provider: 'tavily', apiKeyRef: 'secret://k' } }, dir);
+    saveConfig(
+      { ...loadConfig(dir), search: { provider: 'tavily', apiKeyRef: 'secret://k' } },
+      dir,
+    );
     expect(setConfigKnob(dir, 'search.maxResults', '0').ok).toBe(false);
     expect(setConfigKnob(dir, 'search.maxResults', '21').ok).toBe(false);
     expect(setConfigKnob(dir, 'search.maxResults', '20').ok).toBe(true);

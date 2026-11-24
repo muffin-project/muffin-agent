@@ -49,3 +49,28 @@ Primary sources checked on 2026-11-24:
 - [OpenClaw web search](https://docs.openclaw.ai/tools/web) documents both opt-in ChatGPT hosted search and a bounded hosted search worker behind managed search. The managed and provider-hosted routes do not operate simultaneously.
 - [Hermes search](https://hermes-agent.nousresearch.com/docs/user-guide/features/web-search) keeps named backend selections stable across newly available credentials. Its native one-turn hosted path also illustrates the trade-off of letting results enter the model before a client boundary.
 - [Node.js official release calendar](https://raw.githubusercontent.com/nodejs/Release/main/schedule.json)
+
+## Runtime trial on the Mac
+
+The compiled local composition `d44a7b3c` ran with embeddings disabled and the
+already selected `gpt-6.2-sol` model. The trial exchanged its synthetic local
+credential for the existing authorized connection in memory. It supplied
+neither search results nor a file and gave no approvals.
+
+- Without a usable search backend, the matched Node.js request on `44d5efdd`
+  used three main model calls and two discovery attempts. No source or file
+  was independently observed.
+- The same Node.js request on `d44a7b3c` executed hosted search. The inspected
+  repetition opened the exact returned GitHub repository URL. It then asked
+  for permission to open a different, model-composed raw URL and left no file.
+  This is the existing whole-URL provenance rule, in effect on a useful task.
+- A new request for the Python 3.14 support date used hosted search, opened
+  the exact cited PEP 745 over native HTTP and wrote the requested two-line
+  file with the source and `2030-10`. SQLite recorded the search, read and
+  reversible write. Independent file and source checks passed with no
+  approvals. This took six main model requests plus one hosted request and
+  approximately 32.5 seconds.
+
+These runs exercised the compiled turn engine and real network operations on
+a temporary Home. The installed Telegram journey and user-facing onboarding
+remain to be verified with the integrated build.
