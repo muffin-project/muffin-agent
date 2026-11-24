@@ -312,6 +312,37 @@ export class DurableLock {
   }
 
   /**
+   * Mint a new token for a row `heldBy` says nobody holds, inside one
+   * immediate transaction that contains that check and the mint.
+   *
+   * ADR-0106 slice 1. This is not `refresh`: the expired token stays expired
+   * (P21). It is not `acquire`'s `onClaim` either: callers that store uptime
+   * beside the claim must not move it here. A live holder (`heldBy` returns
+   * a pid) leaves `myHolderId` untouched.
+   */
+  reacquire(
+    now: Date,
+    pid: number = process.pid,
+  ): { renewed: true } | { renewed: false; holder: number } {
+    const claim = this.db.transaction((self: number, at: string): number | null => {
+      const holder = this.currentHolder(Date.parse(at));
+      if (holder !== null) return holder;
+      const holderId = mintHolderId(this.db, self);
+      this.claimStmt.run(self, at, holderId);
+      this.myHolderId = holderId;
+      return null;
+    });
+    const held = claim.immediate(pid, now.toISOString()) as number | null;
+    if (held !== null) return { renewed: false, holder: held };
+    return { renewed: true };
+  }
+
+  /** The token this instance minted. Null until `acquire` or `reacquire` wins. */
+  ownHolderId(): string | null {
+    return this.myHolderId;
+  }
+
+  /**
    * Push the staleness horizon out — the heartbeat of a long-lived holder.
    *
    * Guarded on **both** `pid` and `holder_id`, and — new since P21 — on the

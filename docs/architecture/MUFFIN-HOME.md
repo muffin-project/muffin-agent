@@ -151,12 +151,13 @@ That file is the schema. The columns on the current `dev` row are:
 | `since` | When this process acquired. Must not move on a beat. |
 | `status` | What the holder is doing, for `muffin gateway status` and `doctor`. |
 | `holder_id` | Fencing token for this acquisition (ADR-0035, amendment 3). |
+| `exited_at` | When this process actually left (ADR-0106 slice 1). Empty while it holds the row. |
+| `exit_reason` | Why that exit happened (`SIGTERM`, `lock`, …). `doctor` reads it only when no live holder remains. |
 
-[ADR-0106](../decisions/0106-il-gateway-e-un-ruolo.md) adds four columns. They
-are not in the schema until the slice that migrates them: `mode`
-(`persistent` or `ephemeral`, slice 2), `supervisor` (`systemd`, `launchd`,
-`docker`, `external`, or `none`, slice 4), `exited_at` and `exit_reason`
-(written when the process actually leaves, slice 1). A re-acquire after an
+[ADR-0106](../decisions/0106-il-gateway-e-un-ruolo.md) still adds `mode`
+(`persistent` or `ephemeral`, slice 2) and `supervisor` (`systemd`, `launchd`,
+`docker`, `external`, or `none`, slice 4). Those two are not in the schema
+until their slices migrate them. A re-acquire after an
 expired lease mints a new `holder_id` (`mintHolderId`, not `GatewayLock.claim`)
 and moves `taken_at`. It does not move `since`, and it does not revive the old
 token. An incarnation that is still locked does not by itself mean the holder
@@ -174,8 +175,8 @@ E, a separate CRITICAL amendment to ADR-0094 (nullable `beat_boot` and
 `beat_mono_ms`; `heldBy` and `refresh` compare `process.hrtime` within the
 same boot; old rows keep today's rule; wall clock for display only),
 decided and scheduled after slices 1–3 and before slice 4. That amendment
-is not written here, and those two columns are not part of the four above.
-A tolerance on a future timestamp is rejected. Until the amendment,
+is not written here. `beat_boot` and `beat_mono_ms` are not columns of this
+schema. A tolerance on a future timestamp is rejected. Until the amendment,
 `doctor` flags a future `taken_at` and `muffin gateway unlock --confirm`
 releases the row. ADR-0094 still calls that process alive until the hard
 horizon.
