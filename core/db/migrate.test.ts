@@ -73,7 +73,10 @@ it('migrates populated v11 owner proposals without assigning them a new source',
   const { db, backups } = fileDb();
   const legacy = [{ version: 11, description: 'v11 fixture', up: () => {} }];
   try {
-    const oldDdl = MEMORY_SCHEMA.replace('  owner_ingress_episode_id INTEGER REFERENCES episodes(id),\n', '');
+    const oldDdl = MEMORY_SCHEMA.replace(
+      '  owner_ingress_episode_id INTEGER REFERENCES episodes(id),\n',
+      '',
+    );
     expect(oldDdl).not.toBe(MEMORY_SCHEMA);
     db.exec(oldDdl);
     db.exec(`INSERT INTO memory_proposals
@@ -88,7 +91,8 @@ it('migrates populated v11 owner proposals without assigning them a new source',
 
     expect(result.applied).toEqual([12]);
     expect(db.prepare('SELECT * FROM memory_proposals').get()).toEqual({
-      ...(before as object), owner_ingress_episode_id: null,
+      ...(before as object),
+      owner_ingress_episode_id: null,
     });
     expect(result.backup).not.toBeNull();
     const snapshot = new DatabaseCtor(result.backup!, { readonly: true });
@@ -517,7 +521,9 @@ describe('migrazioni 4 e 5 — todos.due_at, poi todos.due_tier', () => {
     expect(righe.n).toBe(200);
     // NULL, mai un default che fingerebbe una provenienza: le righe vecchie
     // tengono il gate solo-tier finché non vengono riarmate.
-    const armate = db.prepare(`SELECT count(*) AS n FROM todos WHERE armed_turn_id IS NOT NULL`).get() as {
+    const armate = db
+      .prepare(`SELECT count(*) AS n FROM todos WHERE armed_turn_id IS NOT NULL`)
+      .get() as {
       n: number;
     };
     expect(armate.n).toBe(0);

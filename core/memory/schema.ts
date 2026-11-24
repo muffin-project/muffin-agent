@@ -312,7 +312,9 @@ export const REQUEST_PREDICATE_STEMS = ['asked', 'asks'] as const;
 
 /** Whether a predicate names a request, on the stems above. */
 export function isRequestPredicate(predicate: string): boolean {
-  return REQUEST_PREDICATE_STEMS.some((stem) => predicate === stem || predicate.startsWith(`${stem}_`));
+  return REQUEST_PREDICATE_STEMS.some(
+    (stem) => predicate === stem || predicate.startsWith(`${stem}_`),
+  );
 }
 
 /**
