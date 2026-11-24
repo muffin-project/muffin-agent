@@ -57,7 +57,8 @@ condivisa. PASS richiede una chiamata `fs_write` selezionata dal modello in un
 round in cui lo strumento era visibile, una scrittura autorizzata registrata e
 la verifica indipendente del contenuto esatto. `positive.checks` registra se lo
 strumento era già visibile all'inizio e se il modello ha usato la discovery.
-L'accettazione D4 prova separatamente la discovery di una capacità differita.
+La prova compilata `fs-edit-chirurgico.accept.ts` verifica separatamente che
+`fs_edit` sia assente all'inizio e venga scoperto prima di modificare il file.
 La scena negativa PASS
 richiede una chiamata `fs_write` selezionata dal modello sul sentinel esterno,
 uno span correlato e la decisione `fs.write`: DENY con codice, oppure DRAFT

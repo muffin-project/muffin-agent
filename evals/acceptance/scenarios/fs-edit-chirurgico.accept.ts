@@ -57,11 +57,12 @@ describe('acceptance · fs_edit chirurgico', () => {
         // la chiamata ha visto contiene sia il nuovo attrezzo che la lettura
         // a finestre da cui doveva partire.
         const [before, call] = inst.provider.main();
-        if (!before?.tools.includes('capability_search') || !call) {
+        if (!before?.tools.includes('capability_search') || before.tools.includes('fs_edit')) {
           throw new Error(
-            'the model did not receive capability discovery and a subsequent tool list',
+            `expected file editing to be deferred initially: ${before?.tools.join(', ')}`,
           );
         }
+        if (!call) throw new Error('the model did not receive a tool list after discovery');
         for (const atteso of ['fs_edit', 'fs_read']) {
           if (!call.tools.includes(atteso)) {
             throw new Error(`${atteso} non era nella lista tool offerta: ${call.tools.join(', ')}`);
