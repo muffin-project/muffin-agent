@@ -8,9 +8,9 @@ A deferred shell approval can reach a terminal answered turn with an unused gran
 
 ## Decision
 
-A new deferred consent for a built-in shell tool identifies the original durable tool call and a digest of its arguments and canonical workspace scope. The runtime validates the directory before asking. A resumed turn reads the saved invocation, applies current policy and starts only the same command in the same scope. Consuming the grant and writing the effect intent share a transaction fenced by the active turn claim.
+A new deferred consent for a built-in shell call that survives checkpoint redaction unchanged identifies the original durable tool call and a digest of its arguments and canonical workspace scope. The runtime validates the directory before asking. A resumed turn reads the saved invocation, applies current policy and starts only the same command in the same scope. Consuming the grant and writing the effect intent share a transaction fenced by the active turn claim.
 
-The first provider request after approval receives the result of that original tool call. A denial or expired grant has no effect. A durable intent without a result is uncertain and the command is not repeated. Previously stored approvals lack this link and keep the legacy replay protocol during recovery. Immediate consent remains available. A tool can use this protocol when it can verify the entire scope of a saved invocation.
+The first provider request after approval receives the result of that original tool call. A denial or expired grant has no effect. A durable intent without a result is uncertain and the command is not repeated. Previously stored approvals and calls that the checkpoint must redact keep the legacy replay protocol. The runtime does not put unredacted arguments into a second store to support this feature. Immediate consent remains available. A tool can use this protocol when it can verify the entire scope of a saved invocation.
 
 ## Consequences
 

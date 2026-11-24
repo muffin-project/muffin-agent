@@ -420,7 +420,14 @@ export async function runTool(
       let preparedScope: string | undefined;
       try {
         preparedScope = tool.approvalScope?.(call.args);
-        if (preparedScope !== undefined) invocation = approvalInvocation(call, preparedScope);
+        // A checkpoint deliberately redacts secrets. Leave a consent for a
+        // command that cannot be recovered exactly on the existing retry path.
+        if (preparedScope !== undefined) {
+          const checkpointArgs = JSON.stringify(call.args ?? null);
+          if (redactText(checkpointArgs) === checkpointArgs) {
+            invocation = approvalInvocation(call, preparedScope);
+          }
+        }
       } catch (error) {
         span.end({ status: 'error', error: 'approval_resource_unavailable' });
         emitToolEnd(true);

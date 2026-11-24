@@ -932,8 +932,8 @@ execution.
 Delivery is an effect with its own uncertainty: completed computation and
 definitely delivered output are different facts.
 
-New deferred shell approvals bind the original checkpointed invocation to the
-canonical workspace and working directory. On wake, the current kernel rules
+New deferred shell approvals whose argument payload survives checkpoint redaction
+bind the original invocation to the canonical workspace and working directory. On wake, the current kernel rules
 on that call, and one transaction consumes the consent and records the effect
 intent under the active turn claim. Only then can the existing contained
 executor run it. The original tool result is recovered from the journal when

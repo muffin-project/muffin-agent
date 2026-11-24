@@ -31,3 +31,5 @@ The primary falsifier is a real workspace file and one receipt after a gateway r
 - Focused test coverage includes another scope, denied and late consent, a stale or cancelled claim, current policy refusal, a duplicate consumer and atomic rollback of both the grant and intent on a failed write.
 
 The Telegram and model in these proofs were fixtures. The workspace bytes, macOS shell containment, SQLite decisions, intent/outcome and gateway restarts were real in isolated profiles. Owner installation and native Telegram are separate acceptance.
+
+The System One shadow fixture includes a token that the checkpoint must redact. The first candidate did not consume that grant, because the persisted arguments could not match the original digest. The adjusted candidate keeps the existing replay behavior for this case and does not persist another copy of the original arguments.

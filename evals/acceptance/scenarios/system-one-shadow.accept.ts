@@ -93,6 +93,14 @@ describe('acceptance · System One giudica gli ask in shadow, il pulsante decide
             args: { command: COMANDO, cwd: '.', description: 'scarica i dati di servizio' },
           },
         },
+        // The fixture's secret is deliberately redacted from the durable
+        // checkpoint. This invocation retains the legacy retry path.
+        {
+          tool: {
+            name: 'shell_run_write',
+            args: { command: COMANDO, cwd: '.', description: 'scarica i dati di servizio' },
+          },
+        },
         { text: 'fatto: i dati sono arrivati' },
       ],
       env: { MUFFIN_GATEWAY_TICK_MS: '200' },
