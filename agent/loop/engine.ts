@@ -1,3 +1,4 @@
+import { speakerAttributedContent } from '../../core/memory/authorship.js';
 import { recall, recallTaint, renderForPrompt } from '../../core/memory/recall.js';
 import { memoryWriteCapability } from '../../core/policy/doors.js';
 import type { CapabilityId, Decision, DecisionRequest } from '../../core/policy/types.js';
@@ -426,22 +427,27 @@ async function runClaimedTurn(
     maxToolsExposed: deps.profile.maxToolsExposed,
     ...(discoveryTool === undefined ? {} : { discoveryTool }),
   });
-  const readerName = 'http_get';
-  // A link in the direct owner request is a selection hint only. Resolve and
-  // authorize the actual URL in the ordinary tool call.
-  const preferReader =
+  // Prioritize an authored link without treating forwards or quotations as
+  // owner instructions. The actual URL is authorized in the ordinary call.
+  const linkReader =
     input.principal.kind === 'owner' &&
     input.inputOrigin !== 'external' &&
-    input.text.match(/\bhttps?:\/\/[^\s<>"'`]+/gi)?.some((url) => URL.canParse(url)) &&
-    eligibleTools.some((tool) => tool.spec.name === readerName) &&
-    !capabilityExposure.exposed.some((tool) => tool.spec.name === readerName);
+    input.text.includes('://') &&
+    speakerAttributedContent(input.text)
+      .match(/\bhttps?:\/\/[^\s<>"'`]+/gi)
+      ?.some((url) => URL.canParse(url) || URL.canParse(url.replace(/[),.!?;]+$/, '')))
+      ? eligibleTools.find((tool) => tool.spec.name === 'http_get')
+      : undefined;
+  // The URL capability rejects a missing resource. That synthetic probe
+  // distinguishes availability (e.g. safe mode) from the eventual URL check.
+  const readerDecision = linkReader && snapshot.check(linkReader.capability, { kind: 'none' }, {});
+  const firstName =
+    readerDecision?.effect === 'deny' && readerDecision.code !== 'resource_denied'
+      ? undefined
+      : linkReader?.spec.name;
   const preloaded =
     capabilityExposure.pressured && deps.profile.maxToolsExposed > 1
-      ? preloadCapabilitiesForTask(
-          capabilityExposure,
-          preferReader ? readerName : input.text,
-          preferReader ? 1 : 2,
-        )
+      ? preloadCapabilitiesForTask(capabilityExposure, input.text, 2, firstName)
       : null;
   const exposed = capabilityExposure.exposed;
   turn.setAttributes({

@@ -3,56 +3,54 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { runInit } from '../cli/init.js';
+import { composeTurnText } from '../connectors/shared/ingress/compose.js';
 import { runTurn } from './loop.js';
 import type { ChatCall, Provider } from './providers/types.js';
 import { buildRuntime } from './runtime.js';
 
 const link = 'https://example.org/calendar.json';
-const request = `Consulta il calendario a ${link} e salva la data in supporto.md.`;
+// Strong lexical candidates make it observable whether the reader displaces one
+// ordinary candidate or replaces the whole selection.
+const work = 'fs_edit supporto.md; todo promemoria.';
+const request = `Consulta il calendario a ${link}. ${work}`;
+const quote = { source: 'quoted', tier: 2, text: link } as const;
+const author = { source: 'author', tier: 0, text: work } as const;
 
 it.each([
-  {
-    label: 'a direct request with a link',
-    text: request,
-    origin: 'owner',
-    available: true,
-    visible: true,
-  },
-  {
-    label: 'a link whose concrete call is denied',
-    text: request,
-    origin: 'owner',
-    available: true,
-    visible: true,
-    deny: true,
-  },
+  { label: 'a direct request with a link', text: request, first: 'http_get' },
+  { label: 'a link whose concrete call is denied', text: request, first: 'http_get', deny: true },
   {
     label: 'the same text from an external input',
     text: request,
-    origin: 'external',
-    available: true,
-    visible: false,
+    first: 'fs_edit',
+    external: true,
+  },
+  { label: 'a short unrelated request', text: work, first: 'fs_edit' },
+  { label: 'a missing reader', text: request, first: 'fs_edit', missing: true },
+  { label: 'a denied reader', text: request, first: 'fs_edit', safeMode: true },
+  { label: 'an invalid URL-shaped token', text: `https://? ${work}`, first: 'fs_edit' },
+  {
+    label: 'a Markdown link with a port',
+    text: `[calendario](https://example.org:8443) ${work}`,
+    first: 'http_get',
   },
   {
-    label: 'a short unrelated request',
-    text: 'Dimmi il nome del modello',
-    origin: 'owner',
-    available: true,
-    visible: false,
+    label: 'a link only in a quote',
+    text: composeTurnText([author, quote]),
+    first: 'fs_edit',
+    quoted: true,
   },
   {
-    label: 'a missing reader',
-    text: request,
-    origin: 'owner',
-    available: false,
-    visible: false,
+    label: 'a link only in a forward',
+    text: composeTurnText([author, { ...quote, source: 'forwarded' }]),
+    first: 'fs_edit',
+    quoted: true,
   },
   {
-    label: 'an invalid URL-shaped token',
-    text: 'Notes: https://? is not an address.',
-    origin: 'owner',
-    available: true,
-    visible: false,
+    label: 'an authored link alongside a quote',
+    text: composeTurnText([{ ...author, text: request }, quote]),
+    first: 'http_get',
+    quoted: true,
   },
 ] as const)('projects the native reader for $label', async (scene) => {
   const root = mkdtempSync(join(tmpdir(), 'muffin-supplied-link-'));
@@ -79,16 +77,20 @@ it.each([
         };
       },
     };
-    const tools = scene.available
-      ? runtime.deps.tools
-      : runtime.deps.tools.filter((tool) => tool.spec.name !== 'http_get');
+    const tools =
+      'missing' in scene
+        ? runtime.deps.tools.filter((tool) => tool.spec.name !== 'http_get')
+        : runtime.deps.tools;
     await runTurn(
       {
         ...runtime.deps,
         tools,
-        profile: { ...runtime.deps.profile, maxToolsExposed: 6 },
+        profile: { ...runtime.deps.profile, maxToolsExposed: 8 },
         provider,
         decide(decision) {
+          if ('safeMode' in scene && decision.capability === 'sys.http') {
+            return { effect: 'deny', code: 'safe_mode' };
+          }
           if (
             denyCall &&
             decision.capability === 'sys.http' &&
@@ -101,12 +103,13 @@ it.each([
         },
       },
       {
-        principal: { kind: 'owner', connector: 'cli', externalId: 'local' },
+        principal: { kind: 'owner', connector: 'telegram', externalId: 'local' },
         tenant: 'host',
-        surface: 'cli',
+        surface: 'telegram',
         session: runtime.deps.sessions.open('supplied-link'),
         text: scene.text,
-        inputOrigin: scene.origin,
+        inputOrigin: 'external' in scene ? 'external' : 'owner',
+        contentTaint: 'quoted' in scene ? 2 : 0,
       },
     );
     expect(calls).toHaveLength(denyCall ? 2 : 1);
@@ -118,8 +121,9 @@ it.each([
       expect(result).toMatchObject({ isError: true });
     }
     const names = calls[0]?.tools?.map((tool) => tool.name) ?? [];
-    expect(names.includes('http_get')).toBe(scene.visible);
     expect(names).toContain('capability_search');
+    expect(names[names.indexOf('capability_search') + 1]).toBe(scene.first);
+    expect(names).toContain('fs_edit');
     expect(
       runtime.db.prepare("SELECT call_id FROM turn_tool_calls WHERE tool = 'http_get'").all(),
     ).toEqual([]);
