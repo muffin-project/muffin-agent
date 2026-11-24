@@ -36,7 +36,7 @@ import {
   realSupervisorProbes,
   type SupervisorProbes,
 } from '../core/gateway/supervisor.js';
-import { LAUNCHD_LABEL, SERVICE_NAME } from '../core/gateway/unit.js';
+import { LAUNCHD_LABEL, SERVICE_NAME, STOP_TIMEOUT_SEC } from '../core/gateway/unit.js';
 import { keyForEndpoints } from './model.js';
 import { promptLine } from './prompt.js';
 
@@ -739,19 +739,28 @@ export function noteDopoLoSwing(args: {
  * second `launchctl` string that could drift from this one on the next macOS
  * quirk.
  */
-export function restartCommand(platform: NodeJS.Platform): { printable: string; argv: string[] } {
+export function restartCommand(platform: NodeJS.Platform): {
+  printable: string;
+  argv: string[];
+  timeoutMs: number;
+} {
+  // The supervisor can wait for the running gateway to drain before it starts
+  // the replacement. The CLI must give it the same window as the service.
+  const timeoutMs = STOP_TIMEOUT_SEC * 1000;
   if (platform === 'darwin') {
     const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
     const target = `gui/${uid}/${LAUNCHD_LABEL}`;
     return {
       argv: ['launchctl', 'kickstart', '-k', target],
       printable: `launchctl kickstart -k ${target}`,
+      timeoutMs,
     };
   }
   const unit = `${SERVICE_NAME}.service`;
   return {
     argv: ['systemctl', '--user', 'restart', unit],
     printable: `systemctl --user restart ${unit}`,
+    timeoutMs,
   };
 }
 
@@ -832,16 +841,18 @@ export function restartVerdict(args: {
       restarted: true,
       line: args.commandOk
         ? base
-        : `${base}\n(il comando di riavvio aveva segnalato un errore, ma il gateway è comunque ripartito su un processo nuovo — probabile scontro transitorio con lo stato del supervisore appena dopo lo swing del symlink, non c'è altro da fare. Dettaglio del comando: ${args.commandDetail || '(nessuno)'})`,
+        : `${base}\nIl supervisore ha segnalato un errore. ${args.commandDetail || 'Nessun dettaglio disponibile.'}`,
     };
   }
+  const lastSeen =
+    args.pidAfter === null
+      ? 'nessun processo attivo rilevato'
+      : `serve ancora il pid ${args.pidAfter}`;
   return {
     restarted: false,
     line:
-      `il riavvio non è avvenuto: il gateway servito adesso è ancora lo stesso di prima (${chi}) — sei ancora sulla build vecchia.` +
-      (args.commandOk
-        ? ' Il comando è uscito 0, ma nessun processo nuovo ha preso il posto entro il tempo di attesa.'
-        : `\n${args.commandDetail || '(il comando non è uscito 0 e non ha detto perché)'}`),
+      `Riavvio non confermato entro il tempo di attesa (${lastSeen}). Controlla con \`muffin gateway status\`.` +
+      (args.commandOk ? '' : `\n${args.commandDetail || 'Il supervisore ha segnalato un errore.'}`),
   };
 }
 
@@ -860,7 +871,7 @@ export async function offerGatewayRestart(
     yes: boolean;
     platform: NodeJS.Platform;
     promptFn?: typeof promptLine;
-    restart?: (argv: string[]) => SpawnResult;
+    restart?: (argv: string[], timeoutMs: number) => SpawnResult;
     /** Same injection seam `cli/doctor.ts` uses for `checkSupervisor` — real OS probes by default, overridden so a test never shells out to a real systemctl/launchctl. */
     supervisorProbes?: Partial<SupervisorProbes>;
     gatewayRunning?: boolean;
@@ -873,7 +884,8 @@ export async function offerGatewayRestart(
   },
 ): Promise<void> {
   const promptFn = opts.promptFn ?? promptLine;
-  const restart = opts.restart ?? ((argv: string[]) => run(argv[0]!, argv.slice(1), home, 30_000));
+  const restart =
+    opts.restart ?? ((argv, timeoutMs) => run(argv[0]!, argv.slice(1), home, timeoutMs));
   const readGatewayPid = opts.readGatewayPid ?? (() => currentGatewayPid(home));
   const status = checkSupervisor(
     opts.platform,
@@ -901,7 +913,7 @@ export async function offerGatewayRestart(
     return;
   }
 
-  const { printable, argv } = restartCommand(opts.platform);
+  const { printable, argv, timeoutMs } = restartCommand(opts.platform);
   /**
    * Verifica lo stato dopo, non l'output (regola della casa). Il comando che
    * muta il supervisore viene comunque eseguito ed emesso — l'owner deve
@@ -913,7 +925,7 @@ export async function offerGatewayRestart(
   const doRestart = async (): Promise<void> => {
     process.stderr.write(`\n${printable}\n`);
     const pidBefore = readGatewayPid();
-    const r = restart(argv);
+    const r = restart(argv, timeoutMs);
     const commandDetail = (r.stderr || r.stdout).trim();
     const pidAfter = await waitForGatewayPid(readGatewayPid, pidBefore, {
       attempts: opts.verifyAttempts,

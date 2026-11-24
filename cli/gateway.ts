@@ -564,7 +564,10 @@ export async function cmdGatewayRestart(
   deps: {
     platform?: NodeJS.Platform;
     supervisorProbes?: Partial<SupervisorProbes>;
-    restart?: (argv: string[]) => { status: number; stdout: string; stderr: string };
+    restart?: (
+      argv: string[],
+      timeoutMs: number,
+    ) => { status: number; stdout: string; stderr: string };
     readGatewayPid?: () => number | null;
     sleep?: (ms: number) => Promise<void>;
     verifyAttempts?: number;
@@ -573,7 +576,8 @@ export async function cmdGatewayRestart(
 ): Promise<number> {
   const platform = deps.platform ?? process.platform;
   const readGatewayPid = deps.readGatewayPid ?? (() => currentGatewayPid(home));
-  const restart = deps.restart ?? ((argv: string[]) => run(argv[0]!, argv.slice(1), home, 30_000));
+  const restart =
+    deps.restart ?? ((argv, timeoutMs) => run(argv[0]!, argv.slice(1), home, timeoutMs));
 
   const status = checkSupervisor(platform, home, readGatewayPid() !== null, {
     ...realSupervisorProbes(),
@@ -584,10 +588,10 @@ export async function cmdGatewayRestart(
     return 1;
   }
 
-  const { printable, argv } = restartCommand(platform);
+  const { printable, argv, timeoutMs } = restartCommand(platform);
   process.stderr.write(`${printable}\n`);
   const pidBefore = readGatewayPid();
-  const r = restart(argv);
+  const r = restart(argv, timeoutMs);
   const commandDetail = (r.stderr || r.stdout).trim();
   const pidAfter = await waitForGatewayPid(readGatewayPid, pidBefore, {
     attempts: deps.verifyAttempts,
