@@ -42,6 +42,7 @@ export type CapabilityLoadResult = {
 
 export type CapabilityExposureSnapshot = {
   readonly visible: readonly string[];
+  readonly eligibleCount: number;
   readonly pressured: boolean;
   readonly hiddenCount: number;
 };
@@ -58,15 +59,14 @@ export type CapabilityDiscoveryPort = {
   readonly searchAndLoad: (query: string, maxResults: number) => CapabilityLoadResult;
   /** Apply the batch at the model boundary and return whether discovery remains available. */
   readonly activatePending: () => boolean;
-  /** Current model-visible projection, for truthful runtime inspection. */
-  readonly snapshot: () => CapabilityExposureSnapshot;
 };
 
 export type CapabilityExposure<T extends CapabilityTool> = {
   /** Mutable only at round boundaries; runTool receives this same array. */
   readonly exposed: T[];
   readonly pressured: boolean;
-  readonly hiddenCount: number;
+  /** Current schema menu in both selective and flat mode. */
+  readonly snapshot: () => CapabilityExposureSnapshot;
   readonly discovery?: CapabilityDiscoveryPort | undefined;
 };
 
@@ -171,21 +171,21 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
   const coreNames = new Set(core.map((tool) => tool.spec.name));
   const searchable = catalog.filter((tool) => !coreNames.has(tool.spec.name));
 
-  if (searchable.length === 0 || input.discoveryTool === undefined) {
-    return {
-      exposed: [...catalog],
-      pressured: false,
-      hiddenCount: 0,
-    };
-  }
-  const discoveryTool = input.discoveryTool;
-
-  const fixed = [...core, discoveryTool];
+  const discoveryTool = searchable.length === 0 ? undefined : input.discoveryTool;
+  const fixed = discoveryTool === undefined ? catalog : [...core, discoveryTool];
   const exposed = [...fixed];
+  let discoveryAvailable = discoveryTool !== undefined;
+  const snapshot = (): CapabilityExposureSnapshot => ({
+    visible: exposed.map((tool) => tool.spec.name),
+    eligibleCount: input.eligible.length,
+    pressured: discoveryAvailable,
+    hiddenCount: discoveryAvailable ? searchable.length : 0,
+  });
+
+  if (discoveryTool === undefined) return { exposed, pressured: false, snapshot };
 
   let pending: Map<string, T> | null = null;
   let loaded: T[] = [];
-  let discoveryAvailable = true;
 
   const discovery: CapabilityDiscoveryPort = {
     searchAndLoad(query, maxResults) {
@@ -224,20 +224,12 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
       }
       return discoveryAvailable;
     },
-
-    snapshot() {
-      return {
-        visible: exposed.map((tool) => tool.spec.name),
-        pressured: discoveryAvailable,
-        hiddenCount: discoveryAvailable ? searchable.length : 0,
-      };
-    },
   };
 
   return {
     exposed,
     pressured: true,
-    hiddenCount: searchable.length,
+    snapshot,
     discovery,
   };
 }

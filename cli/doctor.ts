@@ -1525,9 +1525,8 @@ export async function runDoctor(
     );
   }
 
-  // D2, 2026-11-21: there is no numeric exposure cap. The native catalogue
-  // is authority-filtered, a small core stays visible, and the rest load
-  // through capability_search. baseToolOrder is the catalogue doctor counts.
+  // baseToolOrder is the native catalogue doctor counts. Each turn projects
+  // that catalogue according to its authority and access to discovery.
   const ordineBase = baseToolOrder({
     sandboxAvailable: boundary.usable,
     searchOn: ricerca.on,
@@ -1535,7 +1534,7 @@ export async function runDoctor(
   }).filter((name) => name !== 'capability_search');
   ok(
     'capacità: tool',
-    `${ordineBase.length} capability native nel profilo "${resolvedProfile.name}": il nucleo resta visibile, le altre si caricano con capability_search`,
+    `${ordineBase.length} capability native nel profilo "${resolvedProfile.name}". Quando il turno può usare capability_search, il nucleo resta visibile e le altre si caricano su richiesta. Senza la ricerca, il modello vede l'intero catalogo consentito.`,
   );
 
   // #213 upstream (cited in ADR-0026): on Linux the sandbox bridges its

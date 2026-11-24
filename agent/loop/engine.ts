@@ -432,12 +432,12 @@ async function runClaimedTurn(
     ? preloadCapabilitiesForTask(capabilityExposure, input.text, 2)
     : null;
   const exposed = capabilityExposure.exposed;
-  const initialProjection = capabilityExposure.discovery?.snapshot();
+  const initialProjection = capabilityExposure.snapshot();
   turn.setAttributes({
     'muffin.context.class': turnClass,
     'muffin.context.tools_exposed': exposed.length,
-    'muffin.context.tools_hidden': initialProjection?.hiddenCount ?? capabilityExposure.hiddenCount,
-    'muffin.context.capability_discovery': initialProjection?.pressured ?? false,
+    'muffin.context.tools_hidden': initialProjection.hiddenCount,
+    'muffin.context.capability_discovery': initialProjection.pressured,
     'muffin.context.tools_preloaded': preloaded?.loaded.length ?? 0,
   });
 
@@ -462,6 +462,7 @@ async function runClaimedTurn(
     ...(input.jobId === undefined ? {} : { jobId: input.jobId }),
     sessionId: input.session.id,
     runtimeInfo: deps.runtimeInfo,
+    capabilityExposure: capabilityExposure.snapshot,
     taint: () => snapshot.currentTaint(),
     intrinsicTaint: () => snapshot.intrinsicTaint(),
     suspend: (spec) => {
@@ -706,7 +707,7 @@ async function runClaimedTurn(
         !deps.memory.store.hasActiveFacts(input.tenant),
     );
 
-    if (initialProjection?.pressured === true) {
+    if (initialProjection.pressured) {
       // Local progressive discovery is not provider magic: the model must know
       // that the current schema menu is intentionally partial. Keep that fact
       // in volatile harness context (never owner words), immediately before

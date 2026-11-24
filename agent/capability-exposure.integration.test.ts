@@ -1,11 +1,14 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
+import { runInit } from '../cli/init.js';
+import { paths } from '../core/config/config.js';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
+import { seal } from '../core/rot/verify.js';
 import { JobStore } from '../core/scheduler/jobs.js';
 import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
@@ -15,6 +18,7 @@ import { CAPABILITY_DISCOVERY_GUIDANCE } from './capability-exposure.js';
 import { type LoopDeps, type RegisteredTool, runTurn } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatCall, ChatResult, Provider } from './providers/types.js';
+import { buildRuntime } from './runtime.js';
 import {
   capabilityDiscoveryCapability,
   makeCapabilitySearchTool,
@@ -489,6 +493,51 @@ describe('#469 production-path capability discovery', () => {
       }
     },
   );
+
+  it('reports the actual flat menu in sys_inspect when sealed policy denies discovery', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'muffin-capability-inspect-'));
+    const workspace = mkdtempSync(join(tmpdir(), 'muffin-capability-inspect-ws-'));
+    runInit({ home, apiKey: 'sk-never-called' });
+    writeFileSync(
+      join(paths(home).rot, 'policy.json'),
+      JSON.stringify({ schemaVersion: 1, neverAtRuntime: [capabilityDiscoveryCapability.id] }),
+    );
+    seal(home, '1', new Date());
+    const runtime = buildRuntime(home, workspace);
+    const provider = new Scripted([toolCall('inspect', 'sys_inspect', {}), answer('done')]);
+
+    try {
+      const result = await runTurn(
+        { ...runtime.deps, provider, prepareTurn: undefined, memory: undefined },
+        {
+          principal: owner,
+          tenant: 'host',
+          surface: 'cli',
+          session: runtime.deps.sessions.open('capability-inspect'),
+          text: 'Inspect the current tool menu.',
+        },
+      );
+
+      expect(result.stopped).toBe('answered');
+      const exposed = provider.seen[0]?.tools?.map(({ name }) => name) ?? [];
+      expect(exposed).toContain('sys_inspect');
+      expect(exposed).not.toContain('capability_search');
+      const report = provider.seen[1]?.messages
+        .flatMap(({ content }) => content)
+        .find((block) => block.type === 'tool_result' && block.toolCallId === 'inspect');
+      if (report?.type !== 'tool_result') throw new Error('sys_inspect result missing');
+      expect(report.isError).not.toBe(true);
+      expect(report.content.split('\n')).toContain(
+        `capability esposte: ${exposed.sort().join(', ')}`,
+      );
+      expect(report.content).not.toContain('catalogo discoverable');
+      expect(report.content).toContain(
+        "Senza la ricerca, il modello vede l'intero catalogo consentito.",
+      );
+    } finally {
+      runtime.close();
+    }
+  });
 
   it('keeps forbidden tools out of discovery while direct guesses still meet the kernel', async () => {
     const home = mkdtempSync(join(tmpdir(), 'muffin-capability-authority-'));
