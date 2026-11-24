@@ -169,7 +169,12 @@ describe('sys_inspect dice cosa sta usando adesso', () => {
     const result = await makeInspectTool(finto()).handler(
       {},
       toolContext({
-        toolExposure: () => ({ visible: ['bound_tool'], pressured: false, hiddenCount: 0 }),
+        capabilityExposure: () => ({
+          visible: ['bound_tool'],
+          pressured: false,
+          hiddenCount: 0,
+          eligibleCount: 1,
+        }),
       }),
     );
     expect(result.content).toContain('capability esposte: bound_tool\n');
