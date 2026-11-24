@@ -175,10 +175,9 @@ export async function proposeMemory(
   );
   const statedByOwner = (quote: string): boolean =>
     quote.includes(object) && (subject === 'owner' || quote.includes(subject));
+  const ownerStatement = instruction !== null && statedByOwner(instruction) ? instruction : null;
   const producer =
-    instruction === null || !statedByOwner(instruction)
-      ? ('agent-inference' as const)
-      : ('owner-stated' as const);
+    ownerStatement === null ? ('agent-inference' as const) : ('owner-stated' as const);
 
   let evidenceIds: number[] = [];
   if (raw.evidence_ids !== undefined) {
@@ -201,11 +200,11 @@ export async function proposeMemory(
       evidenceIds.push(n);
     }
   }
-  // Cite the durable ingress when no explicit source was supplied. The owner's
-  // original words remain evidence; this tool's extracted tuple is inferred.
-  if (evidenceIds.length === 0) {
-    const ingress = deps.store.episodeIdByTurnId(ctx.tenant, ctx.turnId);
-    if (ingress !== null) evidenceIds = [ingress];
+  // Keep the verified wording with its own ingress, even when the model cites
+  // additional episodes. The tuple alone loses signals such as "from now on".
+  const ingress = deps.store.episodeIdByTurnId(ctx.tenant, ctx.turnId);
+  if (ingress !== null && (ownerStatement !== null || evidenceIds.length === 0)) {
+    evidenceIds = [ingress, ...evidenceIds];
   }
   if (evidenceIds.length === 0) {
     return {
@@ -245,7 +244,7 @@ export async function proposeMemory(
       producer,
       sourceEpisodeIds: evidenceIds,
       contextTier,
-      content: `${subject} ${predicate} ${object}`,
+      content: (ingress === null ? null : ownerStatement) ?? `${subject} ${predicate} ${object}`,
       confidence,
     }));
   } catch (error) {
