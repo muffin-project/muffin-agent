@@ -1,0 +1,15 @@
+# Shell selection on the first consent
+
+Two real-inference turns selected `shell_run` for a command that had to write a project file. The second turn exposed both shell tools. The first consumed one approval and sandbox enforcement denied the write. In the second, the fixture withheld consent to the wrong scope. See [#1018](https://github.com/muffin-project/muffin-agent/issues/1018) and the [runtime evidence](https://github.com/muffin-project/muffin-agent/pull/1017#issuecomment-7147723614).
+
+The runtime checks a static capability before it runs each handler. Read-only commands can write only to scratch. The separate workspace-write capability is evaluated against the same authority and is bound to the exact invocation by #1017. Both scopes currently require approval.
+
+| Candidate | Supporting evidence | Evidence against it or falsifier |
+| --- | --- | --- |
+| Retain the two model tools and front-load the difference | Smallest change. The OpenAI function guide recommends concrete examples for recurring mistakes. | The first trial did not reach either shell. Shortening descriptions also changed lexical discovery, so the live run cannot distinguish model choice from discovery. |
+| Expose one command schema with a required effect | The OpenAI Shell and Anthropic Bash APIs document a single command interface. OpenClaw documents one exec interface and separately evaluates host policy. | The model can still choose the wrong effect. Incorrect or missing effects must reach neither shell. The adapter must preserve the exact pending call and the result across a gateway restart. |
+| Remove the model's choice and infer scope from command syntax | Frees the model from assigning an effect. | A general command or invoked program can do work the surrounding syntax does not describe. Automatically assigning greater scope would change the consent and authority model. |
+
+Prototype the single schema on the local baseline composition `f810924c`. Replace the advertised pair only when both tools are visible and route a valid declaration to the existing capability before checkpoint and policy. This isolates the model-interface comparison. It makes no change to discovery, the sandbox or consent rules. Test the original file task and an independent stdout-only task. Reject the design if it increases approvals for a read, crosses scope, loses a durable outcome, or fails to improve the first choice with real inference. A production version would also have to demonstrate reachability when only one capability is available.
+
+Sources describe public integration interfaces, with no inference about undocumented consumer-product behavior. [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling), [OpenAI Shell](https://developers.openai.com/api/docs/guides/tools-shell), [Anthropic Bash](https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool), [OpenClaw exec](https://docs.openclaw.ai/tools/exec), [Hermes approval FAQ](https://hermes-agent.nousresearch.com/docs/reference/faq).
