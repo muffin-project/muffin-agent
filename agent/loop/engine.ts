@@ -1,3 +1,4 @@
+import { speakerAttributedContent } from '../../core/memory/authorship.js';
 import { recall, recallTaint, renderForPrompt } from '../../core/memory/recall.js';
 import { memoryWriteCapability } from '../../core/policy/doors.js';
 import type { CapabilityId, Decision, DecisionRequest } from '../../core/policy/types.js';
@@ -273,12 +274,14 @@ async function runClaimedTurn(
   // `resumeTurn` §2. On a fresh turn the two agree by construction, which is
   // exactly why deriving it looked safe for as long as nothing resumed.
   const snapshot = makeSnapshot(deps.decide, input.principal, input.tenant, record.taint);
-  // La prima cosa entrata in questo turno: le parole della persona. Un URL che
-  // l'owner incolla lui stesso non è «scelto dal modello», ed è il caso più
-  // ovvio che il gate sui parametri trattava come tale. Senza capability:
-  // il messaggio umano è la classe di provenienza che rende «citata» una URL
-  // intera (lane #624 + #641 — un file tier-2 non lo è).
-  snapshot.recordInput(input.text, undefined, input.inputOrigin ?? 'owner');
+  // Connector input includes fenced context alongside the sender's own words.
+  // Only the authored portion may establish URL provenance, including on resume.
+  const inputOrigin = input.inputOrigin ?? 'owner';
+  snapshot.recordInput(
+    inputOrigin === 'owner' ? speakerAttributedContent(input.text) : input.text,
+    undefined,
+    inputOrigin,
+  );
   const turnClass = tenantClass(input.principal, input.tenant);
 
   /**

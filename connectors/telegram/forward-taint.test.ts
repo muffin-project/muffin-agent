@@ -1,21 +1,29 @@
-import DatabaseCtor from 'better-sqlite3';
-import type { Message, MessageOrigin, Update } from '@grammyjs/types';
 import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Message, MessageOrigin, Update } from '@grammyjs/types';
+import DatabaseCtor from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { LoopDeps } from '../../agent/loop.js';
+import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
+import { buildRuntime } from '../../agent/runtime.js';
 import { runInit } from '../../cli/init.js';
 import { telegramVault } from '../../cli/surface.js';
 import { paths } from '../../core/config/config.js';
-import { buildRuntime } from '../../agent/runtime.js';
-import type { LoopDeps } from '../../agent/loop.js';
-import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
-import { composeTurnText, contentTaintOf, parseUpdate, principalFor, TelegramConnector, type TelegramConfig } from './connector.js';
+import type { Decision, DecisionRequest } from '../../core/policy/types.js';
+import { OWNER_SESSION_KEY } from '../../core/surface/types.js';
 import { ModelLane } from '../../core/turns/model-lane.js';
 import type { TelegramApi } from './api.js';
-import { UpdateInbox } from './updates.js';
+import {
+  composeTurnText,
+  contentTaintOf,
+  parseUpdate,
+  principalFor,
+  type TelegramConfig,
+  TelegramConnector,
+} from './connector.js';
 import { TelegramDeliveryStore } from './delivery.js';
-import { OWNER_SESSION_KEY } from '../../core/surface/types.js';
+import { UpdateInbox } from './updates.js';
 
 /**
  * DAY-1 requirement B16 minimum (PC 1.4, audit P14): a message the owner *forwards* is
@@ -91,12 +99,23 @@ const photoWithHostileFilename = (id: number): Update =>
       chat: { id: OWNER, type: 'private' },
       from: { id: OWNER, is_bot: false, first_name: 'o' },
       caption: 'ecco la ricevuta',
-      document: { file_id: `f${id}`, file_unique_id: `u${id}`, file_name: HOSTILE_FILENAME, file_size: 128 },
+      document: {
+        file_id: `f${id}`,
+        file_unique_id: `u${id}`,
+        file_name: HOSTILE_FILENAME,
+        file_size: 128,
+      },
     },
   }) as unknown as Update;
 
 const USAGE = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 };
-const reply = (text: string): ChatResult => ({ text, toolCalls: [], stopReason: 'end', usage: USAGE, model: 'test-model' });
+const reply = (text: string): ChatResult => ({
+  text,
+  toolCalls: [],
+  stopReason: 'end',
+  usage: USAGE,
+  model: 'test-model',
+});
 const callTool = (name: string, args: Record<string, unknown>): ChatResult => ({
   text: null,
   toolCalls: [{ id: 'c1', name, args }],
@@ -105,7 +124,10 @@ const callTool = (name: string, args: Record<string, unknown>): ChatResult => ({
   model: 'test-model',
 });
 
-function harness(script: ChatResult[] = []) {
+function harness(
+  script: ChatResult[] = [],
+  observeDecision?: (request: DecisionRequest, decision: Decision) => Decision,
+) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-fwdtaint-'));
   const workspace = mkdtempSync(join(tmpdir(), 'muffin-fwdtaint-ws-'));
   runInit({ home, apiKey: 'sk-fwdtaint-never-called' });
@@ -130,7 +152,13 @@ function harness(script: ChatResult[] = []) {
   } as unknown as TelegramApi;
 
   const connector = new TelegramConnector({
-    loop: { ...runtime.deps, provider } satisfies LoopDeps,
+    loop: {
+      ...runtime.deps,
+      provider,
+      ...(observeDecision === undefined
+        ? {}
+        : { decide: (request) => observeDecision(request, runtime.deps.decide(request)) }),
+    } satisfies LoopDeps,
     sessions: runtime.deps.sessions,
     lane: new ModelLane(),
     inbox: new UpdateInbox(runtime.db),
@@ -145,6 +173,67 @@ function harness(script: ChatResult[] = []) {
 
   return { connector, seen, runtime };
 }
+
+describe('Telegram request URL authorship', () => {
+  it.each(['quoted', 'forwarded'] as const)(
+    'keeps %s links visible without treating them as sender-authored',
+    async (source) => {
+      const ownUrl = 'https://sender.example.invalid/conditions';
+      const otherUrl = 'https://reference.example.invalid/help';
+      const observed = new Map<
+        string,
+        { quoted: boolean | undefined; effect: Decision['effect'] }
+      >();
+      const h = harness(
+        source === 'quoted'
+          ? [callTool('http_get', { url: ownUrl }), callTool('http_get', { url: otherUrl })]
+          : [callTool('http_get', { url: otherUrl })],
+        (request, decision) => {
+          if (request.capability === 'sys.http' && request.resource.kind === 'url-read') {
+            observed.set(request.resource.value, {
+              quoted: request.quoted,
+              effect: decision.effect,
+            });
+            // Stop at the kernel boundary, before any network access.
+            return { effect: 'deny', code: 'resource_denied' };
+          }
+          return decision;
+        },
+      );
+      const chat = { id: OWNER, type: 'private' as const, first_name: 'Owner' };
+      const update = {
+        update_id: 71,
+        message: {
+          message_id: 71,
+          date: 0,
+          chat,
+          from: { id: OWNER, is_bot: false, first_name: 'Owner' },
+          ...(source === 'quoted'
+            ? {
+                text: `Scegli una fonte tra ${ownUrl} e la citazione.`,
+                reply_to_message: {
+                  message_id: 72,
+                  date: 0,
+                  chat,
+                  from: FORWARD_ORIGIN.sender_user,
+                  text: otherUrl,
+                },
+              }
+            : { forward_origin: FORWARD_ORIGIN, text: otherUrl }),
+        },
+      } as unknown as Update;
+      try {
+        await deliver(h, [update]);
+        expect(JSON.stringify(h.seen[0]?.messages)).toContain(otherUrl);
+        expect(observed.get(otherUrl)).toEqual({ quoted: false, effect: 'ask' });
+        if (source === 'quoted')
+          expect(observed.get(ownUrl)).toEqual({ quoted: true, effect: 'allow' });
+      } finally {
+        h.runtime.close();
+      }
+    },
+  );
+});
 
 async function deliver(h: ReturnType<typeof harness>, updates: Update[]): Promise<void> {
   const inbox = (h.connector as unknown as { deps: { inbox: UpdateInbox } }).deps.inbox;
@@ -192,7 +281,9 @@ function ownLineTier(h: ReturnType<typeof harness>): number | undefined {
  */
 function episodeTier(h: ReturnType<typeof harness>, needle: string): number | undefined {
   const row = h.runtime.db
-    .prepare(`SELECT trust_tier AS tier FROM episodes WHERE content LIKE ? ORDER BY id DESC LIMIT 1`)
+    .prepare(
+      `SELECT trust_tier AS tier FROM episodes WHERE content LIKE ? ORDER BY id DESC LIMIT 1`,
+    )
     .get(`%${needle}%`) as { tier: number } | undefined;
   return row?.tier;
 }
@@ -213,15 +304,18 @@ function episodeTier(h: ReturnType<typeof harness>, needle: string): number | un
  * tier dell'inoltro».
  */
 function turnTaint(h: ReturnType<typeof harness>): number | undefined {
-  const row = h.runtime.db
-    .prepare(`SELECT taint FROM turns ORDER BY rowid DESC LIMIT 1`)
-    .get() as { taint: number } | undefined;
+  const row = h.runtime.db.prepare(`SELECT taint FROM turns ORDER BY rowid DESC LIMIT 1`).get() as
+    | { taint: number }
+    | undefined;
   return row?.taint;
 }
 
 describe('(a) a forwarded, hostile message — red before the fix, per docs/development/JUDGE.md', () => {
   it('starts the turn at tier >= 2, fences the forwarded text, and decides every call at that tier', async () => {
-    const h = harness([callTool('skill_read', { name: 'non-esiste' }), reply('Non posso, te lo dico.')]);
+    const h = harness([
+      callTool('skill_read', { name: 'non-esiste' }),
+      reply('Non posso, te lo dico.'),
+    ]);
     try {
       await deliver(h, [forwardedHostile(1)]);
       expect(h.seen.length).toBeGreaterThanOrEqual(2);
@@ -360,7 +454,10 @@ describe('parseUpdate / composeTurnText — the parser and the composer in isola
       } as unknown as Message,
     } as unknown as Update;
     const incoming = parseUpdate(bareForward)!;
-    expect(incoming.forwarded).toEqual({ origin: { kind: 'user', label: 'Uno Sconosciuto' }, content: '' });
+    expect(incoming.forwarded).toEqual({
+      origin: { kind: 'user', label: 'Uno Sconosciuto' },
+      content: '',
+    });
     // Still raises the turn — an attacker's photo relayed through the owner's
     // account is exactly as unauthored as an attacker's paragraph.
     expect(contentTaintOf(incoming)).toBe(2);
@@ -415,7 +512,8 @@ describe('(c, with a real vault) filename fencing does not depend on the arrival
     mkdirSync(join(vaultRoot, 'inbox'), { recursive: true });
 
     vi.stubGlobal('fetch', async (input: unknown) => {
-      if (String(input).includes('api.telegram.example')) return new Response(new Uint8Array(Buffer.from('%PDF fake')));
+      if (String(input).includes('api.telegram.example'))
+        return new Response(new Uint8Array(Buffer.from('%PDF fake')));
       throw new TypeError('fetch failed');
     });
 
