@@ -1107,6 +1107,7 @@ describe('muffin gateway restart', () => {
       supervisorProbes: engaged,
       restart: () => ({ status: 0, stdout: '', stderr: '' }),
       readGatewayPid: pidSequence([88175, 88175, 65671]),
+      readGatewaySocketPid: async () => 65671,
       sleep: noSleep,
     });
     expect(code).toBe(0);
@@ -1136,7 +1137,7 @@ describe('muffin gateway restart', () => {
       spy.mockRestore();
     }
     expect(code).not.toBe(0);
-    expect(out.join('')).toMatch(/Riavvio non confermato.*serve ancora il pid 88175/);
+    expect(out.join('')).toMatch(/Riavvio non confermato.*il registro riporta ancora il pid 88175/);
     expect(out.join('')).toContain('Failed to restart muffin-gateway.service: Unit is masked.');
   });
 
@@ -1146,9 +1147,33 @@ describe('muffin gateway restart', () => {
       supervisorProbes: engaged,
       restart: () => ({ status: 1, stdout: '', stderr: '' }),
       readGatewayPid: pidSequence([88175, 88175, 65671]),
+      readGatewaySocketPid: async () => 65671,
       sleep: noSleep,
     });
     expect(code).toBe(0);
+  });
+
+  it('waits for the claimed replacement to answer its own control socket', async () => {
+    let restarted = false;
+    const readGatewaySocketPid = vi
+      .fn<() => Promise<number | null>>()
+      .mockResolvedValueOnce(1111)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(2222);
+    const code = await cmdGatewayRestart(home(), {
+      platform: 'linux',
+      supervisorProbes: engaged,
+      restart: () => {
+        restarted = true;
+        return { status: 0, stdout: '', stderr: '' };
+      },
+      readGatewayPid: () => (restarted ? 2222 : 1111),
+      readGatewaySocketPid,
+      sleep: noSleep,
+      verifyAttempts: 3,
+    });
+    expect(code).toBe(0);
+    expect(readGatewaySocketPid).toHaveBeenCalledTimes(3);
   });
 
   it('su darwin attende il budget di arresto del servizio per launchctl kickstart', async () => {
@@ -1165,6 +1190,7 @@ describe('muffin gateway restart', () => {
         return { status: 0, stdout: '', stderr: '' };
       },
       readGatewayPid: () => (bootStarted ? (bootChecks >= 24 ? 2222 : null) : 1111),
+      readGatewaySocketPid: async () => 2222,
       sleep: async () => {
         bootChecks++;
       },
