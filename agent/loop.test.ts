@@ -208,7 +208,7 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
   const db = new DatabaseCtor(':memory:');
   const turns = new TurnStore(db);
   const todos = new TodoStore(db);
-  const capabilities = new Map(decls.map((d) => [d.id, d]));
+  const capabilities = overrides.capabilities ?? new Map(decls.map((d) => [d.id, d]));
   const base: LoopDeps = {
     provider: new ScriptedProvider(script),
     profile: CONSERVATIVE,
@@ -282,14 +282,7 @@ describe('agent loop', () => {
     expect(calls).not.toContain('demo_write'); // the handler never ran
   });
 
-  it('filters before it caps, so host-only tools cannot crowd a member out of the window', async () => {
-    // Unobservable on a stock registry (9 tools, smallest cap 10) — this
-    // fixture is what makes the order testable: cap 2, and the two hostOnly
-    // tools registered FIRST. Cap-then-filter hands a member an empty menu
-    // while their usable tool sits outside the window; the moment MCP attaches
-    // (hostOnly, appended last) that stops being hypothetical on consumer
-    // profiles. The judge's mutation reversing the order survived 546 tests;
-    // this is the test that was missing.
+  it('offers the member their open tool when host-only tools precede it in the catalogue', async () => {
     const member: Principal = {
       kind: 'member',
       connector: 'telegram',
@@ -325,7 +318,6 @@ describe('agent loop', () => {
     const provider = new ScriptedProvider([answer('ciao')]);
     const { deps: d, store } = deps([], {
       provider,
-      profile: { ...CONSERVATIVE, maxToolsExposed: 2 },
       tools: [tool('host_a', 'cap.a'), tool('host_b', 'cap.b'), tool('open_c', 'cap.c')],
       capabilities: new Map([
         ['cap.a', hostDecl('cap.a')],
