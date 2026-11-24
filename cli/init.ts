@@ -62,7 +62,6 @@ export type InitOptions = {
    * config che non lo nomina resta byte per byte quella di prima.
    */
   promptVersion?: PromptVersion;
-  hardened?: boolean;
   force?: boolean;
 };
 
@@ -253,7 +252,7 @@ export function runInit(options: InitOptions = {}): InitStep[] {
       main: options.mainModel ?? prior?.models.main ?? defaults.main,
       light: options.lightModel ?? prior?.models.light ?? defaults.light,
     },
-    rot: { mode: options.hardened ? 'hardened' : (prior?.rot.mode ?? 'single-user') },
+    rot: { mode: prior?.rot.mode ?? 'single-user' },
     ...(options.promptVersion ? { prompt: { version: options.promptVersion } } : {}),
   };
   saveConfig(config, home);
