@@ -2,9 +2,9 @@ import DatabaseCtor from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { loadConfig, paths } from '../core/config/config.js';
 import { readConsolidation } from '../core/memory/consolidator.js';
+import { makeEmbedder, OllamaEmbedder } from '../core/memory/embed.js';
 import { formatConsolidationLines } from '../core/memory/ingest.js';
 import { checkInvariants, formatCheck } from '../core/memory/invariants.js';
-import { EVERY_INSTANT, recall } from '../core/memory/recall.js';
 import {
   MemoryLaneBusyError,
   resolveContradiction,
@@ -12,8 +12,8 @@ import {
   reviewSummary,
 } from '../core/memory/maintenance.js';
 import { describeProvenance, factLine } from '../core/memory/provenance.js';
-import { makeEmbedder, OllamaEmbedder } from '../core/memory/embed.js';
-import { MemoryStore, type Fact } from '../core/memory/store.js';
+import { EVERY_INSTANT, recall } from '../core/memory/recall.js';
+import { type Fact, MemoryStore } from '../core/memory/store.js';
 import { quantiNonIndicizzati } from '../core/memory/vectors.js';
 
 /**
@@ -133,7 +133,9 @@ export async function cmdMemorySearch(
       );
     }
     if (result.items.length === 0) {
-      process.stderr.write(`nessun risultato · strategie: ${result.strategies.join(', ') || 'nessuna'}\n`);
+      process.stderr.write(
+        `nessun risultato · strategie: ${result.strategies.join(', ') || 'nessuna'}\n`,
+      );
       // A gap is a finding, not an empty search: exit 0 so a script can tell
       // "the memory answered, and the answer is that it does not know" from
       // "the memory found nothing at all".
@@ -160,7 +162,9 @@ export async function cmdMemorySearch(
       return `${head}\n${body}${successor}`;
     });
     process.stdout.write(`${lines.join('\n\n')}\n`);
-    process.stderr.write(`\n${result.items.length} risultati · strategie: ${result.strategies.join(', ')}\n`);
+    process.stderr.write(
+      `\n${result.items.length} risultati · strategie: ${result.strategies.join(', ')}\n`,
+    );
     return 0;
   } finally {
     runtime.close();
@@ -206,7 +210,8 @@ export function valeUnAltroGiro(
   if (report.marked === 0 && report.indexed === 0) return false;
   // Un'estrazione corta chiude il giro solo quando non è avanzato nemmeno
   // l'indice: il drain globale può avere ancora pagine di altri tenant.
-  if (report.marked > 0 && report.fetched < Math.min(limit, 25) && report.indexed === 0) return false;
+  if (report.marked > 0 && report.fetched < Math.min(limit, 25) && report.indexed === 0)
+    return false;
   return rounds * 25 < limit;
 }
 
@@ -249,7 +254,9 @@ export async function cmdMemoryExtract(home: string, limit: number): Promise<num
       // the exit code below has to see the whole total, not half of it.
       total.errors += report.errors.length + report.judgeUnavailable.length;
       for (const r of report.needsReview) {
-        process.stderr.write(`  ? ${r.subject} ${r.predicate}: "${r.existing}" vs "${r.incoming}" — ${r.why}\n`);
+        process.stderr.write(
+          `  ? ${r.subject} ${r.predicate}: "${r.existing}" vs "${r.incoming}" — ${r.why}\n`,
+        );
       }
       // Grouped by (subject, predicate), same renderer the automatic lane
       // uses (`consolidator.ts`) — a hand-typed run should not see three
@@ -324,12 +331,18 @@ export function cmdMemoryReview(home: string, verbose = false): number {
 
     for (const item of summary.open) {
       const when = item.createdAt.slice(0, 16).replace('T', ' ');
-      out.push(`#${item.reviewId} ${item.existing.subjectName} ${item.existing.predicate} — ${when}`);
+      out.push(
+        `#${item.reviewId} ${item.existing.subjectName} ${item.existing.predicate} — ${when}`,
+      );
       // Both spelled out with their ids, because the id is what the owner types
       // back. Printing the two values without them would be a question with no
       // way to answer it.
-      out.push(`   tengo   #${item.existing.id} "${objectOf(item.existing)}" (${item.existing.recordedAt.slice(0, 10)})`);
-      out.push(`   oppure  #${item.incoming.id} "${objectOf(item.incoming)}" (${item.incoming.recordedAt.slice(0, 10)})`);
+      out.push(
+        `   tengo   #${item.existing.id} "${objectOf(item.existing)}" (${item.existing.recordedAt.slice(0, 10)})`,
+      );
+      out.push(
+        `   oppure  #${item.incoming.id} "${objectOf(item.incoming)}" (${item.incoming.recordedAt.slice(0, 10)})`,
+      );
       const { headline, rawResponse } = splitReviewDetail(item.why);
       out.push(`   il giudice: ${headline}`);
       if (verbose) {
@@ -529,7 +542,9 @@ export function cmdMemoryStats(home: string): number {
   try {
     const s = store.stats(TENANT);
     const span =
-      s.span.from_ && s.span.to_ ? `${s.span.from_.slice(0, 10)} → ${s.span.to_.slice(0, 10)}` : 'vuota';
+      s.span.from_ && s.span.to_
+        ? `${s.span.from_.slice(0, 10)} → ${s.span.to_.slice(0, 10)}`
+        : 'vuota';
     const vectorRows = tableCount(db, 'chunks');
     const vectorIndexed = tableCount(db, 'chunks_vec');
     const pendenti = sorgentiSenzaVettore(db, home);
@@ -624,7 +639,7 @@ export function cmdMemoryCheck(home: string, json: boolean): number {
  * una macchina sana. Non lo interroga — la raggiungibilita e una domanda di
  * rete, e la fa `doctor`.
  */
-function sorgentiSenzaVettore(db: DatabaseCtor.Database, home: string): number | null {
+function sorgentiSenzaVettore(db: DatabaseCtor.Database, home: string): number | 'off' | null {
   // Due guasti diversi, e solo il secondo autorizza il silenzio.
   //
   // Una config illeggibile non impedisce di contare: `doctor` in quel caso
@@ -635,6 +650,7 @@ function sorgentiSenzaVettore(db: DatabaseCtor.Database, home: string): number |
   let embedderId: string;
   try {
     const config = loadConfig(home, () => {});
+    if (config.embedder?.enabled === false) return 'off';
     // **Nessun segreto viene letto qui, ed e deliberato.** Serve solo l'`id`
     // dell'embedder configurato, che e una funzione del modello e non della
     // chiave (`openai-compat:${model}`, `core/memory/embed.ts`). Costruirlo con
@@ -676,7 +692,12 @@ function sorgentiSenzaVettore(db: DatabaseCtor.Database, home: string): number |
  * domanda di rete, e un comando di statistiche non deve farla di nascosto.
  * Questa riga ci manda, invece di tacere.
  */
-function rigaIndice(chunk: number | null, vettori: number | null, pendenti: number | null): string {
+function rigaIndice(
+  chunk: number | null,
+  vettori: number | null,
+  pendenti: number | 'off' | null,
+): string {
+  if (pendenti === 'off') return 'embedding disattivati · ricerca testuale attiva';
   if (chunk === null) return 'assente';
   const base = `${chunk} chunk · ${vettori ?? 0} vettori`;
   if (pendenti === null) return base;
