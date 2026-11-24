@@ -563,9 +563,22 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       input.promptMode === 'minimal'
         ? (deps.minimalPrompt ?? minimalSystemPrompt(false))
         : deps.systemPrompts[turnClass];
+    // A stored goal can retain how the owner asked to schedule it. The
+    // durable job lineage tells the worker that this turn is that execution.
+    const jobContext =
+      input.jobId !== undefined &&
+      input.principal.kind === 'system' &&
+      input.principal.source === 'scheduler'
+        ? '\n\nYou are executing an already scheduled job. Do the work in the goal during this run. ' +
+          'Any request to schedule this work or run it in the background refers to this job. ' +
+          'Report what happened in this run. The scheduler handles delivery.'
+        : '';
     // One breakpoint on the fixed prefix, up to three on the last messages,
     // never more than four. Copies: the session transcript is not a cache map.
-    const placed = placeCacheBreakpoints([{ type: 'text', text: systemText }], messages);
+    const placed = placeCacheBreakpoints(
+      [{ type: 'text', text: systemText + jobContext }],
+      messages,
+    );
     const call: ChatCall = {
       model: deps.model,
       system: placed.system,
