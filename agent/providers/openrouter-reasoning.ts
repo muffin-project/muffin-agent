@@ -48,8 +48,7 @@ export class OpenRouterReasoningDiscovery {
       const expiresAt = this.now() + (this.opts.ttlMs ?? DEFAULT_OPENROUTER_REASONING_TTL_MS);
       this.cache.set(key, { metadata, expiresAt });
       const canonical = metadata.canonical_slug ?? metadata.id;
-      if (canonical !== undefined)
-        this.cache.set(this.key(baseURL, canonical), { metadata, expiresAt });
+      if (canonical !== undefined) this.cache.set(this.key(baseURL, canonical), { metadata, expiresAt });
       const discovered = this.fromMetadata(metadata, 'openrouter-live', model);
       if (discovered.capabilities.support === 'unknown') return discovered;
       return discovered;
@@ -59,19 +58,12 @@ export class OpenRouterReasoningDiscovery {
   }
 
   seed(baseURL: string, model: string, metadata: OpenRouterReasoningMetadata): void {
-    this.cache.set(this.key(baseURL, model), {
-      metadata,
-      expiresAt: this.now() + (this.opts.ttlMs ?? DEFAULT_OPENROUTER_REASONING_TTL_MS),
-    });
+    this.cache.set(this.key(baseURL, model), { metadata, expiresAt: this.now() + (this.opts.ttlMs ?? DEFAULT_OPENROUTER_REASONING_TTL_MS) });
   }
 
-  private async fetchMetadata(
-    baseURL: string,
-    model: string,
-  ): Promise<OpenRouterReasoningMetadata> {
+  private async fetchMetadata(baseURL: string, model: string): Promise<OpenRouterReasoningMetadata> {
     const parts = model.split('/');
-    if (parts.length !== 2 || parts.some((part) => part.length === 0))
-      throw new Error('OpenRouter model must be author/slug');
+    if (parts.length !== 2 || parts.some((part) => part.length === 0)) throw new Error('OpenRouter model must be author/slug');
     const url = `${baseURL.replace(/\/$/, '')}/model/${encodeURIComponent(parts[0]!)}/${encodeURIComponent(parts[1]!)}`;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 2_000);
@@ -82,58 +74,32 @@ export class OpenRouterReasoningDiscovery {
       });
       if (!response.ok) throw new Error(`OpenRouter metadata returned ${response.status}`);
       const body = (await response.json()) as { data?: OpenRouterReasoningMetadata };
-      if (body.data === undefined || typeof body.data !== 'object')
-        throw new Error('OpenRouter metadata missing data');
+      if (body.data === undefined || typeof body.data !== 'object') throw new Error('OpenRouter metadata missing data');
       return body.data;
     } finally {
       clearTimeout(timeout);
     }
   }
 
-  private fromMetadata(
-    metadata: OpenRouterReasoningMetadata,
-    source: ReasoningCapabilitySource,
-    model?: string,
-  ): OpenRouterDiscoveryResult {
+  private fromMetadata(metadata: OpenRouterReasoningMetadata, source: ReasoningCapabilitySource, model?: string): OpenRouterDiscoveryResult {
     const reasoning = metadata.reasoning;
     if (reasoning === undefined) {
-      // OpenRouter documents `openrouter/free` (and `openrouter/auto`) as
-      // dynamic routers: they choose the upstream model after inspecting the
-      // request and omit the reasoning field. Omission is *not* an off state
-      // for them, though: measured 04/11/2026 on `openrouter/free`, 92–99% of
-      // the output tokens were reasoning (Nemotron, Cohere, Recursive) with
-      // `thinking: off` configured, because «unsupported» made the off request
-      // resolve to "send nothing". The upstream is a reasoning-capable model
-      // more often than not, and the unified `reasoning` field is what
-      // OpenRouter translates for whichever one it picks — so the router gets
-      // `routerCapabilities()`: off is sent (`effort: "none"`), levels pass
-      // through for OpenRouter to map, and no exact budget is claimed.
-      const capabilities = isDynamicRouter(model) ? routerCapabilities() : unknownCapabilities();
-      return {
-        capabilities,
-        source,
-        ...((metadata.canonical_slug ?? metadata.id)
-          ? { canonicalModel: metadata.canonical_slug ?? metadata.id }
-          : {}),
-      };
+      // OpenRouter documents `openrouter/free` as a dynamic router: it chooses
+      // the upstream model after inspecting the request and omits the
+      // reasoning field. There is no fixed capability to claim, so omission
+      // remains the safe no-configuration state for this router.
+      const capabilities = model?.toLowerCase() === 'openrouter/free' ? unsupportedCapabilities() : unknownCapabilities();
+      return { capabilities, source, ...(metadata.canonical_slug ?? metadata.id ? { canonicalModel: metadata.canonical_slug ?? metadata.id } : {}) };
     }
     return {
       source,
-      ...((metadata.canonical_slug ?? metadata.id)
-        ? { canonicalModel: metadata.canonical_slug ?? metadata.id }
-        : {}),
+      ...(metadata.canonical_slug ?? metadata.id ? { canonicalModel: metadata.canonical_slug ?? metadata.id } : {}),
       capabilities: {
         support: 'supported',
         canDisable: reasoning.mandatory !== true,
-        ...(reasoning.supported_efforts === undefined
-          ? {}
-          : { supportedEfforts: reasoning.supported_efforts.filter(isReasoningEffort) }),
-        ...(reasoning.default_enabled === undefined
-          ? {}
-          : { defaultEnabled: reasoning.default_enabled }),
-        ...(reasoning.default_effort !== undefined && isReasoningEffort(reasoning.default_effort)
-          ? { defaultEffort: reasoning.default_effort }
-          : {}),
+        ...(reasoning.supported_efforts === undefined ? {} : { supportedEfforts: reasoning.supported_efforts.filter(isReasoningEffort) }),
+        ...(reasoning.default_enabled === undefined ? {} : { defaultEnabled: reasoning.default_enabled }),
+        ...(reasoning.default_effort !== undefined && isReasoningEffort(reasoning.default_effort) ? { defaultEffort: reasoning.default_effort } : {}),
         supportsMaxTokens: reasoning.supports_max_tokens === true,
         mandatory: reasoning.mandatory === true,
       },
@@ -153,24 +119,10 @@ function unknownCapabilities(): ReasoningCapabilities {
   return { support: 'unknown', canDisable: false, supportsMaxTokens: false, mandatory: false };
 }
 
-/** OpenRouter's dynamic routers: the model is chosen per request, the `reasoning` field is translated for it. */
-export function isDynamicRouter(model: string | undefined): boolean {
-  const m = model?.toLowerCase();
-  return m === 'openrouter/free' || m === 'openrouter/auto';
+function unsupportedCapabilities(): ReasoningCapabilities {
+  return { support: 'unsupported', canDisable: true, supportsMaxTokens: false, mandatory: false };
 }
 
-/**
- * What a dynamic router can honestly promise: it forwards the unified
- * `reasoning` field to whatever it picked. No `supportedEfforts` (the set
- * changes with the upstream, and OpenRouter maps to the nearest level), no
- * exact token budget, not mandatory.
- */
-export function routerCapabilities(): ReasoningCapabilities {
-  return { support: 'supported', canDisable: true, supportsMaxTokens: false, mandatory: false };
-}
-
-function isReasoningEffort(
-  value: string,
-): value is NonNullable<ReasoningCapabilities['supportedEfforts']>[number] {
+function isReasoningEffort(value: string): value is NonNullable<ReasoningCapabilities['supportedEfforts']>[number] {
   return ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(value);
 }

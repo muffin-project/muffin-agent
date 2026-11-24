@@ -3,10 +3,8 @@ import OpenAI from 'openai';
 import type { ReasoningDialect } from '../../core/config/thinking.js';
 import { compileForOpenAI } from './compile.js';
 import {
-  isDynamicRouter,
   type OpenRouterDiscoveryResult,
   OpenRouterReasoningDiscovery,
-  routerCapabilities,
 } from './openrouter-reasoning.js';
 import {
   type ReasoningCapabilities,
@@ -165,11 +163,6 @@ export function openRouterReasoningCapabilities(
       source: 'endpoint-defaults',
     };
   }
-  // Same answer discovery gives a dynamic router (`openrouter-reasoning.ts`),
-  // so a metadata fetch that fails does not fall back to "send nothing" — the
-  // state measured to leave reasoning on for 92–99% of the output.
-  if (isDynamicRouter(model))
-    return { capabilities: routerCapabilities(), source: 'static-snapshot' };
   if (model.toLowerCase() === 'qwen/qwen3.8-27b') {
     return {
       capabilities: {
