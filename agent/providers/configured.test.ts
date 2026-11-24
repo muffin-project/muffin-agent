@@ -230,6 +230,20 @@ describe('ChatGPT hosted search wiring through Muffin', () => {
       expect(effects.all(disabled.turnId)).toContainEqual(expect.objectContaining({ is_error: 1 }));
       expect(bodyForSearch).toHaveBeenCalledTimes(1);
 
+      expect(await cmdSearch(home, ['chatgpt'], setup)).toBe(0);
+      const access = vi.spyOn(ChatGPTConnection.prototype, 'accessToken');
+      access.mockImplementationOnce(async () => {
+        expect(await cmdSearch(home, ['off'], setup)).toBe(0);
+        return 'oauth-access-canary';
+      });
+      const revokedAtDispatch = await search(owner, 'revoked-at-dispatch');
+      expect(effects.all(revokedAtDispatch.turnId)).toContainEqual(
+        expect.objectContaining({ is_error: 1 }),
+      );
+      expect(access).toHaveBeenCalledTimes(1);
+      expect(bodyForSearch).toHaveBeenCalledTimes(1);
+      access.mockRestore();
+
       runtime.close();
       runtime = undefined;
       expect(await cmdSearch(home, ['chatgpt'], setup)).toBe(0);
@@ -250,6 +264,7 @@ describe('ChatGPT hosted search wiring through Muffin', () => {
       expect(bodyForSearch).toHaveBeenCalledTimes(1);
     } finally {
       runtime?.close();
+      vi.restoreAllMocks();
       vi.unstubAllGlobals();
       rmSync(workspace, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });

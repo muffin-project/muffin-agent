@@ -133,7 +133,9 @@ describe('ChatGPT as a bounded web search backend', () => {
       done([]),
     ]);
     const query = 'Find the official public notice';
-    const hits = await h.provider.searchWeb(CALL.model, query, AbortSignal.timeout(2000), 1);
+    const hits = await h.provider.searchWeb(CALL.model, query, AbortSignal.timeout(2000), {
+      maxResults: 1,
+    });
     expect(hits).toEqual([
       { title: 'Official notice', url: 'https://official.example/notice', snippet: '' },
     ]);
@@ -187,7 +189,10 @@ describe('ChatGPT as a bounded web search backend', () => {
     ]);
     await expect(
       incomplete.provider.searchWeb(CALL.model, 'public notice', AbortSignal.timeout(2000)),
-    ).rejects.toThrow('without response.completed');
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('without response.completed'),
+      retryable: false,
+    });
     expect(incomplete.requests).toHaveLength(1);
   });
 });

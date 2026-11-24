@@ -167,7 +167,7 @@ export class OpenAIChatGPTProvider implements Provider {
     model: string,
     query: string,
     signal: AbortSignal,
-    maxResults = 5,
+    options: { maxResults?: number | undefined; beforeSend?: () => void } = {},
   ): Promise<HostedSearchHit[]> {
     const { response, refusal } = await this.complete(
       {
@@ -184,8 +184,16 @@ export class OpenAIChatGPTProvider implements Provider {
         stream: false,
         signal,
       },
-      true,
-    );
+      options,
+    ).catch((error: unknown) => {
+      // The server may already have performed a search when the stream fails.
+      // Retrying this tool automatically can charge the connected plan again.
+      const detail =
+        error instanceof ProviderError || error instanceof ProviderStreamError
+          ? error.message
+          : 'ChatGPT web search failed';
+      throw new ProviderError(detail, false);
+    });
     if (
       refusal ||
       !response.output.some(
@@ -194,14 +202,14 @@ export class OpenAIChatGPTProvider implements Provider {
     ) {
       throw new ProviderError('ChatGPT returned no completed web search', false);
     }
-    return webCitations(response, maxResults);
+    return webCitations(response, options.maxResults ?? 5);
   }
 
   // No public chatStream: the loop's non-stream fallback would issue another
   // request on this streaming-only route. Both operations require a terminal.
   private async complete(
     call: ChatCall,
-    hostedSearch = false,
+    hostedSearch?: { beforeSend?: () => void },
   ): Promise<{
     response: OpenAI.Responses.Response;
     refusal: boolean;
@@ -240,6 +248,7 @@ export class OpenAIChatGPTProvider implements Provider {
 
     try {
       call.signal?.throwIfAborted();
+      hostedSearch?.beforeSend?.();
       const client = new OpenAI({
         apiKey: accessToken,
         baseURL: BASE_URL,

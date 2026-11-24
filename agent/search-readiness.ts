@@ -22,27 +22,41 @@ export function chatGPTSearchBackend(config: Config, home: string): SearchBacken
   }
   const provider = new OpenAIChatGPTProvider(connection);
   const endpointHost = new URL(CHATGPT_SEARCH_PROVIDER.endpoint).hostname;
+  function selectedRoute() {
+    let current: Config;
+    let egress: EgressPolicy;
+    try {
+      current = loadConfig(home);
+      egress = loadEgress(home);
+    } catch {
+      throw new ProviderError('ChatGPT search configuration is unavailable', false);
+    }
+    if (current.search?.provider !== 'chatgpt' || current.provider.kind !== 'openai-chatgpt') {
+      throw new ProviderError(
+        'ChatGPT search is no longer selected on the active main provider',
+        false,
+      );
+    }
+    if (!hostAllowed(endpointHost, egress)) {
+      throw new ProviderError('ChatGPT search no longer has network permission', false);
+    }
+    return { model: current.models.main, maxResults: current.search.maxResults };
+  }
   return {
     ...CHATGPT_SEARCH_PROVIDER,
     search(query, signal) {
-      let current: Config;
-      let egress: EgressPolicy;
-      try {
-        current = loadConfig(home);
-        egress = loadEgress(home);
-      } catch {
-        throw new ProviderError('ChatGPT search configuration is unavailable', false);
-      }
-      if (current.search?.provider !== 'chatgpt' || current.provider.kind !== 'openai-chatgpt') {
-        throw new ProviderError(
-          'ChatGPT search is no longer selected on the active main provider',
-          false,
-        );
-      }
-      if (!hostAllowed(endpointHost, egress)) {
-        throw new ProviderError('ChatGPT search no longer has network permission', false);
-      }
-      return provider.searchWeb(current.models.main, query, signal, current.search.maxResults);
+      const { model, maxResults } = selectedRoute();
+      return provider.searchWeb(model, query, signal, {
+        maxResults,
+        beforeSend: () => {
+          if (selectedRoute().model !== model) {
+            throw new ProviderError(
+              'ChatGPT search model changed before the request started',
+              false,
+            );
+          }
+        },
+      });
     },
   };
 }
