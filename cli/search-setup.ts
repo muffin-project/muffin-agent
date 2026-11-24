@@ -137,7 +137,7 @@ export async function cmdSearch(home: string, argv: string[], deps: SearchDeps):
     out(
       config.search.provider === CHATGPT_SEARCH_PROVIDER.id
         ? 'ricerca web spenta. Il collegamento a ChatGPT resta attivo.'
-        : 'ricerca web spenta. La chiave resta dov’è. Usa `muffin secret` per gestirla.',
+        : "ricerca web spenta. La chiave resta dov'era. Usa `muffin secret` per gestirla.",
     );
     return 0;
   }
