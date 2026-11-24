@@ -216,6 +216,14 @@ describe('ChatGPT hosted search wiring through Muffin', () => {
       await search(member, 'member');
       expect(bodyForSearch).toHaveBeenCalledTimes(1);
 
+      const egressFile = join(paths(home).rot, 'egress.json');
+      const allowedEgress = readFileSync(egressFile, 'utf8');
+      writeFileSync(egressFile, JSON.stringify({ schemaVersion: 1, allow: [] }));
+      const revoked = await search(owner, 'revoked');
+      expect(effects.all(revoked.turnId)).toContainEqual(expect.objectContaining({ is_error: 1 }));
+      expect(bodyForSearch).toHaveBeenCalledTimes(1);
+      writeFileSync(egressFile, allowedEgress);
+
       expect(await cmdSearch(home, ['off'], setup)).toBe(0);
       const disabled = await search(owner, 'disabled');
       expect(disabled.stopped).toBe('answered');

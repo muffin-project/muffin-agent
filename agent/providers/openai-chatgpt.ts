@@ -244,6 +244,7 @@ export class OpenAIChatGPTProvider implements Provider {
         apiKey: accessToken,
         baseURL: BASE_URL,
         maxRetries: 0,
+        fetchOptions: { redirect: 'error' },
         ...(this.options.fetch === undefined ? {} : { fetch: this.options.fetch }),
       });
       const requestStartedAt = performance.now();
@@ -289,7 +290,12 @@ export class OpenAIChatGPTProvider implements Provider {
                 );
               completedOutputItems.set(event.output_index, item);
             }
-            if (item.type === 'function_call') responseToolName(item, allowedTools);
+            if (item.type === 'function_call') {
+              if (hostedSearch) {
+                throw new ProviderError('ChatGPT returned an unexpected web search item', false);
+              }
+              responseToolName(item, allowedTools);
+            }
             break;
           }
           case 'response.failed':

@@ -71,8 +71,12 @@ function harness(
     },
   ],
 ) {
-  const requests: { url: string; authorization: string | null; body: Record<string, unknown> }[] =
-    [];
+  const requests: {
+    url: string;
+    authorization: string | null;
+    redirect?: RequestInit['redirect'];
+    body: Record<string, unknown>;
+  }[] = [];
   let accessCount = 0;
   let modelListCalls = 0;
   const provider = new OpenAIChatGPTProvider(
@@ -88,6 +92,7 @@ function harness(
         requests.push({
           url: String(input),
           authorization: new Headers(init?.headers).get('authorization'),
+          ...(init?.redirect === undefined ? {} : { redirect: init.redirect }),
           body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>,
         });
         return sse(events);
@@ -135,6 +140,7 @@ describe('ChatGPT as a bounded web search backend', () => {
     expect(h.requests).toHaveLength(1);
     expect(h.requests[0]).toMatchObject({
       url: 'https://api.openai.com/v1/responses',
+      redirect: 'error',
       body: {
         input: [{ role: 'user', content: [{ type: 'input_text', text: query }] }],
         model: CALL.model,
@@ -156,6 +162,21 @@ describe('ChatGPT as a bounded web search backend', () => {
       retryable: false,
     });
     expect(h.requests).toHaveLength(1);
+  });
+
+  it('rejects unexpected function names without echoing provider text into the tool result', async () => {
+    const h = harness([
+      event('response.output_item.added', {
+        output_index: 0,
+        item: { type: 'function_call', name: 'REMOTE-CANARY', namespace: 'REMOTE-CANARY' },
+      }),
+    ]);
+    await expect(
+      h.provider.searchWeb(CALL.model, 'public notice', AbortSignal.timeout(2000)),
+    ).rejects.toMatchObject({
+      message: 'ChatGPT returned an unexpected web search item',
+      retryable: false,
+    });
   });
 
   it('never promotes a hosted action or an incomplete result into ordinary chat output', async () => {

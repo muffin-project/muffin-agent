@@ -1,7 +1,7 @@
 import { ChatGPTConnection } from '../core/config/chatgpt-oauth.js';
 import { type Config, ConfigError, loadConfig } from '../core/config/config.js';
 import { CHATGPT_SEARCH_PROVIDER } from '../core/config/providers.js';
-import type { EgressPolicy } from '../core/net/egress.js';
+import { type EgressPolicy, hostAllowed, loadEgress } from '../core/net/egress.js';
 import { OpenAIChatGPTProvider } from './providers/openai-chatgpt.js';
 import { ProviderError } from './providers/types.js';
 import { diagnoseSearch, type SearchBackend, type SearchDiagnosis } from './tools/search.js';
@@ -21,12 +21,15 @@ export function chatGPTSearchBackend(config: Config, home: string): SearchBacken
     throw new ConfigError('ChatGPT plan permission is unavailable', 'muffin chatgpt login');
   }
   const provider = new OpenAIChatGPTProvider(connection);
+  const endpointHost = new URL(CHATGPT_SEARCH_PROVIDER.endpoint).hostname;
   return {
     ...CHATGPT_SEARCH_PROVIDER,
     search(query, signal) {
       let current: Config;
+      let egress: EgressPolicy;
       try {
         current = loadConfig(home);
+        egress = loadEgress(home);
       } catch {
         throw new ProviderError('ChatGPT search configuration is unavailable', false);
       }
@@ -35,6 +38,9 @@ export function chatGPTSearchBackend(config: Config, home: string): SearchBacken
           'ChatGPT search is no longer selected on the active main provider',
           false,
         );
+      }
+      if (!hostAllowed(endpointHost, egress)) {
+        throw new ProviderError('ChatGPT search no longer has network permission', false);
       }
       return provider.searchWeb(current.models.main, query, signal, current.search.maxResults);
     },
