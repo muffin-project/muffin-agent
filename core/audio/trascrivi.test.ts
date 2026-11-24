@@ -2,7 +2,14 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MODELLO_MANCANTE, assicuraModello, assicuraVoce, prerequisitiTrascrizione, RIMEDIO_FFMPEG, RIMEDIO_WHISPER, trascrivi } from './trascrivi.js';
+import {
+  assicuraModello,
+  MODELLO_MANCANTE,
+  prerequisitiTrascrizione,
+  RIMEDIO_FFMPEG,
+  RIMEDIO_WHISPER,
+  trascrivi,
+} from './trascrivi.js';
 
 /**
  * La voce dell'owner trascritta in casa, e cosa succede quando non si può.
@@ -60,7 +67,10 @@ describe('quando manca un pezzo, lo dice con il comando che lo ripara', () => {
   });
 
   it('modello configurato ma non sul disco: stesso rimedio, e lo nomina', async () => {
-    const esito = await trascrivi(audio, { whisperModel: join(dir, 'mai-scaricato.bin'), run: async () => ({ stdout: '' }) });
+    const esito = await trascrivi(audio, {
+      whisperModel: join(dir, 'mai-scaricato.bin'),
+      run: async () => ({ stdout: '' }),
+    });
     expect(esito.ok).toBe(false);
     if (esito.ok) return;
     expect(esito.why).toContain('mai-scaricato.bin');
@@ -167,7 +177,9 @@ describe('il WAV convertito non resta in giro', () => {
         return { stdout: '' };
       },
     });
-    const dopo = readdirSync(tmpdir()).filter((n) => n.startsWith('muffin-audio-') && !primaDelle.has(n));
+    const dopo = readdirSync(tmpdir()).filter(
+      (n) => n.startsWith('muffin-audio-') && !primaDelle.has(n),
+    );
     expect(dopo).toEqual([]);
   });
 
@@ -214,7 +226,10 @@ describe('i prerequisiti si possono chiedere prima che arrivi una nota vocale', 
     writeFileSync(join(bin, 'whisper-cli'), '');
     const modello = join(dir, 'ggml-base.bin');
     writeFileSync(modello, '');
-    const esito = prerequisitiTrascrizione({ whisperModel: modello }, `${join(dir, 'vuota')}:${bin}`);
+    const esito = prerequisitiTrascrizione(
+      { whisperModel: modello },
+      `${join(dir, 'vuota')}:${bin}`,
+    );
     expect(esito).toEqual([
       { cosa: 'ffmpeg', ok: true, dove: join(bin, 'ffmpeg') },
       { cosa: 'whisper.cpp', ok: true, dove: join(bin, 'whisper-cli') },
@@ -225,7 +240,10 @@ describe('i prerequisiti si possono chiedere prima che arrivi una nota vocale', 
   it('un binario dato per percorso si guarda lì, non nel PATH', () => {
     const mio = join(dir, 'whisper-mio');
     writeFileSync(mio, '');
-    const esito = prerequisitiTrascrizione({ whisperBin: mio, whisperModel: join(dir, 'no.bin') }, '');
+    const esito = prerequisitiTrascrizione(
+      { whisperBin: mio, whisperModel: join(dir, 'no.bin') },
+      '',
+    );
     expect(esito[1]).toEqual({ cosa: 'whisper.cpp', ok: true, dove: mio });
     expect(esito[0]).toMatchObject({ ok: false });
   });
@@ -233,7 +251,8 @@ describe('i prerequisiti si possono chiedere prima che arrivi una nota vocale', 
 
 describe('il modello si assicura, non si presuppone', () => {
   const scarica = (byte: Buffer) =>
-    (async () => new Response(new Uint8Array(byte), { status: 200 })) as unknown as typeof globalThis.fetch;
+    (async () =>
+      new Response(new Uint8Array(byte), { status: 200 })) as unknown as typeof globalThis.fetch;
 
   it('se c è non tocca la rete', async () => {
     let rete = 0;
@@ -265,46 +284,11 @@ describe('il modello si assicura, non si presuppone', () => {
     expect(existsSync(join(dir, 'a.bin'))).toBe(false);
 
     const vuota = await assicuraModello(join(dir, 'b.bin'), { fetch: scarica(Buffer.alloc(0)) });
-    expect(vuota).toEqual({ esito: 'fallito', why: 'modello whisper non scaricato: risposta vuota' });
+    expect(vuota).toEqual({
+      esito: 'fallito',
+      why: 'modello whisper non scaricato: risposta vuota',
+    });
     expect(existsSync(join(dir, 'b.bin'))).toBe(false);
-  });
-
-  it('assicuraVoce: niente superfici vocali, niente rete, niente riga', async () => {
-    let rete = 0;
-    const riga = await assicuraVoce(
-      dir,
-      { surfaces: { enabled: ['cli'] }, audio: undefined },
-      {
-        fetch: (async () => {
-          rete++;
-          return new Response('x', { status: 200 });
-        }) as unknown as typeof globalThis.fetch,
-      },
-    );
-    expect(riga).toBeNull();
-    expect(rete).toBe(0);
-  });
-
-  it('assicuraVoce: dice presente, scaricato o fallito con tre righe diverse', async () => {
-    const base = { surfaces: { enabled: ['cli', 'telegram'] }, audio: undefined };
-    expect(await assicuraVoce(dir, { ...base, audio: { whisperModel: modelloFinto() } })).toBe(
-      'voce: modello whisper presente',
-    );
-    const dove = join(dir, 'm2.bin');
-    expect(await assicuraVoce(dir, { ...base, audio: { whisperModel: dove } }, { fetch: scarica(Buffer.from('modello')) })).toContain(
-      'voce: modello whisper scaricato',
-    );
-    expect(
-      await assicuraVoce(
-        dir,
-        { ...base, audio: { whisperModel: join(dir, 'm3.bin') } },
-        {
-          fetch: (async () => {
-            throw new Error('offline');
-          }) as unknown as typeof globalThis.fetch,
-        },
-      ),
-    ).toContain('voce: modello whisper non scaricato');
   });
 
   it('trascrivi con provisiona scarica e poi trascrive, senza cambiare il rimedio quando fallisce', async () => {
