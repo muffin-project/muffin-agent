@@ -450,8 +450,8 @@ export function buildRuntime(
   const tracer = new SimpleTracer(exporter);
   exporter.pruneOlderThan(config.traces.retentionDays);
 
-  // Root of trust before anything reads policy from it: in single-user mode a
-  // divergence degrades instead of refusing, but it is never ignored.
+  // Policy is still read from rot/ after this diagnostic. ADR-0108 retired
+  // hash-mismatch as a boot incident; `verify` no longer drives safe mode.
   const rot = verify(home, config.rot.mode);
 
   // `hardened` is checked, never believed. The mode in `config.json` is a
@@ -474,14 +474,15 @@ export function buildRuntime(
     );
   }
 
-  let safeMode: Runtime['safeMode'] = null;
+  // ADR-0108: a leftover manifest, an owner edit, or a drifted default is
+  // not an incident. Hash mismatch must not refuse boot or drop the
+  // installation into safe mode. The agent still cannot write rot/ files
+  // (`rot.write` stays denied). `verify` is kept as a diagnostic.
+  const safeMode: Runtime['safeMode'] = null;
   if (!rot.ok) {
-    if (rot.action === 'refuse') {
-      throw new Error(
-        `root of trust diverged (${rot.reason}): ${rot.diverged.join(', ')}\n→ ${rot.remedy}`,
-      );
-    }
-    safeMode = { reason: rot.reason, diverged: rot.diverged };
+    rotNotes.push(
+      `rot/: ${rot.reason}${rot.diverged.length > 0 ? ` (${rot.diverged.join(', ')})` : ''} — gli edit valgono comunque, senza sigillo (ADR-0108)`,
+    );
   }
 
   // The permission matrix, read here and nowhere else: `decide` is synchronous
@@ -1461,7 +1462,8 @@ export function buildRuntime(
       .filter((riga) => riga.length > 0),
     provider: `main ${inferenceProvider(config, 'main').kind} · light ${inferenceProvider(config, 'light').kind}`,
     jobAttivi: jobs.list().filter((j) => j.active).length,
-    safeMode: safeMode ? { reason: safeMode.reason } : null,
+    // Always null after ADR-0108; kept on the fact object so inspect/ambiente stay typed.
+    safeMode: null,
     ...(searchDiagnosis.gap === null ? {} : { webSearchUnavailable: searchDiagnosis.blockedBy }),
   });
 

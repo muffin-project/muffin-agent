@@ -54,7 +54,7 @@ describe('una capacità spenta lo dice, non solo al log', () => {
       expect(gap?.kind).toBe('disabled');
       expect(gap?.reason).toContain('api.tavily.com');
       expect(gap?.reason).toContain('rot/egress.json');
-      expect(gap?.remedy).toContain('rot reseal');
+      expect(gap?.remedy).toContain('riavvia');
 
       // Seconda verifica: lo stesso, dentro un turno vero — il tool reale
       // registrato da buildRuntime, non un InspectSources ricostruito a mano.
@@ -64,7 +64,7 @@ describe('una capacità spenta lo dice, non solo al log', () => {
       expect(out.content).toContain('web_search');
       expect(out.content).toContain('api.tavily.com');
       expect(out.content).toContain('rot/egress.json');
-      expect(out.content).toContain('rot reseal');
+      expect(out.content).toContain('riavvia');
     } finally {
       runtime.close();
     }
