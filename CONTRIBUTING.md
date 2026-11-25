@@ -164,6 +164,15 @@ those files affect. Activate it once per clone with
 `npm test` stays the full local suite; CI partitions a few suites across the
 narrow required checks (see `.github/workflows/ci.yml`).
 
+Tests that need something not every machine has (the production sandbox with
+its Git-hook protection, a working `systemd-analyze`) ask
+`test-support/requires.ts` instead of probing on their own. The capabilities
+are measured once per run in `vitest.capabilities.ts`, and a missing one
+**skips** with the reason in the test name; it never passes silently. CI sets
+`MUFFIN_REQUIRE_CAPABILITIES`, so there a missing capability stops the run
+before the first test. `MUFFIN_FORCE_CAPABILITIES` runs the tests anyway, so
+they fail for the real reason (used by the AppArmor mutation step).
+
 Green Actions are not evidence for behaviour the hosted runner cannot observe,
 such as a fresh public VPS install or an owner-controlled external service.
 Record that acceptance separately and leave it unresolved until it is observed.
