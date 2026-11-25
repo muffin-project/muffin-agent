@@ -130,11 +130,27 @@ function probeSystemdAnalyze(): Probe {
   }
 }
 
+/**
+ * Il parser dei plist di macOS (`plutil -lint`): la controparte di
+ * `systemd-analyze` per la unit launchd. Esiste solo su macOS, e nessun runner
+ * CI è macOS: qui la capacità non è mai richiesta, ma il salto si dichiara.
+ */
+function probePlutil(): Probe {
+  if (platform() !== 'darwin') {
+    return { ok: false, reason: `plutil esiste solo su macOS (qui: ${platform()})` };
+  }
+  const p = spawnSync('plutil', ['-help'], { encoding: 'utf8' });
+  if (p.error !== undefined)
+    return { ok: false, reason: `plutil non eseguibile: ${p.error.message}` };
+  return { ok: true, reason: 'plutil disponibile' };
+}
+
 export async function probeAll(): Promise<Record<CapabilityName, Probe>> {
   const sandbox = await probeSandbox();
   return {
     sandbox,
     'shell-boundary': await probeShellBoundary(sandbox),
     'systemd-analyze': probeSystemdAnalyze(),
+    plutil: probePlutil(),
   };
 }
