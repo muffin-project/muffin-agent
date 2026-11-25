@@ -31,7 +31,7 @@ import { PROVIDERS, providerFor } from './providers.js';
  * not replace that.
  */
 
-export type KeyProviderId = 'openrouter' | 'anthropic';
+export type KeyProviderId = 'openrouter' | 'anthropic' | 'xai';
 export type KeyAuthMethod = 'oauth-pkce' | 'api-key';
 
 export type KeyAuthProfile = {
@@ -54,7 +54,7 @@ type Index = {
   selected: Partial<Record<KeyProviderId, string>>;
 };
 
-const KEY_PROVIDERS: readonly KeyProviderId[] = ['openrouter', 'anthropic'];
+const KEY_PROVIDERS: readonly KeyProviderId[] = ['openrouter', 'anthropic', 'xai'];
 const ID_PATTERN = /^[a-z0-9]{1,32}$/;
 
 export class AuthProfileError extends Error {
@@ -283,7 +283,7 @@ function isIndex(value: unknown): value is Index {
 function isProfile(value: unknown): value is KeyAuthProfile {
   if (!value || typeof value !== 'object') return false;
   const profile = value as Partial<KeyAuthProfile>;
-  if (profile.provider !== 'openrouter' && profile.provider !== 'anthropic') return false;
+  if (profile.provider === undefined || !KEY_PROVIDERS.includes(profile.provider)) return false;
   if (profile.method !== 'oauth-pkce' && profile.method !== 'api-key') return false;
   if (typeof profile.id !== 'string' || typeof profile.secretName !== 'string') return false;
   if (profile.id !== 'default' && !ID_PATTERN.test(profile.id)) return false;

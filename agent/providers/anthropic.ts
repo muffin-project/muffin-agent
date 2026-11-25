@@ -1,24 +1,24 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { compileForAnthropic } from './compile.js';
 import {
-  ProviderError,
-  ProviderStreamError,
-  parseRetryAfterMs,
+  type ReasoningCapabilities,
+  ReasoningConfigurationError,
+  type ReasoningResolution,
+  reasoningRequest,
+  resolveReasoningPolicy,
+} from './reasoning.js';
+import {
   type ChatCall,
   type ChatResult,
   type ContentBlock,
   type Provider,
+  ProviderError,
+  ProviderStreamError,
+  parseRetryAfterMs,
   type StopReason,
   type StreamEvent,
   type ThinkingBlock,
 } from './types.js';
-import {
-  ReasoningConfigurationError,
-  reasoningRequest,
-  resolveReasoningPolicy,
-  type ReasoningCapabilities,
-  type ReasoningResolution,
-} from './reasoning.js';
 
 /**
  * Anthropic native.
@@ -56,7 +56,10 @@ export class AnthropicProvider implements Provider {
 
   async chat(call: ChatCall): Promise<ChatResult> {
     try {
-      const response = await this.client.messages.create(requestBody(call), call.signal ? { signal: call.signal } : {});
+      const response = await this.client.messages.create(
+        requestBody(call),
+        call.signal ? { signal: call.signal } : {},
+      );
       return toChatResult(response);
     } catch (error) {
       throw wrap(error);
@@ -116,7 +119,12 @@ export class AnthropicProvider implements Provider {
     // non-streaming JSON already gets its one parse.
     const toolJson = new Map<number, string>();
     let stopReason: string | null = null;
-    let usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    const usage = {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    };
     let model = call.model;
     // See `ProviderStreamError.partial`: the only fact that changes how a
     // failure below is classified.
@@ -133,13 +141,19 @@ export class AnthropicProvider implements Provider {
             // are already final on message_start — required for toChatResult's
             // normalization below to see anything but zero on this path (P35).
             usage.cache_read_input_tokens = event.message.usage.cache_read_input_tokens ?? 0;
-            usage.cache_creation_input_tokens = event.message.usage.cache_creation_input_tokens ?? 0;
+            usage.cache_creation_input_tokens =
+              event.message.usage.cache_creation_input_tokens ?? 0;
             break;
           case 'content_block_start':
             blocks[event.index] = event.content_block;
             if (event.content_block.type === 'tool_use') {
               toolJson.set(event.index, '');
-              yield { type: 'tool_call_delta', index: event.index, id: event.content_block.id, name: event.content_block.name };
+              yield {
+                type: 'tool_call_delta',
+                index: event.index,
+                id: event.content_block.id,
+                name: event.content_block.name,
+              };
             }
             break;
           case 'content_block_delta': {
@@ -172,7 +186,12 @@ export class AnthropicProvider implements Provider {
                 // profile's recovery cascade exactly like a non-streaming
                 // malformed tool call (`openai-compat.ts`'s own JSON.parse),
                 // never to the stream→non-stream fallback below.
-                throw new ProviderError(`malformed tool arguments from ${block.name}`, true, undefined, 'output');
+                throw new ProviderError(
+                  `malformed tool arguments from ${block.name}`,
+                  true,
+                  undefined,
+                  'output',
+                );
               }
             }
             break;
@@ -200,7 +219,11 @@ export class AnthropicProvider implements Provider {
       if (error instanceof Anthropic.APIError && error.status === undefined) {
         throw providerErrorFromWire(error, call.model);
       }
-      throw new ProviderStreamError(error instanceof Error ? error.message : String(error), receivedAnyEvent, error);
+      throw new ProviderStreamError(
+        error instanceof Error ? error.message : String(error),
+        receivedAnyEvent,
+        error,
+      );
     }
 
     // A stream our own signal truncated is not a completed response.
@@ -272,7 +295,14 @@ function requestBody(call: ChatCall): Omit<Anthropic.MessageCreateParamsNonStrea
             description: t.description,
             input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
           })),
-          tool_choice: { type: call.toolChoice === 'none' ? ('none' as const) : call.toolChoice === 'required' ? ('any' as const) : ('auto' as const) },
+          tool_choice: {
+            type:
+              call.toolChoice === 'none'
+                ? ('none' as const)
+                : call.toolChoice === 'required'
+                  ? ('any' as const)
+                  : ('auto' as const),
+          },
         }
       : {}),
     // `{type:'enabled', budget_tokens}` used to stand here. It is
@@ -290,7 +320,9 @@ function requestBody(call: ChatCall): Omit<Anthropic.MessageCreateParamsNonStrea
         : effective?.mode === 'on' || effective?.mode === 'adaptive'
           ? { thinking: { type: 'adaptive' as const } }
           : {}),
-    ...(effective?.effort === undefined ? {} : ({ output_config: { effort: effective.effort } } as Record<string, unknown>)),
+    ...(effective?.effort === undefined
+      ? {}
+      : ({ output_config: { effort: effective.effort } } as Record<string, unknown>)),
   };
 }
 
@@ -412,7 +444,10 @@ function toContentBlock(block: ContentBlock): Anthropic.ContentBlockParam {
     // lette il 28/08/2026. La sorgente `url` esiste e non si usa: vedi
     // `ImageBlock` in providers/types.ts per il perche'.
     case 'image':
-      return { type: 'image', source: { type: 'base64', media_type: block.mediaType, data: block.data } };
+      return {
+        type: 'image',
+        source: { type: 'base64', media_type: block.mediaType, data: block.data },
+      };
     case 'tool_use':
       return { type: 'tool_use', id: block.id, name: block.name, input: block.input };
     case 'tool_result':
@@ -483,6 +518,8 @@ function wrap(error: unknown): ProviderError {
       status,
       'transport',
       parseRetryAfterMs(error.headers),
+      false,
+      error instanceof Anthropic.APIConnectionError ? { connection: true } : undefined,
     );
   }
   if (error instanceof Error && error.name === 'AbortError') {
