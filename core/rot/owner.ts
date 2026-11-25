@@ -1,9 +1,10 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { tightenPrivateFile } from '../config/private-fs.js';
 import { paths } from '../config/config.js';
-import { hardeningHolds, seal, sha256, verify, type RotManifest } from './verify.js';
+import { tightenPrivateFile } from '../config/private-fs.js';
+import { backupOwnerConfigFile } from './backup.js';
+import { hardeningHolds, type RotManifest, seal } from './verify.js';
 
 /**
  * Chi è l'owner, dentro il sigillo — `rot/owner.json`.
@@ -26,16 +27,13 @@ import { hardeningHolds, seal, sha256, verify, type RotManifest } from './verify
  *
  * Tre esiti, non due, ed è la distinzione che fa la sicurezza:
  *
- *  - **`sealed`** — il manifest dichiara `owner.json`, l'anchor conferma il
- *    manifest, l'hash del file combacia e il contenuto è valido. Vince questo,
- *    sempre: `config.json` non viene nemmeno letto.
- *  - **`legacy`** — il sigillo non ha **mai sentito parlare** di `owner.json`
- *    (casa sigillata prima di questa release, o mai sigillata). Solo qui vale
- *    `config.json`, ed è ciò che tiene viva un'installazione esistente.
- *  - **`refused`** — il sigillo dichiara `owner.json` ma il file non
- *    corrisponde: sparito, hash diverso, JSON rotto, schema sbagliato, o
- *    l'anchor non conferma più il manifest. Allora **nessuno è owner**, e non
- *    si torna a `config.json`.
+ *  - **`sealed`** — `rot/owner.json` esiste ed è valido (schema e forma). Vince
+ *    questo, sempre: `config.json` non viene nemmeno letto. Un leftover
+ *    manifest o un hash divergente non cambia l'autorità (ADR-0108).
+ *  - **`legacy`** — il file non c'è. Solo qui vale `config.json`, ed è ciò che
+ *    tiene viva un'installazione esistente.
+ *  - **`refused`** — il file c'è ma non è leggibile: JSON rotto o schema
+ *    sbagliato. Allora **nessuno è owner**, e non si torna a `config.json`.
  *
  * L'ultimo punto è il motivo per cui `refused` esiste come esito separato.
  * «Trattalo come assente» sarebbe stato più corto e avrebbe aperto la porta
@@ -93,7 +91,6 @@ export type SealedOwner = {
 };
 
 const MANIFEST_FILENAME = 'manifest.json'; // Lo stesso letterale privato di `verify.ts`.
-const ANCHOR_FILE = '.rot-anchor'; // Idem — fuori da `rot/`, come vuole l'anchor.
 
 /**
  * Legge il legame sigillato, verificando **questo file** e non tutto il RoT.
@@ -110,8 +107,6 @@ const ANCHOR_FILE = '.rot-anchor'; // Idem — fuori da `rot/`, come vuole l'anc
 export function loadSealedOwner(home: string): SealedOwner {
   const rotDir = paths(home).rot;
   const file = join(rotDir, OWNER_FILE);
-  const manifestFile = join(rotDir, MANIFEST_FILENAME);
-  const anchorFile = join(home, ANCHOR_FILE);
   const onDisk = existsSync(file);
 
   const legacy = (note?: string): SealedOwner => ({
@@ -121,73 +116,26 @@ export function loadSealedOwner(home: string): SealedOwner {
   });
   const refused = (note: string): SealedOwner => ({ binding: null, source: 'refused', note });
 
-  if (!existsSync(manifestFile) || !existsSync(anchorFile)) {
-    // Nessun sigillo stabilito: non c'è niente da cui il legame possa venire.
-    // `muffin doctor` grida già per il manifest mancante; qui basta non
-    // fingere che un file non coperto sia coperto.
-    return legacy(
-      onDisk ? `${file} esiste ma questo home non ha un sigillo: il legame che vale è quello di config.json` : undefined,
-    );
-  }
+  // ADR-0108: owner.json is owner-editable config. The leftover manifest is
+  // not the authority. A present, valid file wins; a present but invalid
+  // file refuses (does not fall back to config.json); an absent file is
+  // legacy and still reads config.json.
+  if (!onDisk) return legacy();
 
-  const serialized = readFileSync(manifestFile, 'utf8');
-  const anchor = readFileSync(anchorFile, 'utf8').trim();
-  let manifest: RotManifest | null = null;
-  try {
-    manifest = JSON.parse(serialized) as RotManifest;
-  } catch {
-    manifest = null;
-  }
-  const declared =
-    manifest !== null && Array.isArray(manifest.files)
-      ? manifest.files.find((f) => f.path === OWNER_FILE)
-      : undefined;
-
-  if (sha256(serialized) !== anchor) {
-    // Il manifest non è più confermato dall'anchor: da qui in poi nemmeno
-    // «il sigillo dichiara owner.json» è un'affermazione credibile. Se un
-    // legame sigillato risulta esistere in una qualunque delle due fonti che
-    // non possiamo più credere, la risposta è nessun owner — non config.json.
-    if (onDisk || declared !== undefined) {
-      return refused(
-        `${manifestFile} non è più confermato da ${anchorFile}: il legame owner non è verificabile, nessuno è owner`,
-      );
-    }
-    return legacy();
-  }
-
-  if (declared === undefined) {
-    // Casa sigillata prima che questo file esistesse: è il solo caso in cui
-    // `config.json` decide ancora chi è l'owner.
-    return legacy(
-      onDisk
-        ? `${file} esiste ma non è dentro il sigillo: lo sto ignorando — \`muffin rot reseal\` per renderlo vincolante`
-        : undefined,
-    );
-  }
-
-  if (!onDisk) {
-    return refused(`${file} è dichiarato dal sigillo ed è sparito: nessuno è owner finché non torna`);
-  }
   const bytes = readFileSync(file);
-  if (sha256(bytes) !== declared.sha256) {
-    return refused(`${file} non corrisponde al sigillo (hash diverso): nessuno è owner`);
-  }
-
   let raw: unknown;
   try {
     raw = JSON.parse(bytes.toString('utf8'));
   } catch {
-    return refused(`${file} è sigillato ma non è JSON valido: nessuno è owner`);
+    return refused(`${file} non è JSON valido: nessuno è owner`);
   }
   const parsed = OwnerBindingSchema.safeParse(raw);
   if (!parsed.success) {
     const first = parsed.error.issues[0];
     return refused(
-      `${file} è sigillato ma non ha la forma attesa (${first?.path.join('.') || '(root)'}: ${first?.message ?? 'illeggibile'}): nessuno è owner`,
+      `${file} non ha la forma attesa (${first?.path.join('.') || '(root)'}: ${first?.message ?? 'illeggibile'}): nessuno è owner`,
     );
   }
-
   return { binding: parsed.data, source: 'sealed' };
 }
 
@@ -258,7 +206,11 @@ export type OwnerPatch = {
  * niente e stampa il rimedio: prima si guarda cosa è cambiato, poi si
  * risigilla a mano.
  */
-export function sealOwnerBinding(home: string, patch: OwnerPatch, deps: OwnerSealDeps): OwnerSealOutcome {
+export function sealOwnerBinding(
+  home: string,
+  patch: OwnerPatch,
+  deps: OwnerSealDeps,
+): OwnerSealOutcome {
   const { out } = deps;
   const rotDir = paths(home).rot;
   const file = join(rotDir, OWNER_FILE);
@@ -269,9 +221,7 @@ export function sealOwnerBinding(home: string, patch: OwnerPatch, deps: OwnerSea
     ...(patch.telegram === undefined ? {} : { telegram: patch.telegram }),
     ...(patch.discord === undefined ? {} : { discord: patch.discord }),
   };
-  const rimedioAMano =
-    `scrivi ${file} con ${JSON.stringify(desiderato)} e poi esegui \`muffin rot reseal\`, ` +
-    'entrambi con il privilegio che possiede rot/';
+  const rimedioAMano = `scrivi ${file} con ${JSON.stringify(desiderato)} (serve il privilegio che possiede rot/; se la cartella non e' scrivibile, vedi muffin rot migrate)`;
 
   if (!existsSync(rotDir)) {
     const why = `${rotDir} non esiste: questo home non è stato inizializzato`;
@@ -290,16 +240,6 @@ export function sealOwnerBinding(home: string, patch: OwnerPatch, deps: OwnerSea
     return { ok: false, why };
   }
 
-  const before = verify(home, 'single-user');
-  if (!before.ok) {
-    const why = `il sigillo è già divergente (${before.reason}${before.diverged.length > 0 ? `: ${before.diverged.join(', ')}` : ''})`;
-    out(
-      `owner NON sigillato — ${why}. Non risigillo sopra una divergenza che non hai confermato: ` +
-        'guarda cosa è cambiato, `muffin rot reseal` una volta che è tuo, poi ripeti questo comando.',
-    );
-    return { ok: false, why };
-  }
-
   // Additivo: un legame Discord non cancella quello Telegram già sigillato.
   const esistente = loadSealedOwner(home);
   const next: OwnerBinding = {
@@ -315,7 +255,9 @@ export function sealOwnerBinding(home: string, patch: OwnerPatch, deps: OwnerSea
   // `verify()` legge `anchor_mismatch` — safe mode — anche se l'owner non ha
   // mai letto un errore. Identico al rollback di `egress-writer.ts`.
   const fileRawPrima = existsSync(file) ? readFileSync(file, 'utf8') : undefined;
-  const manifestRawPrima = existsSync(manifestFile) ? readFileSync(manifestFile, 'utf8') : undefined;
+  const manifestRawPrima = existsSync(manifestFile)
+    ? readFileSync(manifestFile, 'utf8')
+    : undefined;
   const rotVersion = currentRotVersion(manifestFile);
 
   // Se il primo `writeFileSync` fallisce non c'è niente da rimettere a posto,
@@ -324,6 +266,7 @@ export function sealOwnerBinding(home: string, patch: OwnerPatch, deps: OwnerSea
   // su un manifest che nessuno ha toccato.
   let scritto = false;
   try {
+    backupOwnerConfigFile(home, file);
     writeFileSync(file, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
     tightenPrivateFile(file);
     scritto = true;
@@ -374,7 +317,9 @@ function currentRotVersion(manifestFile: string): string {
   if (!existsSync(manifestFile)) return '1';
   try {
     const parsed = JSON.parse(readFileSync(manifestFile, 'utf8')) as Partial<RotManifest>;
-    return typeof parsed.rotVersion === 'string' && parsed.rotVersion !== '' ? parsed.rotVersion : '1';
+    return typeof parsed.rotVersion === 'string' && parsed.rotVersion !== ''
+      ? parsed.rotVersion
+      : '1';
   } catch {
     return '1';
   }

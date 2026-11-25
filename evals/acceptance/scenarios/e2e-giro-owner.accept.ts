@@ -172,10 +172,8 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
           throw new Error(`doctor in fail al termine dell'installazione:\n${doctor.out}`);
         const warnLines = doctor.out.split('\n').filter((l) => l.startsWith('! '));
         const expectedWarnNames = [
-          // single-user is the mode `muffin init` seals by default — the one
-          // declared warning the DAY-1 requirements inventory names for the owner's own, fully-run
-          // machine (detection without prevention).
-          'root of trust mode',
+          // ADR-0108: single-user is no longer a doctor warning. The check
+          // is ok and is asserted separately below.
           // No chunk has ever been indexed yet — nothing has been written to
           // recall from until ring 6.
           'vector index',
@@ -258,10 +256,11 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
         if (shellWarn && !/bubblewrap|CVE-2026-87766|unverified/i.test(shellWarn)) {
           throw new Error(`doctor non spiega perché la shell è disabilitata:\n${shellWarn}`);
         }
-        if (
-          !warnLines.some((l) => l.startsWith('! root of trust mode') && l.includes('single-user'))
-        ) {
-          throw new Error(`doctor non nomina "root of trust mode: single-user":\n${doctor.out}`);
+        if (!/✓ root of trust mode/.test(doctor.out)) {
+          throw new Error(`doctor non lascia 'root of trust mode' ok (ADR-0108):\n${doctor.out}`);
+        }
+        if (/! root of trust mode/.test(doctor.out)) {
+          throw new Error(`doctor tratta ancora root of trust mode come warn:\n${doctor.out}`);
         }
         // The content check ring 2 sets up: after resolving the duplicate, the
         // "api key" line names exactly ONE copy — the persistent one, since
