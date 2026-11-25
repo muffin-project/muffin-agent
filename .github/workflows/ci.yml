@@ -36,6 +36,10 @@ on:
   # proposito: scatterebbe su ogni etichetta e comprerebbe solo rumore.
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  # Native merge queue: the queue runs the same required checks on the group
+  # it is about to merge. Without this trigger they never report there.
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
     paths-ignore:
@@ -58,6 +62,9 @@ jobs:
   dco:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      checks: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -74,6 +81,16 @@ jobs:
       - name: contributor agreement / DCO
         if: github.event_name == 'pull_request'
         run: npx tsx scripts/check-dco.ts --pull-request-event "$GITHUB_EVENT_PATH"
+
+      # A queue group has no PR payload: verify instead that it only merges PR
+      # heads whose own `dco` check passed (`checkMergeGroupDco`).
+      - name: contributor agreement / DCO (merge queue group)
+        if: github.event_name == 'merge_group'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: npx tsx scripts/check-dco.ts --merge-group "$BASE_SHA" "$HEAD_SHA"
 
   verifica:
     needs: dco
@@ -135,9 +152,9 @@ jobs:
       # coperto dalle PR che lo hanno prodotto. `--no-errors-on-unmatched`:
       # una PR di soli YAML/Markdown non deve fallire perché Biome non
       # processa nessuno dei suoi file.
-      - if: github.event_name == 'pull_request'
+      - if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         name: lint Biome (file cambiati rispetto alla base)
-        run: npx biome check --changed --since=${{ github.event.pull_request.base.sha }} --no-errors-on-unmatched
+        run: npx biome check --changed --since=${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }} --no-errors-on-unmatched
 
       # ADR-0078: ADR-0019 promised this check, but no CI implemented it. It
       # now runs in the required GitHub Actions `verifica` job:
@@ -288,8 +305,8 @@ jobs:
         name: la modifica può rompere un acceptance journey?
         env:
           EVENT: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: node scripts/ci/acceptance-scope.mjs
 
       - if: steps.scope.outputs.run == 'false'
