@@ -83,11 +83,15 @@ CREATE TABLE IF NOT EXISTS approvals (
   -- dov'era. Solo scritture in aggiunta, mai sovrascritture: alla chiusura
   -- terminale si toglie la tastiera a tutte quelle registrate.
   question_message_ids TEXT,
+  tool_call_id TEXT,
+  invocation_digest TEXT,
   -- A keyboard write began, but its outcome is not known yet.
   telegram_question_pending INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_turn ON approvals(turn_id, consumed_at);
 `;
+
+export type ApprovalInvocation = { callId: string; digest: string };
 
 export type ApprovalRow = {
   id: string;
@@ -110,6 +114,7 @@ export type ApprovalRow = {
    * registrato: righe di prima della colonna, o domande mai arrivate sul filo.
    */
   questionMessageIds: number[];
+  invocation: ApprovalInvocation | null;
   telegramQuestionPending: boolean;
 };
 
@@ -127,6 +132,8 @@ type Raw = {
   decided_by: string | null;
   withdrawn_at: string | null;
   question_message_ids: string | null;
+  tool_call_id: string | null;
+  invocation_digest: string | null;
   telegram_question_pending: number;
 };
 
@@ -167,6 +174,10 @@ const read = (r: Raw): ApprovalRow => ({
   decidedBy: r.decision === null ? null : r.decided_by === 'delegation' ? 'delegation' : 'owner',
   withdrawnAt: r.withdrawn_at,
   questionMessageIds: leggiDomande(r.question_message_ids),
+  invocation:
+    typeof r.tool_call_id === 'string' && typeof r.invocation_digest === 'string'
+      ? { callId: r.tool_call_id, digest: r.invocation_digest }
+      : null,
   telegramQuestionPending: r.telegram_question_pending === 1,
 });
 
@@ -185,8 +196,9 @@ export class ApprovalStore {
   private readonly rejectTelegramQuestionStmt: DatabaseCtor.Statement;
   private readonly withdrawnQuestionsStmt: DatabaseCtor.Statement;
   private readonly openForStmt: DatabaseCtor.Statement;
+  private readonly decidedInvocationsStmt: DatabaseCtor.Statement;
 
-  constructor(db: DatabaseCtor.Database) {
+  constructor(private readonly db: DatabaseCtor.Database) {
     db.exec(SCHEMA);
     // `CREATE TABLE IF NOT EXISTS` non tocca una tabella che esiste già: su un
     // database installato prima di questa colonna lo schema sopra è un no-op e
@@ -207,6 +219,8 @@ export class ApprovalStore {
     // Stesso meccanismo, stessa ragione: l'id del messaggio della domanda
     // (#784) su un database installato prima di questa colonna.
     ensureColumn(db, 'approvals', 'question_message_ids', 'question_message_ids TEXT');
+    ensureColumn(db, 'approvals', 'tool_call_id', 'tool_call_id TEXT');
+    ensureColumn(db, 'approvals', 'invocation_digest', 'invocation_digest TEXT');
     ensureColumn(
       db,
       'approvals',
@@ -214,8 +228,9 @@ export class ApprovalStore {
       'telegram_question_pending INTEGER NOT NULL DEFAULT 0',
     );
     this.askStmt = db.prepare(
-      `INSERT INTO approvals (id, turn_id, capability, resource, prompt, taint, asked_at)
-       VALUES (@id, @turnId, @capability, @resource, @prompt, @taint, @askedAt)`,
+      `INSERT INTO approvals (id, turn_id, capability, resource, prompt, taint, asked_at,
+                              tool_call_id, invocation_digest)
+       VALUES (@id, @turnId, @capability, @resource, @prompt, @taint, @askedAt, @callId, @digest)`,
     );
     this.getStmt = db.prepare(`SELECT * FROM approvals WHERE id = ?`);
     /**
@@ -235,11 +250,12 @@ export class ApprovalStore {
       `SELECT * FROM approvals
         WHERE turn_id = @turnId AND capability = @capability
           AND resource IS @resource
-          AND decision IS NOT NULL AND consumed_at IS NULL
+          AND tool_call_id IS NULL AND decision IS NOT NULL AND consumed_at IS NULL
         ORDER BY decided_at ASC LIMIT 1`,
     );
     this.consumeStmt = db.prepare(
-      `UPDATE approvals SET consumed_at = @at WHERE id = @id AND consumed_at IS NULL`,
+      `UPDATE approvals SET consumed_at = @at WHERE id = @id AND consumed_at IS NULL
+         AND decision IS NOT NULL AND withdrawn_at IS NULL`,
     );
     this.openStmt = db.prepare(
       `SELECT * FROM approvals WHERE turn_id = ? AND decision IS NULL AND withdrawn_at IS NULL
@@ -259,6 +275,7 @@ export class ApprovalStore {
     this.openForStmt = db.prepare(
       `SELECT * FROM approvals
         WHERE turn_id = @turnId AND capability = @capability AND resource IS @resource
+          AND tool_call_id IS @callId AND invocation_digest IS @digest
           AND decision IS NULL AND withdrawn_at IS NULL
         ORDER BY asked_at ASC LIMIT 1`,
     );
@@ -281,8 +298,14 @@ export class ApprovalStore {
         WHERE turn_id = ? AND withdrawn_at IS NOT NULL AND question_message_ids IS NOT NULL
         ORDER BY asked_at ASC`,
     );
+    this.decidedInvocationsStmt = db.prepare(
+      `SELECT * FROM approvals
+        WHERE turn_id = ? AND tool_call_id IS NOT NULL AND decision IS NOT NULL
+        ORDER BY asked_at, rowid`,
+    );
     this.decidedUnconsumedStmt = db.prepare(
-      `SELECT 1 AS uno FROM approvals WHERE turn_id = ? AND decision IS NOT NULL AND consumed_at IS NULL LIMIT 1`,
+      `SELECT 1 AS uno FROM approvals WHERE turn_id = ? AND decision IS NOT NULL AND consumed_at IS NULL
+         AND (? = 0 OR tool_call_id IS NULL) LIMIT 1`,
     );
   }
 
@@ -303,6 +326,7 @@ export class ApprovalStore {
       resource?: string | undefined;
       prompt: string;
       taint: TrustTier;
+      invocation?: ApprovalInvocation | undefined;
     },
     now: Date,
   ): string {
@@ -310,6 +334,8 @@ export class ApprovalStore {
       turnId: req.turnId,
       capability: req.capability,
       resource: req.resource ?? null,
+      callId: req.invocation?.callId ?? null,
+      digest: req.invocation?.digest ?? null,
     }) as Raw | undefined;
     if (aperta !== undefined) return aperta.id;
     // Esadecimale: l'id finisce dentro `approval:<id>` in `wait_for` e dentro
@@ -324,6 +350,8 @@ export class ApprovalStore {
       prompt: req.prompt,
       taint: req.taint,
       askedAt: now.toISOString(),
+      callId: req.invocation?.callId ?? null,
+      digest: req.invocation?.digest ?? null,
     });
     return id;
   }
@@ -454,8 +482,70 @@ export class ApprovalStore {
    * ripresa per distinguere «una delle domande è stata decisa» da «è scaduto
    * il tempo» (issue #741), senza leggere l'orologio del turno.
    */
-  decidedUnconsumed(turnId: string): boolean {
-    return this.decidedUnconsumedStmt.get(turnId) !== undefined;
+  decidedUnconsumed(turnId: string, legacyOnly = false): boolean {
+    return this.decidedUnconsumedStmt.get(turnId, legacyOnly ? 1 : 0) !== undefined;
+  }
+
+  decidedInvocations(turnId: string): ApprovalRow[] {
+    return (this.decidedInvocationsStmt.all(turnId) as Raw[]).map(read);
+  }
+
+  consumeInline(id: string, now: Date): boolean {
+    return this.consumeStmt.run({ id, at: now.toISOString() }).changes === 1;
+  }
+
+  /** Commit one grant and its invocation intent under the same active claim. */
+  startInvocation(
+    expected: {
+      id: string;
+      turnId: string;
+      capability: string;
+      resource?: string | undefined;
+      invocation: ApprovalInvocation;
+      claimToken: string | null;
+    },
+    now: Date,
+    start: () => void,
+  ): 'allow' | 'deny' | 'expired' | null {
+    return this.db
+      .transaction(() => {
+        const row = this.get(expected.id);
+        if (
+          row === null ||
+          row.turnId !== expected.turnId ||
+          row.capability !== expected.capability ||
+          row.resource !== (expected.resource ?? null) ||
+          row.invocation?.callId !== expected.invocation.callId ||
+          row.invocation.digest !== expected.invocation.digest ||
+          row.withdrawnAt !== null ||
+          row.decision === null ||
+          row.consumedAt !== null
+        ) {
+          return null;
+        }
+        const owns = this.db
+          .prepare("SELECT 1 FROM turns WHERE id = ? AND status = 'running' AND claim_token = ?")
+          .get(expected.turnId, expected.claimToken);
+        if (owns === undefined || row.decidedAt === null) return null;
+
+        const validUntil = Date.parse(row.askedAt) + APPROVAL_WINDOW_MS;
+        const decidedAt = Date.parse(row.decidedAt);
+        if (!Number.isFinite(validUntil) || !Number.isFinite(decidedAt) || decidedAt > validUntil) {
+          return 'expired';
+        }
+        if (row.decision === 'allow') {
+          const existing = this.db
+            .prepare('SELECT 1 FROM turn_tool_calls WHERE turn_id = ? AND call_id = ?')
+            .get(expected.turnId, expected.invocation.callId);
+          if (existing !== undefined) return null;
+          start();
+        }
+        if (this.consumeStmt.run({ id: row.id, at: now.toISOString() }).changes !== 1) {
+          throw new Error('approval could not be consumed');
+        }
+        return row.decision;
+      })
+      .immediate();
   }
 
   /**
