@@ -1,11 +1,20 @@
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { giudica, homeDrift, markHome, raccontaDrift, watchedPaths, VOCI_DEL_GATEWAY } from './home-guard.js';
+import {
+  giudica,
+  homeDrift,
+  markHome,
+  raccontaDrift,
+  VOCI_DEL_GATEWAY,
+  watchedPaths,
+} from './home-guard.js';
 
 const case_: string[] = [];
-afterAll(() => { for (const d of case_) rmSync(d, { recursive: true, force: true }); });
+afterAll(() => {
+  for (const d of case_) rmSync(d, { recursive: true, force: true });
+});
 
 function casa(): string {
   const d = mkdtempSync(join(tmpdir(), 'muffin-guard-'));
@@ -76,13 +85,18 @@ describe('la guardia è armata, in tutte e due le suite', () => {
   for (const config of ['vitest.config.ts', 'vitest.acceptance.config.ts']) {
     it(`${config} nomina il globalSetup`, () => {
       const testo = readFileSync(join(import.meta.dirname, '..', '..', config), 'utf8');
-      expect(testo).toContain("globalSetup: ['./vitest.home-guard.ts']");
+      // Nella lista, non per forza da solo: vitest.config.ts carica anche il
+      // registro delle capacità (vitest.capabilities.ts).
+      expect(testo).toMatch(/globalSetup: \[[^\]]*'\.\/vitest\.home-guard\.ts'/);
     });
   }
 
   it('il globalSetup lancia, e non si limita a stampare', () => {
     // Una riga di log in fondo a duemila test verdi non la legge nessuno.
-    const testo = readFileSync(join(import.meta.dirname, '..', '..', 'vitest.home-guard.ts'), 'utf8');
+    const testo = readFileSync(
+      join(import.meta.dirname, '..', '..', 'vitest.home-guard.ts'),
+      'utf8',
+    );
     expect(testo).toContain('throw new Error');
   });
 });
@@ -97,7 +111,10 @@ describe('la guardia è armata, in tutte e due le suite', () => {
  */
 describe('chi ha scritto: la casa viva non è una fuga', () => {
   /** La radice della casa, prima e dopo, come la vede `markHome`. */
-  function casaConVoci(voci: string[]): { dir: string; marchio: () => ReturnType<typeof markHome> } {
+  function casaConVoci(voci: string[]): {
+    dir: string;
+    marchio: () => ReturnType<typeof markHome>;
+  } {
     const d = casa();
     mkdirSync(join(d, '.muffin'), { recursive: true });
     for (const v of voci) writeFileSync(join(d, '.muffin', v), 'x');

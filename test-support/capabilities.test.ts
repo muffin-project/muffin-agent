@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   CAPABILITY_NAMES,
@@ -98,5 +100,19 @@ describe('il nome del test porta il motivo solo quando salta', () => {
     expect(
       withReason('t', { ok: false, reason: 'manca AppArmor', required: false, forced: false }),
     ).toBe('t [saltato: manca AppArmor]');
+  });
+});
+
+describe('il registro è armato', () => {
+  it('vitest.config.ts carica vitest.capabilities.ts come globalSetup', () => {
+    // Senza, capability() lancerebbe a raccolta in ogni file che la usa: rosso
+    // rumoroso, ma meglio che saperlo da qui con il motivo giusto.
+    const testo = readFileSync(join(import.meta.dirname, '..', 'vitest.config.ts'), 'utf8');
+    expect(testo).toMatch(/globalSetup: \[[^\]]*'\.\/vitest\.capabilities\.ts'/);
+  });
+
+  it('il globalSetup lancia quando una capacità richiesta manca, non si limita a stampare', () => {
+    const testo = readFileSync(join(import.meta.dirname, '..', 'vitest.capabilities.ts'), 'utf8');
+    expect(testo).toContain('throw new Error');
   });
 });
