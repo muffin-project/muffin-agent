@@ -29,7 +29,7 @@ afterEach(() => {
 function home(): string {
   const dir = mkdtempSync(join(tmpdir(), 'muffin-effects-cli-'));
   dirs.push(dir);
-  runInit({ home: dir, apiKey: 'sk-never-called' });
+  runInit({ home: dir, apiKey: 'sk-never-called', timeZone: 'UTC' });
   return dir;
 }
 

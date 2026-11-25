@@ -57,6 +57,74 @@ import { runInit } from './init.js';
  * default install, and the owner has no other way to learn which one answered.
  */
 
+it.each([
+  { refreshToken: 'refresh', level: 'ok', detail: 'will attempt to refresh', remedy: undefined },
+  { refreshToken: '', level: 'fail', detail: 'expired', remedy: 'muffin chatgpt login' },
+  // A valid token on an exhausted plan is not a usable model.
+  {
+    refreshToken: 'refresh',
+    level: 'fail',
+    detail: 'Plan usage limit reached',
+    remedy: 'check https://chatgpt.com/settings/usage',
+    planLimited: true,
+  },
+])(
+  'ChatGPT doctor reports an expired or limited session with a $level result',
+  async ({ refreshToken, level, detail, remedy, ...limit }) => {
+    const planLimited = 'planLimited' in limit && limit.planLimited === true;
+    const dir = home();
+    const config = loadConfig(dir);
+    saveConfig(
+      {
+        ...config,
+        provider: {
+          kind: 'openai-chatgpt',
+          baseUrl: 'https://api.openai.com/v1',
+          apiKeyRef: 'secret://chatgpt',
+        },
+      },
+      dir,
+    );
+    const file = join(dir, 'secrets', 'chatgpt');
+    writeFileSync(
+      file,
+      `${JSON.stringify({
+        version: 1,
+        hostId: 'urn:uuid:00000000-0000-4000-8000-000000000001',
+        activeProfileId: 'p1',
+        profiles: [
+          {
+            id: 'p1',
+            clientId: 'client',
+            subject: 'subject-1',
+            tokens: {
+              accessToken: 'access',
+              refreshToken,
+              idToken: 'id',
+              tokenType: 'Bearer',
+              scopes: ['chatgpt.tokens.use.direct', 'offline_access', 'resource.invoke'],
+              receivedAt: 1,
+              idTokenReceivedAt: 1,
+              expiresAt: planLimited ? Date.now() + 3_600_000 : 1,
+              pendingIdentity: false,
+            },
+            ...(planLimited ? { planLimit: { at: 1 } } : {}),
+          },
+        ],
+      })}\n`,
+      { mode: 0o600 },
+    );
+    try {
+      const c = await check(dir, 'ChatGPT');
+      expect(c?.level).toBe(level);
+      expect(c?.detail).toContain(detail);
+      expect(c?.remedy).toBe(remedy);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
 function home(): string {
   const dir = mkdtempSync(join(tmpdir(), 'muffin-doctor-'));
   // The persistent secret store defaults to the *real* `~/.config`, so without
