@@ -9,7 +9,7 @@
     "*claude-opus-4-8*",
     "gpt-5*",
     "gpt-6-*",
-    "gpt-6.1-*"
+    "gpt-6.*"
   ],
   "maxToolsExposed": 24,
   "maxToolCallsPerTurn": 30,
