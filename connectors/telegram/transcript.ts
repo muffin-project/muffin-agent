@@ -119,6 +119,7 @@ type Step = {
   /** Running (`⏳`, with its own elapsed), or finished with a mark. */
   state: 'running' | 'done' | 'error' | 'waiting' | 'note';
   startedAt: number;
+  callId?: string;
   /**
    * La capability che questa attesa riguarda, quando è una domanda di
    * approvazione. Serve a due cose sole: deduplicare il passo quando il loop
@@ -1085,7 +1086,12 @@ export function startTranscript(
           break;
         case 'tool_start':
           status = null;
-          addStep({ ...stepOf(event.name, event.args), state: 'running', startedAt: now() });
+          addStep({
+            ...stepOf(event.name, event.args),
+            state: 'running',
+            startedAt: now(),
+            ...(event.callId === undefined ? {} : { callId: event.callId }),
+          });
           break;
         case 'tool_retry': {
           const seg = current();
@@ -1120,8 +1126,20 @@ export function startTranscript(
           }
           break;
         }
-        case 'ask':
+        case 'ask': {
           status = null;
+          // The pending approval accounts for this attempt. Keep other running
+          // calls, and leave the eventual execution to report its own result.
+          if (event.callId !== undefined) {
+            for (const seg of segments) {
+              const pending = seg.steps.findIndex(
+                (step) => step.state === 'running' && step.callId === event.callId,
+              );
+              if (pending === -1) continue;
+              seg.steps.splice(pending, 1);
+              break;
+            }
+          }
           // La domanda può essere già stata mostrata da `ask()` — l'approvatore
           // di Telegram parla *prima* che il loop emetta questo evento: stesso
           // passo, mai due.
@@ -1139,6 +1157,7 @@ export function startTranscript(
             capability: event.capability,
           });
           break;
+        }
         default:
           return assertNever(event);
       }
