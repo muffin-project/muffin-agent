@@ -226,7 +226,7 @@ export async function runTool(
   // `span`'s clock back to its caller, so `ms` below is measured at the same
   // call site that reports the start it is measuring from, not guessed at.
   const toolCallStartedAt = Date.now();
-  input.onProgress?.({ type: 'tool_start', name: call.name, capability, args });
+  input.onProgress?.({ type: 'tool_start', name: call.name, capability, callId: call.id, args });
   const emitToolEnd = (isError: boolean): void => {
     input.onProgress?.({
       type: 'tool_end',
@@ -592,7 +592,7 @@ export async function runTool(
           span.end({ status: 'ok' });
           // Né `✓` né `✗`: la chiamata è ferma sull'owner, e le altre due
           // parole sarebbero tutte e due false (vedi `TurnEvent`).
-          input.onProgress?.({ type: 'ask', name: call.name, capability });
+          input.onProgress?.({ type: 'ask', name: call.name, capability, callId: call.id });
           return {
             type: 'tool_result',
             toolCallId: call.id,

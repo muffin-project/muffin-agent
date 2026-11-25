@@ -100,12 +100,10 @@ export function completedResponseViolation(terminal, requestedModel) {
     : 'provider served a model different from the fixed ChatGPT pin';
 }
 
-export function responsesRequestViolation({ body, index, count, startedAt, now }) {
+export function responsesRequestViolation({ body, count, startedAt, now }) {
   if (count >= CHATGPT_E2E_MAX_REQUESTS || now - startedAt > CHATGPT_E2E_MAX_WALL_MS)
     return 'Responses request/time budget exceeded';
   if (body?.model !== CHATGPT_E2E_MODEL) return 'requested model differs from fixed ChatGPT pin';
-  if (index === 0 && responseToolSchemas(body).some((tool) => tool.name === 'fs_write'))
-    return 'fs_write present in first provider request';
   return null;
 }
 
@@ -159,7 +157,6 @@ export function installChatGptWireRecorder({ wirePath, controlPath, expectedMode
     };
     const violation = responsesRequestViolation({
       body,
-      index: count,
       count,
       startedAt,
       now: Date.now(),

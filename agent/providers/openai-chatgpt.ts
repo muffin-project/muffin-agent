@@ -38,6 +38,8 @@ const UNKNOWN_REASONING_CAPABILITIES = {
 export type ChatGPTConnection = {
   accessToken(signal?: AbortSignal): Promise<string>;
   listModels(signal?: AbortSignal): Promise<ChatGPTModel[]>;
+  /** Optional: remember a plan usage-limit refusal until a reply succeeds. */
+  recordPlanUsage?(limited: boolean): Promise<void>;
 };
 
 export type ChatGPTProviderOptions = {
@@ -147,9 +149,14 @@ export class OpenAIChatGPTProvider implements Provider {
   async chat(call: ChatCall): Promise<ChatResult> {
     try {
       for await (const event of this.run(call)) {
-        if (event.type === 'done') return event.result;
+        if (event.type === 'done') {
+          await this.notePlanUsage(false);
+          return event.result;
+        }
       }
     } catch (error) {
+      if (error instanceof ProviderError && error.details?.quota === 'chatgpt-plan')
+        await this.notePlanUsage(true);
       // This adapter has no non-streaming route. An unfinished SSE is a
       // failed chat invocation: let the loop's persisted transport budget
       // retry it, without publishing partial text or executing partial tools.
@@ -158,6 +165,15 @@ export class OpenAIChatGPTProvider implements Provider {
       throw error;
     }
     throw new ProviderError('Responses stream ended without a completed result', true);
+  }
+
+  /** Diagnostics only: failing to record must not change the turn's outcome. */
+  private async notePlanUsage(limited: boolean): Promise<void> {
+    try {
+      await this.connection.recordPlanUsage?.(limited);
+    } catch {
+      // The reply or the original error is what the caller needs.
+    }
   }
 
   // No public chatStream: the loop's non-stream fallback would issue a second
@@ -679,7 +695,10 @@ function apiProviderError(error: APIError): ProviderError {
   const status = error.status;
   const requestId =
     error.requestID && /^[a-zA-Z0-9_-]{1,100}$/.test(error.requestID) ? error.requestID : undefined;
-  if (status === 429 && error.code === PLAN_USAGE_LIMIT_CODE)
+  // The plan limit arrives either as HTTP 429 or inside an already open
+  // stream, where the SDK raises an APIError with no status. Both are the
+  // same quota, and neither is helped by retrying soon.
+  if ((status === 429 || status === undefined) && error.code === PLAN_USAGE_LIMIT_CODE)
     return new ProviderError(
       'ChatGPT plan usage limit exceeded',
       false,
