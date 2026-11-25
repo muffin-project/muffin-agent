@@ -1950,8 +1950,9 @@ describe('agent loop · progress (B13)', () => {
     });
   });
 
-  it('tool_start carries the name and capability; tool_end carries how long it took and whether it errored', async () => {
-    const { deps: d, store } = deps([callTool('demo_read', { q: 1 }), answer('fatto')]);
+  it('tool_start identifies the invocation and tool_end reports its duration and outcome', async () => {
+    const request = callTool('demo_read', { q: 1 });
+    const { deps: d, store } = deps([request, answer('fatto')]);
     const events: TurnEvent[] = [];
     await runTurn(d, { ...input(store), onProgress: (e) => events.push(e) });
 
@@ -1961,7 +1962,13 @@ describe('agent loop · progress (B13)', () => {
     // vuoto. Sono gli argomenti **come il modello li ha chiesti**: quale campo
     // valga la pena mostrare, e come accorciarlo, lo decide chi stampa.
     expect(byType(events, 'tool_start')).toEqual([
-      { type: 'tool_start', name: 'demo_read', capability: 'demo.read', args: { q: 1 } },
+      {
+        type: 'tool_start',
+        name: 'demo_read',
+        capability: 'demo.read',
+        callId: request.toolCalls[0]?.id,
+        args: { q: 1 },
+      },
     ]);
     const [end] = byType(events, 'tool_end');
     expect(end).toMatchObject({
