@@ -24,7 +24,7 @@ import { MUTA, type Negotiation, type Place } from '../../core/surface/types.js'
  * In un gruppo l'anteprima non esiste — non per prudenza ma per grammatica:
  * `assertNegotiable` rifiuta `'draft'` fuori da `'direct'`. La presenza
  * ordinaria è la digitazione; gli edit sono disponibili per un messaggio
- * già aperto da un'approvazione (ADR-0108). I limiti pubblicati sono circa
+ * già aperto da un'approvazione (ADR-0111). I limiti pubblicati sono circa
  * un messaggio al secondo per chat e venti al minuto per gruppo.
  *
  * `'topic'` è il gruppo: un topic non ha limiti suoi, li eredita dalla chat.

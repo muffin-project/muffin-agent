@@ -12,7 +12,7 @@ import {
 } from './rich.js';
 
 /**
- * Live Telegram presentation (ADR-0108). DMs use a stoppable draft for
+ * Live Telegram presentation (ADR-0111). DMs use a stoppable draft for
  * activity and provisional text; ordinary groups and topics use typing via
  * `presence.ts`. Tools and preambles never accumulate in a chat transcript.
  * Only a concrete approval can open a persistent message here. Its ID and

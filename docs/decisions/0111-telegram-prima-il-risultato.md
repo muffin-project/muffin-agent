@@ -1,4 +1,4 @@
-# ADR-0108 — Telegram: prima il risultato
+# ADR-0111 — Telegram: prima il risultato
 
 **Data:** 2026-11-22. **Stato:** proposto nella candidata locale.
 
