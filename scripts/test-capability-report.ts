@@ -65,6 +65,6 @@ if (ci) {
     process.exit(1);
   }
   console.log(
-    `\nOK: capacità richieste ${[...required].join(', ') || '(nessuna)'}; nessun salto, minimi rispettati.`,
+    `\nOK: capacità richieste ${[...required].join(', ') || '(nessuna)'}; nessun salto di queste, minimi rispettati.`,
   );
 }
