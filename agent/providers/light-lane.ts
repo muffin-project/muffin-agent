@@ -76,6 +76,8 @@ export type LightSpend = {
    * price seam without losing observability (#499).
    */
   requestedModel?: string;
+  /** The chain link that served the call (ADR-0110), so billing prices it as itself. */
+  route?: { kind: 'anthropic' | 'openai-compat' | 'openai-chatgpt'; baseUrl?: string };
 };
 
 export type LightLaneOptions = {
@@ -253,7 +255,15 @@ export function lightLane(inner: Provider, options: LightLaneOptions): Provider 
         // billing contract — an explicit free route bills $0 — without losing
         // observability of what served it (#499).
         model: result.model || call.model,
-        requestedModel: call.model,
+        requestedModel: result.route?.model ?? call.model,
+        ...(result.route === undefined
+          ? {}
+          : {
+              route: {
+                kind: result.route.kind,
+                ...(result.route.baseUrl === undefined ? {} : { baseUrl: result.route.baseUrl }),
+              },
+            }),
         inputTokens: result.usage.inputTokens,
         outputTokens: result.usage.outputTokens,
         cacheReadTokens: result.usage.cacheReadTokens,

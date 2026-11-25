@@ -27,6 +27,7 @@ import { allHelp, canonicalCommand, completion, primaryHelp } from './command-su
 import { cmdConfig } from './config.js';
 import { formatReport, runDoctor } from './doctor.js';
 import { cmdEffects } from './effects.js';
+import { cmdFallback } from './fallback.js';
 import {
   cmdGatewayInstall,
   cmdGatewayRestart,
@@ -227,6 +228,10 @@ async function main(rawArgv: string[]): Promise<number> {
         interactive: isatty(0),
       });
     }
+    case 'fallback':
+      return cmdFallback(paths().home, rest, {
+        out: (line) => process.stdout.write(`${line}\n`),
+      });
     case 'search':
       // `readKey` legge stdin **solo** quando un motore e' stato nominato: senza
       // questa pigrizia, `muffin search` da solo si bloccherebbe su un

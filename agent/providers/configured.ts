@@ -1,23 +1,30 @@
 import { ChatGPTConnection } from '../../core/config/chatgpt-oauth.js';
 import {
   type Config,
+  type FallbackLink,
   type InferenceLane,
-  inferenceProvider,
+  type InferenceProviderConfig,
+  inferenceChain,
   readSecret,
 } from '../../core/config/config.js';
+import {
+  linkId,
+  linkLabel,
+  readChainState,
+  writeLaneChainState,
+} from '../../core/config/provider-chain.js';
 import { AnthropicProvider } from './anthropic.js';
+import { type ChainEvent, type ChainLink, providerChain } from './chain.js';
 import { OpenAIChatGPTProvider } from './openai-chatgpt.js';
 import { OpenAICompatProvider } from './openai-compat.js';
 import type { Provider } from './types.js';
 
-/** Runtime and online verification construct the same authenticated protocol. */
-export function configuredProvider(
-  config: Config,
+/** One authenticated adapter for one connection — the only place adapters are chosen. */
+export function connectionProvider(
+  selected: InferenceProviderConfig,
   home: string,
   fetch?: typeof globalThis.fetch,
-  lane: InferenceLane = 'main',
 ): Provider {
-  const selected = inferenceProvider(config, lane);
   if (selected.kind === 'openai-chatgpt') {
     return new OpenAIChatGPTProvider(
       new ChatGPTConnection(home, fetch ? { fetch } : {}),
@@ -38,4 +45,59 @@ export function configuredProvider(
       ...(fetch ? { fetch, metadataFetch: fetch } : {}),
     },
   );
+}
+
+export type ConfiguredProviderOptions = {
+  /** Persist chain transitions so `muffin doctor` can read them (runtime only). */
+  persistChainState?: boolean;
+  onFailover?: (event: ChainEvent) => void;
+};
+
+function chainLink(
+  link: FallbackLink,
+  index: number,
+  home: string,
+  fetch?: typeof globalThis.fetch,
+): ChainLink {
+  return {
+    id: linkId(link),
+    label: linkLabel(link),
+    kind: link.provider.kind,
+    ...(link.provider.baseUrl === undefined ? {} : { baseUrl: link.provider.baseUrl }),
+    // Link 0 keeps the caller's `call.model`: the loop and the light lane
+    // already send the lane's configured slug.
+    ...(index === 0 ? {} : { model: link.model }),
+    create: () => connectionProvider(link.provider, home, fetch),
+  };
+}
+
+/**
+ * Runtime and online verification construct the same authenticated protocol.
+ *
+ * A lane with fallbacks becomes an ordered chain (ADR-0110); a lane without
+ * them is the bare adapter, built eagerly exactly as before so a missing
+ * primary secret still fails at construction.
+ */
+export function configuredProvider(
+  config: Config,
+  home: string,
+  fetch?: typeof globalThis.fetch,
+  lane: InferenceLane = 'main',
+  options: ConfiguredProviderOptions = {},
+): Provider {
+  const chain = inferenceChain(config, lane);
+  if (chain.length === 1) return connectionProvider(chain[0].provider, home, fetch);
+  const links = chain.map((link, index) => chainLink(link, index, home, fetch)) as [
+    ChainLink,
+    ...ChainLink[],
+  ];
+  const initial = options.persistChainState ? readChainState(home).lanes[lane] : undefined;
+  return providerChain(links, {
+    lane,
+    ...(initial === undefined ? {} : { initial }),
+    ...(options.persistChainState
+      ? { onState: (state) => writeLaneChainState(home, lane, state) }
+      : {}),
+    ...(options.onFailover ? { onFailover: options.onFailover } : {}),
+  });
 }
