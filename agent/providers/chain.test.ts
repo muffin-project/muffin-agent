@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { LaneChainState } from '../../core/config/provider-chain.js';
+import { extractFacts } from '../../core/memory/extract.js';
+import { judgeContradiction } from '../../core/memory/judge.js';
+import { LlmReranker, RERANK_MIN_CANDIDATES } from '../../core/memory/rerank.js';
+import type { Fact } from '../../core/memory/store.js';
 import { ActivityAllowanceError } from './activity-allowance.js';
 import { type ChainLink, DEFAULT_COOLDOWN_MS, failoverReason, providerChain } from './chain.js';
 import {
@@ -15,6 +19,10 @@ import {
  * request leaves the process, so these prove the chain's decisions, not that
  * any real account answers.
  */
+
+function fail(): never {
+  throw new Error('chain must stream');
+}
 
 const NOW = Date.parse('2026-11-25T14:00:00Z');
 
@@ -83,7 +91,6 @@ describe('failoverReason: account and service failures move on, request failures
     [planLimit(), 'quota'],
     [new ProviderError('x', false, 402), 'quota'],
     [new ProviderError('x', false, 401), 'auth'],
-    [new ProviderError('x', false, 403), 'auth'],
     [
       new ProviderError('x', false, undefined, 'transport', undefined, false, {
         reauthentication: 'chatgpt',
@@ -99,13 +106,28 @@ describe('failoverReason: account and service failures move on, request failures
     [new ProviderError('x', true, 429), 'rate_limit'],
     [new ProviderError('x', true, 503), 'outage'],
     [new ProviderError('x', true, 500), 'outage'],
-    [new ProviderError('connection reset', true), 'outage'],
+    [
+      new ProviderError('connection reset', true, undefined, 'transport', undefined, false, {
+        connection: true,
+      }),
+      'outage',
+    ],
+    [
+      new ProviderError('0 Connection error.', false, 0, 'transport', undefined, false, {
+        connection: true,
+      }),
+      'outage',
+    ],
   ] as const)('%s → %s', (error, reason) => {
     expect(failoverReason(error)).toBe(reason);
   });
 
   it.each([
     ['bad request', new ProviderError('x', false, 400)],
+    // OpenRouter: 403 = guardrail block or moderation flag on the input.
+    ['moderation / guardrail 403', new ProviderError('403 Input flagged', false, 403)],
+    ['request conflict 409', new ProviderError('x', true, 409)],
+    ['code-less retryable error (local bug wrapped)', new ProviderError('boom', true)],
     ['model not found', new ProviderError('x', false, 404)],
     ['unprocessable', new ProviderError('x', false, 422)],
     ['unparseable tool arguments', new ProviderError('x', true, undefined, 'output')],
@@ -151,7 +173,8 @@ describe('provider chain', () => {
       baseUrl: 'https://xai.synthetic.test/v1',
     });
     expect(events).toEqual(['chatgpt->xai:quota']);
-    const last = states.at(-1)!;
+    const last = states.at(-1);
+    if (last === undefined) throw new Error('no state published');
     expect(last.active).toBe('xai');
     // The reset the provider declared is the cooldown, capped at one day.
     expect(last.cooldowns.chatgpt).toMatchObject({ reason: 'quota', declared: true });
@@ -332,7 +355,8 @@ describe('provider chain', () => {
       now: () => NOW,
     });
     const events: StreamEvent[] = [];
-    for await (const e of early.chatStream!(call({ stream: true }))) events.push(e);
+    for await (const e of (early.chatStream?.bind(early) ?? fail)(call({ stream: true })))
+      events.push(e);
     expect(events.at(-1)).toMatchObject({ type: 'done', result: { text: 'whole' } });
 
     const late = providerChain([link('a', failing(true)), link('b', second.provider, 'm')], {
@@ -342,10 +366,187 @@ describe('provider chain', () => {
     const seen: StreamEvent[] = [];
     await expect(
       (async () => {
-        for await (const e of late.chatStream!(call({ stream: true }))) seen.push(e);
+        for await (const e of (late.chatStream?.bind(late) ?? fail)(call({ stream: true })))
+          seen.push(e);
       })(),
     ).rejects.toBeInstanceOf(ProviderError);
     expect(seen).toEqual([{ type: 'text_delta', text: 'half' }]);
     expect(second.seen).toHaveLength(1);
+  });
+});
+
+describe('provider chain: review follow-ups', () => {
+  it('signed thinking blocks reach only the link that produced them (S1)', async () => {
+    const primary = scripted('anthropic', [answer('a-served'), planLimit()]);
+    const second = scripted('anthropic', [answer('b-served')]);
+    const chain = providerChain(
+      [link('account-a', primary.provider), link('account-b', second.provider, 'm')],
+      { lane: 'main', now: () => NOW },
+    );
+    const first = await chain.chat(call());
+    // The loop echoes the assistant turn with its signed thinking block and
+    // the result's metadata, which the chain tagged with link A.
+    const echoed = {
+      role: 'assistant' as const,
+      content: [
+        { type: 'thinking' as const, thinking: 'hm', signature: 'sig-from-account-a' },
+        { type: 'text' as const, text: 'ciao' },
+      ],
+      ...(first.providerMetadata === undefined ? {} : { providerMetadata: first.providerMetadata }),
+    };
+    expect(first.providerMetadata?.link).toBe('account-a');
+    await chain.chat(
+      call({
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: 'one' }] },
+          echoed,
+          { role: 'user', content: [{ type: 'text', text: 'two' }] },
+        ],
+      }),
+    );
+    expect(primary.seen[1]?.messages[1]?.content[0]).toMatchObject({ type: 'thinking' });
+    expect(second.seen[0]?.messages[1]?.content).toEqual([{ type: 'text', text: 'ciao' }]);
+    expect(JSON.stringify(second.seen[0])).not.toContain('sig-from-account-a');
+  });
+
+  it('reports the kind of the link that will serve next, so callers shape for it (S2)', async () => {
+    const compat = scripted('openai-compat', [new ProviderError('down', true, 503)]);
+    const chatgpt = scripted('openai-chatgpt', [answer('x')]);
+    const chain = providerChain([link('a', compat.provider), link('b', chatgpt.provider, 'm')], {
+      lane: 'light',
+      now: () => NOW,
+    });
+    expect(chain.kind).toBe('openai-compat');
+    await chain.chat(call());
+    expect(chain.kind).toBe('openai-chatgpt');
+  });
+
+  it('a fallback that cannot honour the reasoning request gets none, instead of failing (S2)', async () => {
+    const compat = scripted('openai-compat', [new ProviderError('down', true, 503)]);
+    const seen: ChatCall[] = [];
+    const chatgpt: Provider = {
+      kind: 'openai-chatgpt',
+      resolveReasoning: (c) => ({
+        status: c.thinking === 'off' ? 'unsupported' : 'applied',
+        capabilitySource: 'static-snapshot',
+      }),
+      async chat(c) {
+        seen.push(c);
+        return answer('x');
+      },
+    };
+    const chain = providerChain([link('a', compat.provider), link('b', chatgpt, 'm')], {
+      lane: 'light',
+      now: () => NOW,
+    });
+    await chain.chat(call({ thinking: 'off' }));
+    expect(seen[0]).not.toHaveProperty('thinking');
+    expect(seen[0]).not.toHaveProperty('reasoning');
+  });
+
+  it('a fallback refusing the request keeps the primary error visible and records it (S3)', async () => {
+    const quota = planLimit();
+    const primary = scripted('openai-chatgpt', [quota]);
+    const typo = new ProviderError('404 model not found', false, 404);
+    const second = scripted('openai-compat', [typo]);
+    const states: LaneChainState[] = [];
+    const chain = providerChain([link('a', primary.provider), link('b', second.provider, 'm')], {
+      lane: 'main',
+      now: () => NOW,
+      onState: (s) => states.push(s),
+    });
+    await expect(chain.chat(call())).rejects.toBe(quota);
+    expect(states.at(-1)?.lastFallbackError).toEqual({
+      link: 'b',
+      at: NOW,
+      status: 404,
+      kind: 'ProviderError',
+    });
+  });
+
+  it('a pause cleared by another process is picked up on the next call (S5)', async () => {
+    let fresh: LaneChainState | undefined;
+    const primary = scripted('openai-chatgpt', [planLimit(NOW + 3_600_000), answer('back')]);
+    const second = scripted('openai-compat', [answer('b')]);
+    const chain = providerChain([link('a', primary.provider), link('b', second.provider, 'm')], {
+      lane: 'main',
+      now: () => NOW,
+      refresh: () => {
+        const value = fresh;
+        fresh = undefined;
+        return value;
+      },
+    });
+    await chain.chat(call());
+    fresh = { active: 'b', since: NOW, cooldowns: {} }; // `muffin fallback reset`
+    const result = await chain.chat(call());
+    expect(result.route?.index).toBe(0);
+  });
+});
+
+describe('memory lanes on a chain shape the request for the serving link (S2)', () => {
+  it('judge, extract and rerank ask ChatGPT for low reasoning when the compat primary is paused', async () => {
+    const compat = scripted('openai-compat', []);
+    const chatgpt = scripted('openai-chatgpt', [
+      answer('m', '{"verdict":"coexist","reason":"x"}'),
+      answer('m', '{"facts":[]}'),
+      answer('m', '[0]'),
+    ]);
+    const chain = providerChain([link('a', compat.provider), link('b', chatgpt.provider, 'm')], {
+      lane: 'light',
+      now: () => NOW,
+      initial: {
+        active: 'b',
+        since: NOW - 1000,
+        cooldowns: { a: { until: NOW + 60_000, reason: 'quota', at: NOW - 1000, declared: true } },
+      },
+    });
+    const existing = {
+      id: 1,
+      subjectId: 1,
+      subjectName: 'Giusto',
+      predicate: 'vive_a',
+      objectValue: 'Roma',
+      objectId: null,
+      objectName: null,
+      validFrom: null,
+      validTo: null,
+      recordedAt: '2026-11-01T00:00:00Z',
+      expiredAt: null,
+      episodeId: 1,
+      trustTier: 0,
+      confidence: 1,
+      origin: 'said',
+      importance: 0,
+      supersededBy: null,
+    } as unknown as Fact;
+    await judgeContradiction(chain, 'primary-model', {
+      subject: 'Giusto',
+      predicate: 'vive_a',
+      existing,
+      incoming: { object: 'Milano', validFrom: null },
+    }).catch(() => undefined);
+    await extractFacts(chain, 'primary-model', {
+      content: 'ciao',
+      speakerName: 'Giusto',
+      trustTier: 0,
+    }).catch(() => undefined);
+    const candidates = Array.from({ length: RERANK_MIN_CANDIDATES }, (_, i) => ({
+      kind: 'episode' as const,
+      id: i,
+      text: `frammento ${i}`,
+      trustTier: 0 as const,
+      source: 'test',
+      score: 1,
+    }));
+    await new LlmReranker(chain, 'primary-model').rerank('dove vivo?', candidates, 3);
+
+    expect(compat.seen).toHaveLength(0);
+    expect(chatgpt.seen).toHaveLength(3);
+    for (const sent of chatgpt.seen) {
+      expect(sent.reasoning).toEqual({ mode: 'on', effort: 'low' });
+      expect(sent).not.toHaveProperty('thinking');
+      expect(sent.model).toBe('m');
+    }
   });
 });

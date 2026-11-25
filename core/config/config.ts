@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 import { ensurePrivateDir, tightenPrivateFile } from './private-fs.js';
+import { clearChainPauses } from './provider-chain.js';
 import { SEARCH_PROVIDER_IDS } from './providers.js';
 import { REASONING_DIALECTS, THINKING_VALUES } from './thinking.js';
 
@@ -843,6 +844,13 @@ export function writeAuthoritativeSecret(name: string, value: string, home = muf
   // acquires a replacement. Once it does, keeping a shadow would make the
   // winner depend on precedence instead of the owner's latest action.
   rmSync(join(secretDir('home', home), name), { force: true });
+  // A new credential is the owner fixing an account: its paused chain links
+  // are used again at once, not after the cooldown (ADR-0110).
+  try {
+    clearChainPauses(home, { apiKeyRef: `secret://${name}` });
+  } catch {
+    // advisory state; the secret is what the owner asked for
+  }
   return persistent;
 }
 

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FallbackLink, InferenceLane } from './config.js';
 import { ensurePrivateDir, tightenPrivateFile } from './private-fs.js';
@@ -34,6 +34,12 @@ export type LaneChainState = {
   /** Epoch ms of the last change of `active`. */
   since: number;
   cooldowns: Record<string, LinkCooldown>;
+  /**
+   * The last fallback that refused the request itself (a 404 model, a 400)
+   * while covering for an earlier link. Status and error class only, never
+   * the provider's text.
+   */
+  lastFallbackError?: { link: string; at: number; status?: number; kind: string };
 };
 
 export type ChainState = {
@@ -85,7 +91,13 @@ export function readChainState(home: string): ChainState {
   }
 }
 
-/** Atomic replace of one lane's record; the other lane's record is preserved. */
+/**
+ * Replace one lane's record, keeping the other lane's as last read. The file
+ * swap is atomic (temp file + rename), the read-modify-write is not: two
+ * processes writing the same lane at once keep the last writer's record. That
+ * is acceptable for advisory health — the gateway is the only routine writer,
+ * and the worst case is one extra probe of a paused link.
+ */
 export function writeLaneChainState(
   home: string,
   lane: InferenceLane,
@@ -121,4 +133,68 @@ export function catalogLink(id: string, model: string, secretName?: string): Fal
     },
     model,
   };
+}
+
+/**
+ * A reader for the runtime: returns the lane's record when the file changed
+ * since the last call, `undefined` otherwise. One `stat` per model call.
+ */
+export function chainStateWatcher(
+  home: string,
+  lane: InferenceLane,
+): () => LaneChainState | undefined {
+  let seen = mtimeOf(chainStatePath(home));
+  return () => {
+    const now = mtimeOf(chainStatePath(home));
+    if (now === seen) return undefined;
+    seen = now;
+    return readChainState(home).lanes[lane] ?? { active: '', since: 0, cooldowns: {} };
+  };
+}
+
+function mtimeOf(file: string): number {
+  try {
+    return statSync(file).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Clear pauses. With a secret reference, only the links that use it — called
+ * when the owner signs in again or stores a new key, so a fixed account is
+ * used again at once instead of after its cooldown. Without one, every pause
+ * on the selected lanes (`muffin fallback reset`). Returns how many cleared.
+ */
+export function clearChainPauses(
+  home: string,
+  options: { apiKeyRef?: string; lanes?: InferenceLane[] } = {},
+): number {
+  if (!existsSync(chainStatePath(home))) return 0;
+  const state = readChainState(home);
+  let cleared = 0;
+  for (const lane of options.lanes ?? (['main', 'light'] as const)) {
+    const record = state.lanes[lane];
+    if (record === undefined) continue;
+    const before = Object.keys(record.cooldowns).length;
+    const cooldowns = Object.fromEntries(
+      Object.entries(record.cooldowns).filter(
+        ([id]) => options.apiKeyRef !== undefined && id.split('|')[2] !== options.apiKeyRef,
+      ),
+    );
+    const removed = before - Object.keys(cooldowns).length;
+    const dropError =
+      record.lastFallbackError !== undefined &&
+      (options.apiKeyRef === undefined ||
+        record.lastFallbackError.link.split('|')[2] === options.apiKeyRef);
+    if (removed === 0 && !dropError) continue;
+    cleared += removed;
+    const { lastFallbackError, ...rest } = record;
+    writeLaneChainState(home, lane, {
+      ...rest,
+      cooldowns,
+      ...(dropError || lastFallbackError === undefined ? {} : { lastFallbackError }),
+    });
+  }
+  return cleared;
 }

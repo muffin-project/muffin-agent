@@ -135,13 +135,14 @@ describe('provider chain in the production runtime', () => {
       expect(lane?.active).toContain(FALLBACK);
       const cooldown = Object.values(lane?.cooldowns ?? {})[0];
       expect(cooldown).toMatchObject({ reason: 'quota', declared: true });
+      if (cooldown === undefined) throw new Error('no cooldown recorded');
       // The provider's reset (2 h), not the 15-minute default; ms of clock skew allowed.
-      expect(Math.abs(cooldown!.until - cooldown!.at - 7_200_000)).toBeLessThan(1000);
+      expect(Math.abs(cooldown.until - cooldown.at - 7_200_000)).toBeLessThan(1000);
 
       const shown = describeChain(loadConfig(dir), 'main', dir);
       expect(shown.degraded).toBe(true);
       expect(shown.lines[0]).toContain('in pausa: quota/piano esaurito');
-      expect(shown.lines[1]).toContain('attivo');
+      expect(shown.lines[1]).toContain('ha risposto per ultimo');
       expect(JSON.stringify(readChainState(dir))).not.toContain('canary');
 
       // Second turn: the cooling primary is skipped, no extra round trip.
@@ -155,6 +156,16 @@ describe('provider chain in the production runtime', () => {
         signal: AbortSignal.timeout(5000),
       });
       expect(hits).not.toContain('chatgpt');
+
+      // S4: after a restart, status still reads the persisted pause — and an
+      // expired one stops being reported as degraded.
+      runtime.close();
+      runtime = undefined;
+      const restarted = describeChain(loadConfig(dir), 'main', dir);
+      expect(restarted.degraded).toBe(true);
+      const expired = describeChain(loadConfig(dir), 'main', dir, cooldown.until + 1);
+      expect(expired.degraded).toBe(false);
+      expect(expired.lines[0]).not.toContain('in pausa');
     } finally {
       runtime?.close();
       vi.unstubAllGlobals();

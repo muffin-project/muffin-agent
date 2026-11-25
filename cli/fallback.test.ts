@@ -1,10 +1,11 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { configuredProvider } from '../agent/providers/configured.js';
-import { inferenceChain, loadConfig } from '../core/config/config.js';
-import { cmdFallback } from './fallback.js';
+import { inferenceChain, loadConfig, writeAuthoritativeSecret } from '../core/config/config.js';
+import { linkId, readChainState, writeLaneChainState } from '../core/config/provider-chain.js';
+import { cmdFallback, describeChain } from './fallback.js';
 import { runInit } from './init.js';
 
 function fresh() {
@@ -50,7 +51,7 @@ describe('muffin fallback', () => {
     lines.length = 0;
     expect(run()).toBe(0);
     const text = lines.join('\n');
-    expect(text).toMatch(/main:\n {2}1\. .* — attivo/);
+    expect(text).toMatch(/main:\n {2}1\. .* — principale/);
     expect(text).toContain(
       '2. xAI API · grok-4.7 — credenziale mancante → muffin secret set xai_api_key',
     );
@@ -80,5 +81,59 @@ describe('muffin fallback', () => {
     run('add', 'xai', 'grok-4.7');
     writeFileSync(join(home, 'secrets', 'unrelated'), 'x', { mode: 0o600 });
     expect(() => configuredProvider(loadConfig(home), home, undefined, 'main')).not.toThrow();
+  });
+
+  it('refuses to guess which of two accounts of one provider to remove', () => {
+    const { home, lines, run } = fresh();
+    run('add', 'openrouter', 'a/model');
+    run('add', 'openrouter', 'b/model', '--account', 'work');
+    lines.length = 0;
+    expect(run('remove', 'openrouter')).toBe(2);
+    expect(lines.join('\n')).toContain('togline uno per posizione (2, 3)');
+    expect(loadConfig(home).fallbacks?.main).toHaveLength(2);
+  });
+
+  function pausedPrimary(home: string, until: number) {
+    const config = loadConfig(home);
+    const [primary] = inferenceChain(config, 'main');
+    if (primary === undefined) throw new Error('no primary');
+    const id = linkId(primary);
+    writeLaneChainState(home, 'main', {
+      active: id,
+      since: until - 60_000,
+      cooldowns: { [id]: { until, reason: 'quota', at: until - 60_000, declared: true } },
+    });
+    return id;
+  }
+
+  it('shows the pause with its time zone, and `reset` clears it', () => {
+    const { home, lines, run } = fresh();
+    run('add', 'xai', 'grok-4.7');
+    pausedPrimary(home, Date.now() + 3_600_000);
+    lines.length = 0;
+    run();
+    expect(lines.join('\n')).toMatch(/in pausa: .*riprovo dalle \d\d\/\d\d, \d\d:\d\d \([^)]+\)/);
+    expect(describeChain(loadConfig(home), 'main', home).degraded).toBe(true);
+    lines.length = 0;
+    expect(run('reset')).toBe(0);
+    expect(lines.join('\n')).toContain('tolta 1 pausa');
+    expect(describeChain(loadConfig(home), 'main', home).degraded).toBe(false);
+    expect(run('reset', '--bogus')).toBe(2);
+  });
+
+  it('writing a new secret for a paused link lifts its pause, and only that one', () => {
+    const { home, run } = fresh();
+    // The authoritative write also lands in the persistent store: keep it in the sandbox.
+    vi.stubEnv('XDG_CONFIG_HOME', join(home, 'xdg'));
+    run('add', 'xai', 'grok-4.7');
+    const config = loadConfig(home);
+    const primaryRef = config.provider.apiKeyRef.replace(/^secret:\/\//, '');
+    pausedPrimary(home, Date.now() + 3_600_000);
+    writeAuthoritativeSecret('xai_api_key', 'synthetic-xai', home);
+    expect(describeChain(loadConfig(home), 'main', home).degraded).toBe(true);
+    writeAuthoritativeSecret(primaryRef, 'synthetic-new', home);
+    expect(readChainState(home).lanes.main?.cooldowns).toEqual({});
+    expect(describeChain(loadConfig(home), 'main', home).degraded).toBe(false);
+    vi.unstubAllEnvs();
   });
 });

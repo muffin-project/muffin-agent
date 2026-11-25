@@ -8,6 +8,7 @@ import {
   readSecret,
 } from '../../core/config/config.js';
 import {
+  chainStateWatcher,
   linkId,
   linkLabel,
   readChainState,
@@ -96,7 +97,10 @@ export function configuredProvider(
     lane,
     ...(initial === undefined ? {} : { initial }),
     ...(options.persistChainState
-      ? { onState: (state) => writeLaneChainState(home, lane, state) }
+      ? {
+          onState: (state) => writeLaneChainState(home, lane, state),
+          refresh: chainStateWatcher(home, lane),
+        }
       : {}),
     ...(options.onFailover ? { onFailover: options.onFailover } : {}),
   });

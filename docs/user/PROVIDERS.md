@@ -82,18 +82,22 @@ API-dollar estimates.
 
 Each lane can list up to four fallbacks, tried in order when the lane's own
 connection is out of quota, signed out, rate limited or down (ADR-0110). Errors
-caused by the request itself never move to another provider.
+caused by the request itself, including a moderation or guardrail block (a bare
+403), never move to another provider and never pause a link.
 
 ```sh
 muffin fallback                                  # chains, active link, pauses
 muffin fallback add xai grok-4.7                 # main lane, second link
 muffin fallback add openrouter openrouter/free   # third link
 muffin fallback add openrouter some/model --account work --light
-muffin fallback remove xai
+muffin fallback remove xai                       # or by position: remove 3
+muffin fallback reset                            # lift every pause now
 ```
 
 A paused link is retried first when the provider's declared reset time (or a
-short default) passes. `muffin doctor` shows which link is answering and why.
+short default) passes, or right away when you save a new key or sign in again
+for it (or run `muffin fallback reset`). `muffin doctor` shows which link
+answered last and why the lane's own connection is paused.
 Spending on a fallback counts against the same budget caps.
 
 ## Embedding selection

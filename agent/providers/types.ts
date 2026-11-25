@@ -551,6 +551,13 @@ export type ProviderErrorDetails = {
   /** The credential could not be obtained locally (missing, unreadable or not refreshable). */
   credentials?: 'unavailable';
   /**
+   * The request never reached a response: DNS, refused or reset connection,
+   * timeout before headers. Set only by adapters on their SDK's connection
+   * error, so a local bug wrapped as a retryable error is not mistaken for an
+   * outage (ADR-0110).
+   */
+  connection?: true;
+  /**
    * Epoch ms at which the provider said the refused quota resets, when it said
    * so. Distinct from `retryAfterMs`: a plan reset can be days away, far past
    * any retry window, and only the provider chain (ADR-0110) acts on it.

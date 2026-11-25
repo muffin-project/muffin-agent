@@ -10,6 +10,7 @@ import {
 } from '../core/config/config.js';
 import {
   catalogLink,
+  clearChainPauses,
   type FailoverReason,
   linkId,
   linkLabel,
@@ -30,6 +31,7 @@ export const FALLBACK_USAGE = `usage:
   muffin fallback                                   show the chains and which link is serving
   muffin fallback add <provider> <model> [--light] [--account <id>]
   muffin fallback remove <provider|position> [--light]
+  muffin fallback reset [--light|--main]            clear every pause now (account fixed)
 providers: ${Object.keys(PROVIDERS).join(', ')}`;
 
 const REASON_TEXT: Readonly<Record<FailoverReason, string>> = {
@@ -39,13 +41,17 @@ const REASON_TEXT: Readonly<Record<FailoverReason, string>> = {
   outage: 'servizio non raggiungibile',
 };
 
+/** Local time with the zone it is in, so a pause read over SSH is not ambiguous. */
 function when(epochMs: number): string {
-  return new Date(epochMs).toLocaleString('it-IT', {
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const text = new Date(epochMs).toLocaleString('it-IT', {
     day: '2-digit',
     month: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
+    timeZone: zone,
   });
+  return `${text} (${zone})`;
 }
 
 /** How to give a link its credential, from the catalog — never a guess. */
@@ -77,18 +83,29 @@ export function describeChain(
 ): { lines: string[]; degraded: boolean; missing: FallbackLink[] } {
   const chain = inferenceChain(config, lane);
   const state = readChainState(home).lanes[lane];
-  const activeId = state?.active ?? linkId(chain[0]);
+  const ids = chain.map((link) => linkId(link));
+  // Only a recorded answer is reported as one: a lane that never failed over
+  // has no record, and its first link is simply the one that will be tried.
+  const lastServed = state !== undefined && ids.includes(state.active) ? state.active : undefined;
+  const paused = (id: string): boolean => (state?.cooldowns[id]?.until ?? 0) > now;
   const lines: string[] = [];
   const missing: FallbackLink[] = [];
   chain.forEach((link, index) => {
     const id = linkId(link);
     const cooldown = state?.cooldowns[id];
     const notes: string[] = [];
-    if (id === activeId) notes.push('attivo');
-    if (cooldown !== undefined && cooldown.until > now) {
+    if (id === lastServed) notes.push('ha risposto per ultimo');
+    else if (lastServed === undefined && index === 0) notes.push('principale');
+    if (cooldown !== undefined && paused(id)) {
       notes.push(
         `in pausa: ${REASON_TEXT[cooldown.reason]}, riprovo dalle ${when(cooldown.until)}` +
           (cooldown.declared ? ' (orario dato dal provider)' : ''),
+      );
+    }
+    const refused = state?.lastFallbackError;
+    if (refused !== undefined && refused.link === id) {
+      notes.push(
+        `ha rifiutato la richiesta${refused.status === undefined ? '' : ` (HTTP ${refused.status})`} il ${when(refused.at)}: controlla modello e account`,
       );
     }
     if (!credentialPresent(link, home)) {
@@ -97,7 +114,10 @@ export function describeChain(
     }
     lines.push(`${index + 1}. ${linkLabel(link)}${notes.length ? ` — ${notes.join(' · ')}` : ''}`);
   });
-  return { lines, degraded: activeId !== linkId(chain[0]), missing };
+  // Degraded means the lane's own connection is paused *now* — whether a
+  // fallback has answered since or not (after a restart, or when every link
+  // failed). An expired pause is not degraded: the next call tries it first.
+  return { lines, degraded: paused(ids[0] as string), missing };
 }
 
 export type FallbackDeps = { out: (line: string) => void };
@@ -198,6 +218,25 @@ export function cmdFallback(home: string, argv: string[], deps: FallbackDeps): n
     return 0;
   }
 
+  if (verb === 'reset') {
+    if (rest.some((a) => a !== '--light' && a !== '--main')) {
+      deps.out(FALLBACK_USAGE);
+      return 2;
+    }
+    const lanes: InferenceLane[] = rest.includes('--light')
+      ? ['light']
+      : rest.includes('--main')
+        ? ['main']
+        : ['main', 'light'];
+    const cleared = clearChainPauses(home, { lanes });
+    deps.out(
+      cleared === 0
+        ? 'nessuna pausa da togliere'
+        : `${cleared === 1 ? 'tolta 1 pausa' : `tolte ${cleared} pause`}: il prossimo messaggio riprova dalla connessione principale`,
+    );
+    return 0;
+  }
+
   if (verb === 'remove') {
     const [target, extra] = positional;
     if (target === undefined || extra !== undefined) {
@@ -215,7 +254,17 @@ export function cmdFallback(home: string, argv: string[], deps: FallbackDeps): n
       }
       index = position - 2;
     } else {
-      index = current.findIndex((l) => providerFor(l.provider)?.id === target);
+      const matches = current
+        .map((l, i) => ({ l, i }))
+        .filter(({ l }) => providerFor(l.provider)?.id === target);
+      if (matches.length > 1) {
+        deps.out(
+          `${matches.length} ripieghi ${target} nella catena ${lane}: togline uno per posizione ` +
+            `(${matches.map(({ i }) => i + 2).join(', ')}), vedi \`muffin fallback\``,
+        );
+        return 2;
+      }
+      index = matches[0]?.i ?? -1;
     }
     if (index < 0 || index >= current.length) {
       deps.out(`nessun ripiego ${target} nella catena ${lane}`);

@@ -20,7 +20,7 @@ import {
 } from '../core/config/config.js';
 import { buildEndpointsUrl, parseEndpointTags } from '../core/config/endpoints.js';
 import { type EndpointEvidence, resolveModelSwitch } from '../core/config/model-resolve.js';
-import { linkLabel } from '../core/config/provider-chain.js';
+import { clearChainPauses, linkLabel } from '../core/config/provider-chain.js';
 import { PROVIDERS, type ProviderEntry, providerFor } from '../core/config/providers.js';
 import { askGateway } from '../core/gateway/control-socket.js';
 import { makeEmbedder, OllamaEmbedder } from '../core/memory/embed.js';
@@ -1107,6 +1107,7 @@ async function guidedModelSelection(
           return 1;
         }
         await connection.signIn({ openBrowser: openChatGPTBrowser });
+        clearChainPauses(home, { apiKeyRef: 'secret://chatgpt' });
       }
     } catch (error) {
       deps.out(error instanceof Error ? error.message : 'ChatGPT connection unavailable.');

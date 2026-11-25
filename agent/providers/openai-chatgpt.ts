@@ -763,5 +763,7 @@ function apiProviderError(error: APIError): ProviderError {
     status,
     'transport',
     parseRetryAfterMs(error.headers),
+    false,
+    error instanceof APIConnectionError ? { connection: true } : undefined,
   );
 }

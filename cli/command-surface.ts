@@ -45,7 +45,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     summary: 'ripieghi in ordine quando il provider principale si ferma',
     audience: 'owner',
     primary: true,
-    subcommands: ['add', 'remove'],
+    subcommands: ['add', 'remove', 'reset'],
   },
   {
     name: 'workspace',

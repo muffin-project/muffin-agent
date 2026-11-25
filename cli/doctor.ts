@@ -477,8 +477,8 @@ export async function runDoctor(
     if (chain.degraded) {
       warn(
         `provider chain ${lane}`,
-        `${detail} — la connessione principale è in pausa, risponde un ripiego`,
-        'si riprova da sola allo scadere della pausa; `muffin fallback` mostra lo stato',
+        `${detail} — la connessione principale è in pausa: i messaggi vanno ai ripieghi`,
+        'si riprova da sola allo scadere della pausa; se hai già sistemato l’account: `muffin fallback reset`',
       );
     } else if (chain.missing.length > 0) {
       warn(
