@@ -953,6 +953,10 @@ after `started` but before outcome must remain uncertain; it must not become
    retired: it did not verify that the service could still read the seal or
    boot after transferring ownership. The supported diagnostics are `muffin
    doctor` and `muffin rot verify`. OS hardening does not reduce approvals.
+   Personal setup uses `muffin init` in single-user mode. The retired
+   `--hardened` flag only declared a mode and could leave an ordinary
+   installation refusing to start after an edit. Existing installations keep
+   their configured mode on rerunning setup.
 
 **A capability-setup verb (`muffin search <provider>`, `muffin mcp add
 --host`) may widen `rot/egress.json` and reseal, and that is the same act as

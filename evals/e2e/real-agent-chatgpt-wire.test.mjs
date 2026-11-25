@@ -91,12 +91,11 @@ test('request recorder flattens the production Muffin namespace without prompt f
           { type: 'namespace', name: 'muffin', tools: [{ type: 'function', name: 'fs_write' }] },
         ],
       },
-      index: 0,
       count: 0,
       startedAt: 1,
       now: 2,
     }),
-    'fs_write present in first provider request',
+    null,
   );
 });
 
@@ -155,7 +154,6 @@ test('served model mismatch and the shared ten-request/time budget fail closed',
   assert.equal(
     responsesRequestViolation({
       body,
-      index: 0,
       count: CHATGPT_E2E_MAX_REQUESTS,
       startedAt: 10,
       now: 11,
@@ -163,7 +161,7 @@ test('served model mismatch and the shared ten-request/time budget fail closed',
     'Responses request/time budget exceeded',
   );
   assert.equal(
-    responsesRequestViolation({ body, index: 0, count: 0, startedAt: 10, now: 10 + 180_001 }),
+    responsesRequestViolation({ body, count: 0, startedAt: 10, now: 10 + 180_001 }),
     'Responses request/time budget exceeded',
   );
 });

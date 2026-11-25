@@ -7,10 +7,7 @@ import { paths, writeSecret } from '../core/config/config.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import type { Principal } from '../core/policy/types.js';
 import { seal } from '../core/rot/verify.js';
-import {
-  CAPABILITY_SEARCH_TOOL_NAME,
-  createCapabilityExposure,
-} from './capability-exposure.js';
+import { CAPABILITY_SEARCH_TOOL_NAME, createCapabilityExposure } from './capability-exposure.js';
 import { visibleTools } from './context/assemble.js';
 import { toolContext } from './fixtures/tool-context.js';
 import { buildRuntime } from './runtime.js';
@@ -124,7 +121,7 @@ describe('una capacità spenta lo dice, non solo al log', () => {
       const inspect = runtime.deps.tools.find((t) => t.spec.name === 'sys_inspect');
       const out = await inspect!.handler({}, toolContext());
       expect(out.content).toContain('catalogo discoverable');
-      expect(out.content).toContain('maxToolsExposed limita gli schema caricati');
+      expect(out.content).toContain('si caricano con capability_search');
       expect(out.content).not.toContain('tagliate dal tetto');
     } finally {
       runtime.close();
@@ -166,13 +163,10 @@ describe('una capacità spenta lo dice, non solo al log', () => {
         runtime.deps.capabilities,
         runtime.deps.grants?.get('host'),
       );
-      const discoveryTool = eligible.find(
-        (tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME,
-      );
+      const discoveryTool = eligible.find((tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME);
       expect(discoveryTool).toBeDefined();
       const projection = createCapabilityExposure({
         eligible,
-        maxToolsExposed: runtime.deps.profile.maxToolsExposed,
         discoveryTool: discoveryTool!,
       });
       expect(projection.pressured).toBe(true);
@@ -186,7 +180,6 @@ describe('una capacità spenta lo dice, non solo al log', () => {
       runtime.close();
     }
   });
-
 });
 
 /**
@@ -237,23 +230,16 @@ describe('cosa raggiunge un membro, con e senza grant (ADR-0073)', () => {
     externalId: 'u1',
   });
 
-  /** Il menu iniziale che il modello vede per quel principal, per nome di tool. */
+  /** I tool che quel principal può raggiungere, non solo il nucleo del primo giro. */
   function menu(runtime: ReturnType<typeof buildRuntime>, tenantId: string): string[] {
-    const eligible = visibleTools(
+    return visibleTools(
       runtime.deps.tools,
       membro(tenantId),
       runtime.deps.capabilities,
       runtime.deps.grants?.get(tenantId),
-    );
-    const discoveryTool = eligible.find(
-      (tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME,
-    );
-    return createCapabilityExposure({
-      eligible,
-      maxToolsExposed: runtime.deps.profile.maxToolsExposed,
-      ...(discoveryTool === undefined ? {} : { discoveryTool }),
-    })
-      .exposed.map((t) => t.spec.name)
+    )
+      .map((t) => t.spec.name)
+      .filter((name) => name !== CAPABILITY_SEARCH_TOOL_NAME)
       .sort();
   }
 
