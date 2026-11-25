@@ -729,12 +729,31 @@ describe("una chiave non passa mai per argv né per l'environment (owner 2026-08
 });
 
 describe('muffin rot recovery', () => {
-  it.each([[], ['--hardened']])(
-    'retires the old hardening recipe on an initialized Home (%j)',
-    (...flags) => {
+  it('rejects the retired init flag before creating an installation', () => {
+    const { dir, xdg } = scratchHome();
+    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+    const r = muffin(env, ['init', '--hardened'], 'sk-ant-fixture');
+    expect(r.code).toBe(78);
+    expect(r.err).toContain('Use `muffin init`');
+    expect(existsSync(join(dir, 'config.json'))).toBe(false);
+    expect(existsSync(join(dir, 'rot', 'manifest.json'))).toBe(false);
+    expect(existsSync(join(xdg, 'muffin', 'secrets'))).toBe(false);
+  });
+
+  it.each(['single-user', 'hardened'] as const)(
+    'retires the old hardening recipe on an initialized Home (%s)',
+    (mode) => {
       const { dir, xdg } = scratchHome();
       const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
-      expect(muffin(env, ['init', ...flags], 'sk-ant-fixture').code).toBe(0);
+      expect(muffin(env, ['init'], 'sk-ant-fixture').code).toBe(0);
+      const configPath = join(dir, 'config.json');
+      const installed = JSON.parse(readFileSync(configPath, 'utf8'));
+      installed.rot.mode = mode;
+      writeFileSync(configPath, JSON.stringify(installed));
+
+      // Ordinary init preserves the mode of existing deployments.
+      expect(muffin(env, ['init'], 'sk-ant-fixture').code).toBe(0);
+      expect(JSON.parse(readFileSync(configPath, 'utf8')).rot.mode).toBe(mode);
       const manifest = join(dir, 'rot', 'manifest.json');
       const before = readFileSync(manifest);
       const r = muffin(env, ['rot', 'harden']);
