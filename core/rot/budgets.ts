@@ -1,8 +1,19 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { BudgetCaps } from '../budget/budget.js';
 import { paths } from '../config/config.js';
+import { PRIVATE_FILE_MODE } from '../config/private-fs.js';
 // Type-only, so this module takes no runtime dependency on the scheduler — but
 // it does take the *name*. A second `QuietHours` declared here would be a
 // second referent for one term, which is how `origin`/`source_kind` happened.
@@ -181,7 +192,22 @@ export function seedQuietTimezone(file: string, timezone: string): boolean {
   const next = text.replace(re, (_m, head: string) => `${head}${JSON.stringify(timezone)}`);
   const check = JSON.parse(next) as { quietHours?: { timezone?: unknown } };
   if (check.quietHours?.timezone !== timezone) return false;
-  writeFileSync(file, next, 'utf8');
+  // Pubblicato per rename: un lettore concorrente (il gateway che rilegge le
+  // quiet hours) vede il file vecchio o quello nuovo, mai uno troncato.
+  const temp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
+  const fd = openSync(temp, 'wx', PRIVATE_FILE_MODE);
+  try {
+    try {
+      writeFileSync(fd, next, 'utf8');
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(temp, file);
+  } catch (error) {
+    rmSync(temp, { force: true });
+    throw error;
+  }
   return true;
 }
 

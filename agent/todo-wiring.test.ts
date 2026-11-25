@@ -1,8 +1,9 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { runInit } from '../cli/init.js';
+import { identify } from '../core/surface/types.js';
 import { type LoopDeps, runTurn } from './loop.js';
 import type { ChatCall, ChatResult, Provider } from './providers/types.js';
 import { buildRuntime } from './runtime.js';
@@ -60,9 +61,9 @@ const callTodo = (args: unknown): ChatResult => ({
   model: 'test',
 });
 
-function bootHome(): string {
+function bootHome(timeZone = 'UTC'): string {
   const home = mkdtempSync(join(tmpdir(), 'muffin-todowire-'));
-  runInit({ home, apiKey: 'sk-never-called', timeZone: 'UTC' });
+  runInit({ home, apiKey: 'sk-never-called', timeZone });
   return home;
 }
 
@@ -431,6 +432,84 @@ describe('un piano scritto sporco non si lava leggendolo', () => {
  * ha chiesto un permesso all'owner per sapere l'ora.
  */
 describe("l'ambiente è davanti al modello, senza che nessuno lo chieda", () => {
+  it.each([
+    {
+      audience: 'paired DM',
+      identity: identify(
+        { connector: 'discord', authorId: 'sender', conversationId: 'channel', direct: true },
+        'sender',
+      ),
+      expected: '07:00 — America/New_York, UTC-05:00',
+    },
+    {
+      audience: 'group with the paired sender',
+      identity: identify(
+        { connector: 'discord', authorId: 'sender', conversationId: 'channel', direct: false },
+        'sender',
+      ),
+      expected: '12:00 — UTC, UTC+00:00',
+    },
+    {
+      audience: 'unpaired DM',
+      identity: identify(
+        { connector: 'discord', authorId: 'sender', conversationId: 'channel', direct: true },
+        undefined,
+      ),
+      expected: '12:00 — UTC, UTC+00:00',
+    },
+    {
+      // A host-tenant job is the owner's own work: its reminders and receipts
+      // must read the owner's clock, not UTC.
+      audience: 'scheduled owner job',
+      identity: {
+        principal: { kind: 'system', source: 'scheduler' } as const,
+        tenant: 'host',
+        sessionKey: 'scheduled-owner',
+      },
+      replyChannel: 'telegram:1',
+      expected: '07:00 — America/New_York, UTC-05:00',
+    },
+  ])('uses the appropriate clock in a $audience', async ({ identity, replyChannel, expected }) => {
+    const home = bootHome('America/New_York');
+    vi.stubEnv('TZ', 'Pacific/Kiritimati');
+    try {
+      const runtime = buildRuntime(home, workspace());
+      try {
+        const provider = new Capturing([answer('Hello')]);
+        const deps: LoopDeps = {
+          ...runtime.deps,
+          provider,
+          now: () => new Date('2026-01-15T12:00:00Z'),
+        };
+        const { principal, tenant, sessionKey } = identity;
+        const session = runtime.deps.sessions.open(sessionKey);
+
+        await runTurn(deps, {
+          principal,
+          tenant,
+          surface: replyChannel ?? 'discord',
+          replyChannel,
+          session,
+          text: 'Hello',
+        });
+
+        const clock = prompt(provider.seen[0])
+          .split('\n')
+          .find((line) => line.startsWith('- Adesso:'));
+        expect(clock).toContain(expected);
+        if (expected.includes('— UTC,')) {
+          expect(JSON.stringify(provider.seen[0])).not.toMatch(
+            /America\/New_York|Pacific\/Kiritimati/,
+          );
+        }
+      } finally {
+        runtime.close();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('il turno porta data, ora, fuso e superficie', async () => {
     const home = bootHome();
     const runtime = buildRuntime(home, workspace());

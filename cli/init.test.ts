@@ -190,7 +190,9 @@ describe("runInit scrive il fuso dell'owner in rot/budgets.json (il compito che 
 
   it("una Home nuova a Roma nasce con Europe/Rome, sigillata, e il registro tiene l'hash spedito", () => {
     const dir = freshHome();
-    const steps = runInit({ home: dir, apiKey: 'sk-never-called', timeZone: 'Europe/Rome' });
+    // Rilevato dal processo, non passato come opzione: è il percorso di init.
+    vi.stubEnv('TZ', 'Europe/Rome');
+    const steps = runInit({ home: dir, apiKey: 'sk-never-called' });
 
     expect(quiet(dir).timezone).toBe('Europe/Rome');
     expect(steps.find((s) => s.name === 'timezone')?.detail).toContain('Europe/Rome');

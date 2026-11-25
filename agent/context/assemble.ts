@@ -330,7 +330,10 @@ export function ambienteSection(a: {
    */
   istanza?: IstanzaFacts;
 }): string {
-  const zona = a.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  // Solo il prompt di classe owner usa il fuso dell'installazione: in un
+  // gruppo o con un ospite il fuso locale direbbe dove vive l'owner.
+  const timeZone =
+    a.classe === 'owner' ? (a.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone) : 'UTC';
   // Locale esplicito: quello di sistema qui è `en-US` (misurato), e un agente
   // che parla italiano non deve leggere «Friday» per sapere che giorno è.
   const quando = new Intl.DateTimeFormat('it-IT', {
@@ -340,7 +343,7 @@ export function ambienteSection(a: {
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-    timeZone: zona,
+    timeZone,
   }).format(a.adesso);
   const dove = SUPERFICI[a.surface] ?? a.surface;
   const conChi =
@@ -356,7 +359,7 @@ export function ambienteSection(a: {
     // per chi legge e per il modello. Trovato facendole collidere.
     '## Questo turno',
     '',
-    `- Adesso: ${quando} — ${zona}, ${offsetUtc(a.adesso, zona)}.`,
+    `- Adesso: ${quando} — ${timeZone}, ${offsetUtc(a.adesso, timeZone)}.`,
     `- Superficie: ${dove}, ${conChi}.`,
     `- Ti sta eseguendo: ${a.model} (profilo ${a.profilo}).`,
   ];
