@@ -100,6 +100,11 @@ program are under `/var/lib/muffin`. If passwordless `sudo` is not available on
 Linux the personal installer prints the one package-manager line it cannot
 perform and continues where it safely can.
 
+Text setup for Telegram and Discord can finish before the local voice model is
+present. Muffin prepares that model on the first attachment that needs local
+transcription. That attachment may take longer while the model downloads. Run
+`muffin doctor` to see whether the local transcription tools are available.
+
 ## Linux shell containment
 
 Linux shell commands run only when Muffin's runtime checks confirm both that
