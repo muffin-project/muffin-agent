@@ -1444,10 +1444,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       run.toolCallsMade += 1;
       try {
         const outcome = await runTool(deps, snapshot, turn, call_, input, exposed, toolContext, {
-          record,
-          run,
-          size: toolCalls.length,
-          index,
+          workBatch: { record, run, size: toolCalls.length, index },
         });
         results.push(outcome);
         noteSensitiveResourceEcho(call_, outcome);

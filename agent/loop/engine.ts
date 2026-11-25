@@ -826,7 +826,9 @@ async function runClaimedTurn(
       // Harness control (a transition report for this resume), not owner
       // words: a continuation to a new lease archives it instead of replaying
       // it — the approved work it refers to already completed.
-      let testo = wakeReport(waitFor, why);
+      const boundApproval =
+        waitFor?.kind === 'approval' && deps.approvals?.get(waitFor.id)?.invocation != null;
+      let testo = wakeReport(waitFor, why, boundApproval);
       // #762(b) — il trade è esplicito. Su una barriera d'approvazione la
       // guardia di ripresa e il referto parlano già di domande e risposte; su
       // un processo (o senza barriera) il modello riceveva solo il referto
@@ -835,7 +837,7 @@ async function runClaimedTurn(
       if (waitFor?.kind !== 'approval') {
         const nota = approvalFootnote(
           deps.approvals?.open(record.id)?.capability ?? null,
-          rispostaNelRegistro,
+          deps.approvals?.decidedUnconsumed(record.id, true) ?? false,
         );
         if (nota !== null) testo += `\n${nota}`;
       }

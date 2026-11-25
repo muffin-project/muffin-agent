@@ -11,6 +11,7 @@ import type { TodoItem } from '../../core/turns/todo.js';
 import { encodeWaitFor, type WaitSpec } from '../../core/turns/wait.js';
 import type { ContentBlock, Message } from '../providers/types.js';
 import { isWorkQuestion, WORK_MESSAGE_TOOL_NAME } from '../tools/work-message.js';
+import { resumeApprovedInvocations } from './approval-resume.js';
 import { harnessMessage, toolMessage } from './message-origin.js';
 import { harnessMessages, providerMessages } from './provider-checkpoint.js';
 import type { TurnRun } from './run-state.js';
@@ -294,6 +295,7 @@ export async function reconcile(scope: TurnScope): Promise<TurnResult | null> {
     toolContext,
     turn,
   } = scope;
+  const approved = await resumeApprovedInvocations(scope);
   const last = run.messages[run.messages.length - 1];
   if (last === undefined || last.role !== 'assistant') return null;
   const pending = last.content.filter(
@@ -307,6 +309,11 @@ export async function reconcile(scope: TurnScope): Promise<TurnResult | null> {
   turn.setAttributes({ 'muffin.turn.reconciled': pending.length });
 
   for (const [index, block] of pending.entries()) {
+    const approvedResult = approved.get(block.id);
+    if (approvedResult !== undefined) {
+      repaired.push(approvedResult);
+      continue;
+    }
     const done = recorded.get(block.id);
     if (done !== undefined) {
       // A recorded tool result with an unanswered tool_use is not a committed
@@ -350,10 +357,7 @@ export async function reconcile(scope: TurnScope): Promise<TurnResult | null> {
     try {
       const call = { id: block.id, name: block.name, args: block.input };
       const outcome = await runTool(deps, snapshot, turn, call, input, exposed, toolContext, {
-        record,
-        run,
-        size: pending.length,
-        index,
+        workBatch: { record, run, size: pending.length, index },
       });
       repaired.push(outcome);
       noteSensitiveResourceEcho(call, outcome);
