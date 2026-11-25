@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
+import { MEMORY_SCHEMA } from '../memory/schema.js';
 import { TURN_TABLE_SCHEMA } from '../turns/schema.js';
 import {
   assertSnapshotOk,
@@ -67,6 +68,45 @@ const widenKindCheck: Migration = {
     );
   },
 };
+
+it('migrates populated v11 owner proposals without assigning them a new source', () => {
+  const { db, backups } = fileDb();
+  const legacy = [{ version: 11, description: 'v11 fixture', up: () => {} }];
+  try {
+    const oldDdl = MEMORY_SCHEMA.replace(
+      '  owner_ingress_episode_id INTEGER REFERENCES episodes(id),\n',
+      '',
+    );
+    expect(oldDdl).not.toBe(MEMORY_SCHEMA);
+    db.exec(oldDdl);
+    db.exec(`INSERT INTO memory_proposals
+      (tenant_id, identity_key, subject, predicate, object_value, producer, source_episodes,
+       content, trust_tier, confidence, proposed_at)
+      VALUES ('host', 'before-v12', 'owner', 'accountant', 'Mario', 'owner-stated',
+              '[1,2]', 'owner accountant Mario', 0, 1, '2026-08-04T12:00:00Z')`);
+    stampFresh(db, legacy);
+    const before = db.prepare('SELECT * FROM memory_proposals').get();
+
+    const result = migrate(db, { backupDir: backups });
+
+    expect(result.applied).toEqual([12]);
+    expect(db.prepare('SELECT * FROM memory_proposals').get()).toEqual({
+      ...(before as object),
+      owner_ingress_episode_id: null,
+    });
+    expect(result.backup).not.toBeNull();
+    const snapshot = new DatabaseCtor(result.backup!, { readonly: true });
+    try {
+      expect(schemaVersionOf(snapshot)).toBe(11);
+      expect(snapshot.prepare('SELECT * FROM memory_proposals').get()).toEqual(before);
+    } finally {
+      snapshot.close();
+    }
+    expect(() => migrate(db, { backupDir: backups, migrations: legacy })).toThrow(SchemaAheadError);
+  } finally {
+    db.close();
+  }
+});
 
 describe('migrate — baseline and idempotence', () => {
   it('stamps the baseline on a fresh database and is a no-op to run twice', () => {
@@ -298,7 +338,7 @@ describe('migrazione 2 — jobs.kind', () => {
     // (`slice/una-promessa-torna`) are genuine no-ops here — but `migrate()` still runs and stamps them, the
     // same way migration 2 itself no-ops (and still counts) on a database where
     // `jobs` is absent, two tests below.
-    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     const riga = db.prepare(`SELECT goal, kind FROM jobs WHERE id = 'j1'`).get() as {
       goal: string;
       kind: string;
@@ -318,7 +358,7 @@ describe('migrazione 2 — jobs.kind', () => {
     // e prima che `MemoryStore` crei `facts` e `TodoStore` crei `todos`,
     // motivo per cui la 3 e la 4 arrivano fin qui allo stesso modo.
     expect(() => migrate(db, { backupDir: backups })).not.toThrow();
-    expect(schemaVersionOf(db)).toBe(11);
+    expect(schemaVersionOf(db)).toBe(12);
   });
 });
 
@@ -361,7 +401,7 @@ describe('migrazione 3 — facts.pinned', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     const pinned = db.prepare(`SELECT id FROM facts WHERE pinned = 1 ORDER BY id`).all() as {
       id: number;
     }[];
@@ -417,7 +457,7 @@ describe('migrazione 3 — facts.pinned', () => {
     // The fresh-install case: `MemoryStore` has not run yet, so `facts` is not
     // there for this migration to touch — same guard, same reason as jobs.kind.
     expect(() => migrate(db, { backupDir: backups })).not.toThrow();
-    expect(schemaVersionOf(db)).toBe(11);
+    expect(schemaVersionOf(db)).toBe(12);
   });
 });
 
@@ -445,7 +485,7 @@ describe('migrazioni 4 e 5 — todos.due_at, poi todos.due_tier', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     const colonne = (db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>).map(
       (c) => c.name,
     );
@@ -481,7 +521,9 @@ describe('migrazioni 4 e 5 — todos.due_at, poi todos.due_tier', () => {
     expect(righe.n).toBe(200);
     // NULL, mai un default che fingerebbe una provenienza: le righe vecchie
     // tengono il gate solo-tier finché non vengono riarmate.
-    const armate = db.prepare(`SELECT count(*) AS n FROM todos WHERE armed_turn_id IS NOT NULL`).get() as {
+    const armate = db
+      .prepare(`SELECT count(*) AS n FROM todos WHERE armed_turn_id IS NOT NULL`)
+      .get() as {
       n: number;
     };
     expect(armate.n).toBe(0);
@@ -513,7 +555,7 @@ describe('migrazioni 4 e 5 — todos.due_at, poi todos.due_tier', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([5, 6, 7, 8, 9, 10, 11]);
+    expect(res.applied).toEqual([5, 6, 7, 8, 9, 10, 11, 12]);
     const colonne = (db.prepare(`PRAGMA table_info(todos)`).all() as Array<{ name: string }>).map(
       (c) => c.name,
     );
@@ -686,7 +728,7 @@ describe('migrazione 8 — Turn schema authority', () => {
 
       const res = migrate(db, { backupDir: join(dir, 'backups') });
 
-      expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+      expect(res.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
       const row = db
         .prepare(`SELECT input_text, status, model, messages FROM turns WHERE id = 't1'`)
         .get();
@@ -788,7 +830,7 @@ describe('migrazione 8 — Turn schema authority', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([9, 10, 11]);
+    expect(res.applied).toEqual([9, 10, 11, 12]);
     const colonne = (db.prepare(`PRAGMA table_info(turns)`).all() as Array<{ name: string }>).map(
       (c) => c.name,
     );
@@ -1020,8 +1062,8 @@ describe('migrazione 8 — rebuildTable su una casa v7 popolata (#766)', () => {
 
     const res = migrate(db, { backupDir: backups });
 
-    expect(res.applied).toEqual([8, 9, 10, 11]);
-    expect(schemaVersionOf(db)).toBe(11);
+    expect(res.applied).toEqual([8, 9, 10, 11, 12]);
+    expect(schemaVersionOf(db)).toBe(12);
     // Not a stamp: every old value is still there, on every row.
     expect(dump(db, 'turns', OLD_TURNS_COLS, 'id')).toBe(beforeTurns);
     expect(dump(db, 'turn_tool_calls', OLD_CALL_COLS, 'turn_id, call_id')).toBe(beforeCalls);
