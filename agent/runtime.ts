@@ -1050,7 +1050,7 @@ export function buildRuntime(
   const scheduleToolDeps = {
     jobs,
     defaultTimezone: budgets.quietHours.timezone,
-    defaultChannel: () => readDefaultChannel(home, config.surfaces.default),
+    ownerPrimarySurface: () => readDefaultChannel(home, config.surfaces.default),
   };
   tools.push(
     makeWaitTool(turns),
