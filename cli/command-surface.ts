@@ -101,9 +101,9 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'restore', summary: 'ripristino esplicito da backup', audience: 'recovery' },
   {
     name: 'rot',
-    summary: 'Root of Trust: verifica, reseal, hardening',
+    summary: 'Root of Trust: verifica e reseal',
     audience: 'recovery',
-    subcommands: ['verify', 'reseal', 'harden'],
+    subcommands: ['verify', 'reseal'],
   },
   { name: 'uninstall', summary: 'rimuove la Home dopo conferma', audience: 'recovery' },
   {

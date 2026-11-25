@@ -1,5 +1,5 @@
-import type DatabaseCtor from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
+import type DatabaseCtor from 'better-sqlite3';
 import { ensureColumn } from '../lock/durable.js';
 import type { TrustTier } from '../policy/types.js';
 
@@ -12,8 +12,7 @@ import type { TrustTier } from '../policy/types.js';
  * la domanda mentre l'owner non c'è**. Su una superficie senza un approvatore
  * sincrono il turno finiva con `stopped: 'ask'` e la frase «su questa
  * superficie non posso chiederla» — cioè da Telegram niente di ciò che chiede
- * conferma era usabile, e per l'owner questo vuol dire quasi tutto (`sys.shell`
- * chiede sempre finché `muffin rot harden` non è stato fatto).
+ * conferma era usabile, incluso il normale percorso di approvazione di shell.
  *
  * DAY-1 requirement D12 lo nomina da mesi: *«resta la coda durevole degli ask
  * (`turn_outcome='ask'` persistito, nessun consumer lo rilegge)»*. Questa
@@ -226,7 +225,9 @@ export class ApprovalStore {
           AND decision IS NOT NULL AND consumed_at IS NULL
         ORDER BY decided_at ASC LIMIT 1`,
     );
-    this.consumeStmt = db.prepare(`UPDATE approvals SET consumed_at = @at WHERE id = @id AND consumed_at IS NULL`);
+    this.consumeStmt = db.prepare(
+      `UPDATE approvals SET consumed_at = @at WHERE id = @id AND consumed_at IS NULL`,
+    );
     this.openStmt = db.prepare(
       `SELECT * FROM approvals WHERE turn_id = ? AND decision IS NULL AND withdrawn_at IS NULL
         ORDER BY asked_at ASC LIMIT 1`,
@@ -252,7 +253,9 @@ export class ApprovalStore {
       `UPDATE approvals SET withdrawn_at = @at
         WHERE turn_id = @turnId AND decision IS NULL AND withdrawn_at IS NULL`,
     );
-    this.noteQuestionStmt = db.prepare(`UPDATE approvals SET question_message_ids = @ids WHERE id = @id`);
+    this.noteQuestionStmt = db.prepare(
+      `UPDATE approvals SET question_message_ids = @ids WHERE id = @id`,
+    );
     this.withdrawnQuestionsStmt = db.prepare(
       `SELECT id, question_message_ids FROM approvals
         WHERE turn_id = ? AND withdrawn_at IS NOT NULL AND question_message_ids IS NOT NULL
@@ -274,7 +277,13 @@ export class ApprovalStore {
    * senza pulsanti, fino alla scadenza (#745).
    */
   ask(
-    req: { turnId: string; capability: string; resource?: string | undefined; prompt: string; taint: TrustTier },
+    req: {
+      turnId: string;
+      capability: string;
+      resource?: string | undefined;
+      prompt: string;
+      taint: TrustTier;
+    },
     now: Date,
   ): string {
     const aperta = this.openForStmt.get({
@@ -375,10 +384,14 @@ export class ApprovalStore {
    * niente id, niente edit, mai un falso.
    */
   withdrawnQuestionMessages(turnId: string): Array<{ id: string; messageId: number }> {
-    const rows = this.withdrawnQuestionsStmt.all(turnId) as { id: string; question_message_ids: string | null }[];
+    const rows = this.withdrawnQuestionsStmt.all(turnId) as {
+      id: string;
+      question_message_ids: string | null;
+    }[];
     const out: Array<{ id: string; messageId: number }> = [];
     for (const r of rows) {
-      for (const messageId of leggiDomande(r.question_message_ids)) out.push({ id: r.id, messageId });
+      for (const messageId of leggiDomande(r.question_message_ids))
+        out.push({ id: r.id, messageId });
     }
     return out;
   }
