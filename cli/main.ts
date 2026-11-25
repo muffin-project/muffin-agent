@@ -4,7 +4,6 @@ import { dirname, join } from 'node:path';
 import { isatty } from 'node:tty';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { assicuraVoce } from '../core/audio/trascrivi.js';
 import { rememberKeyProfile } from '../core/config/auth-profile.js';
 import {
   ConfigError,
@@ -439,6 +438,14 @@ async function cmdInit(argv: string[]): Promise<number> {
     allowPositionals: true,
   });
 
+  if (values.hardened) {
+    process.stderr.write(
+      'The --hardened option is retired. Use `muffin init` for a personal install, ' +
+        'or `muffin doctor` to inspect OS hardening on an existing install.\n',
+    );
+    return 78;
+  }
+
   if (!values.local && positionals.length > 0) {
     process.stderr.write(
       `muffin init: argomento posizionale "${positionals[0]}" ha senso solo con --local\n`,
@@ -740,7 +747,6 @@ async function cmdInit(argv: string[]): Promise<number> {
   let steps: InitStep[];
   try {
     steps = runInit({
-      ...(values.hardened ? { hardened: true } : {}),
       ...(values.force ? { force: true } : {}),
       provider: effProvider,
       ...(effBaseUrl ? { baseUrl: effBaseUrl } : {}),
@@ -787,19 +793,6 @@ async function cmdInit(argv: string[]): Promise<number> {
       );
       return 1;
     }
-  }
-
-  // Il fallback vocale, assicurato una volta sola e mai a sorpresa: solo se
-  // una superficie vocale è accesa (una CLI sola non scarica 142 MiB per
-  // niente), e senza far fallire l'init se la rete non c'è — il rimedio
-  // rumoroso a runtime resta l'ultima spiaggia.
-  try {
-    const riga = await assicuraVoce(home, loadConfig(home));
-    if (riga !== null) process.stderr.write(`${riga}\n`);
-  } catch (error) {
-    process.stderr.write(
-      `voce: controllo modello whisper saltato (${error instanceof Error ? error.message : String(error)})\n`,
-    );
   }
 
   if (values.local) {

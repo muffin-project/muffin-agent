@@ -1,16 +1,16 @@
-import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { runInit } from './init.js';
 import { paths } from '../core/config/config.js';
 import { JobStore } from '../core/scheduler/jobs.js';
+import { runInit } from './init.js';
 import { cmdJobsAdd, cmdJobsCap, cmdJobsList, cmdJobsRemove } from './jobs.js';
 
 function bootHome(): string {
   const home = mkdtempSync(join(tmpdir(), 'muffin-jobs-cli-'));
-  runInit({ home, apiKey: 'sk-not-used' });
+  runInit({ home, apiKey: 'sk-not-used', timeZone: 'UTC' });
   return home;
 }
 
@@ -32,7 +32,9 @@ describe('muffin jobs', () => {
     vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
 
     expect(cmdJobsList(home)).toBe(0); // empty is fine
-    expect(cmdJobsAdd(home, ['--cron', '0 8 * * *', '--tz', 'Europe/Rome', 'brief della giornata'])).toBe(0);
+    expect(
+      cmdJobsAdd(home, ['--cron', '0 8 * * *', '--tz', 'Europe/Rome', 'brief della giornata']),
+    ).toBe(0);
 
     const jobs = activeJobs(home);
     expect(jobs.length).toBe(1);
@@ -93,7 +95,9 @@ describe('muffin jobs — il tetto per-job', () => {
     vi.spyOn(process.stdout, 'write').mockImplementation((s) => (detto.push(String(s)), true));
     vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
 
-    expect(cmdJobsAdd(home, ['--cron', '0 8 * * *', '--per-job-usd', '0.5', 'brief della giornata'])).toBe(0);
+    expect(
+      cmdJobsAdd(home, ['--cron', '0 8 * * *', '--per-job-usd', '0.5', 'brief della giornata']),
+    ).toBe(0);
     expect(activeJobs(home)[0]!.perJobUsd).toBe(0.5);
 
     // Una spesa già attribuita a quel job: la lista deve leggerla dal

@@ -449,11 +449,11 @@ export async function runDoctor(
       'model profile',
       `${profileProblems.join(' · ')} — ${config.models.main} caduto sul profilo conservativo: ` +
         `thinking ${resolvedProfile.thinking}, sampling ${resolvedProfile.sampling}, ` +
-        // Due numeri distinti e per questo confondibili se non nominati per ciò che sono:
-        // `maxToolsExposed` è quanti tool il modello *vede*, `maxToolCallsPerTurn`
-        // è quante *chiamate* può fare; `null` lascia il conteggio libero e
-        // sono tempo e spesa a porre il limite.
-        `${resolvedProfile.maxToolsExposed} tool esposti, ${resolvedProfile.maxToolCallsPerTurn === null ? 'nessun tetto numerico di tool call' : `${resolvedProfile.maxToolCallsPerTurn} call/turno`}, ` +
+        // Il numero di tool visibili non è più un tetto: il nucleo resta in vista
+        // e il resto si carica. `maxToolCallsPerTurn` è quante *chiamate* può
+        // fare; `null` lascia il conteggio libero e sono tempo e spesa a porre
+        // il limite.
+        `tool caricati per pertinenza, ${resolvedProfile.maxToolCallsPerTurn === null ? 'nessun tetto numerico di tool call' : `${resolvedProfile.maxToolCallsPerTurn} call/turno`}, ` +
         `stampelle [${resolvedProfile.recovery.join(', ')}]`,
       `ripara o rimuovi il profilo scartato sopra, sotto ${cartelleCadute}`,
     );
@@ -750,11 +750,30 @@ export async function runDoctor(
     if (connection.kind === 'openai-chatgpt') {
       try {
         const session = new ChatGPTConnection(home).session();
-        if (session?.connected)
+        if (session?.planLimited)
+          credentialFail(
+            'ChatGPT',
+            `Plan usage limit reached${session.planLimitedAt === undefined ? '' : ` (last refusal ${new Date(session.planLimitedAt).toLocaleString('it-IT')})`}: replies fail until it resets. Cleared by the next successful reply.`,
+            'check https://chatgpt.com/settings/usage',
+          );
+        else if (session?.usable)
           credentialOk(
             'ChatGPT',
             'Account connected; plan quota and credits are managed at https://chatgpt.com/settings/usage',
           );
+        else if (session?.renewable)
+          credentialOk(
+            'ChatGPT',
+            'ChatGPT will attempt to refresh the saved authorization on the next request.',
+          );
+        else if (session?.needsLogin)
+          credentialFail(
+            'ChatGPT',
+            'Refresh was refused (authorization expired or revoked).',
+            'muffin chatgpt login',
+          );
+        else if (session?.accessExpired)
+          credentialFail('ChatGPT', 'Access token is expired.', 'muffin chatgpt login');
         else
           credentialFail(
             'ChatGPT',
@@ -876,6 +895,7 @@ export async function runDoctor(
     // this repository and none of them was ever *consulted* — which is the same
     // failure they were written to prevent, one layer out.
     const chunks = countOrNull(db, 'chunks');
+    const vectorsDisabled = config?.embedder?.enabled === false;
 
     // **Prima** dei conteggi, non dentro il ramo dei conteggi coerenti.
     //
@@ -900,8 +920,9 @@ export async function runDoctor(
     let configurato: Embedder | undefined;
     let configRotta: string | undefined;
     try {
-      configurato =
-        config === null ? undefined : makeEmbedder(config.embedder, (ref) => readSecret(ref, home));
+      if (config !== null && !vectorsDisabled) {
+        configurato = makeEmbedder(config.embedder, (ref) => readSecret(ref, home));
+      }
     } catch (error) {
       // Una config di embedder incompleta non deve far cadere `doctor`: è
       // proprio il momento in cui serve. Ma nemmeno sparire: qui stava un
@@ -916,7 +937,9 @@ export async function runDoctor(
       configRotta = error instanceof Error ? error.message : String(error);
     }
 
-    if (configRotta !== undefined) {
+    if (vectorsDisabled) {
+      ok('vector index', 'embedding disattivati · ricerca testuale attiva');
+    } else if (configRotta !== undefined) {
       fail(
         'vector index',
         `${chunks === null ? 'nessuna tabella chunks' : `${chunks} chunks`}, e config.embedder non è ` +
@@ -1525,28 +1548,17 @@ export async function runDoctor(
     );
   }
 
-  // #469 changes what the profile ceiling means. It still bounds the
-  // model-visible schemas in one round, but an authorized native capability
-  // beyond the initial projection remains reachable through capability_search.
-  // baseToolOrder describes the native catalogue; the discovery meta-tool is
-  // not itself counted as a user capability in the under-cap fast path.
+  // baseToolOrder is the native catalogue doctor counts. Each turn projects
+  // that catalogue according to its authority and access to discovery.
   const ordineBase = baseToolOrder({
     sandboxAvailable: boundary.usable,
     searchOn: ricerca.on,
     sendFileAvailable: true,
   }).filter((name) => name !== 'capability_search');
-  const oltreProiezione = Math.max(0, ordineBase.length - resolvedProfile.maxToolsExposed);
-  if (oltreProiezione === 0) {
-    ok(
-      'capacità: tetto tool',
-      `${ordineBase.length} capability native entro la proiezione di ${resolvedProfile.maxToolsExposed} del profilo "${resolvedProfile.name}"`,
-    );
-  } else {
-    ok(
-      'capacità: tetto tool',
-      `${ordineBase.length} capability native, proiezione massima ${resolvedProfile.maxToolsExposed} del profilo "${resolvedProfile.name}": ${oltreProiezione} restano caricabili su richiesta via capability_search`,
-    );
-  }
+  ok(
+    'capacità: tool',
+    `${ordineBase.length} capability native nel profilo "${resolvedProfile.name}". Quando il turno può usare capability_search, il nucleo resta visibile e le altre si caricano su richiesta. Senza la ricerca, il modello vede l'intero catalogo consentito.`,
+  );
 
   // #213 upstream (cited in ADR-0026): on Linux the sandbox bridges its
   // egress proxy through a Unix-domain socket inside TMPDIR, and a TMPDIR
@@ -1633,6 +1645,11 @@ export async function runDoctor(
         'note vocali',
         `${modello} non accetta audio: si trascrive in casa — ` +
           prerequisiti.map((x) => (x.ok ? `${x.cosa} ${x.dove}` : x.cosa)).join(' · '),
+      );
+    } else if (mancanti.every((x) => x.cosa === 'modello whisper')) {
+      ok(
+        'note vocali',
+        `${modello} non accetta audio. Muffin proverà a scaricare il modello locale alla prima nota da trascrivere.`,
       );
     } else {
       warn(
