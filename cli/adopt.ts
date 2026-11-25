@@ -1,17 +1,17 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { findCheckoutRoot } from './git-root.js';
-import { PLAIN, type Style } from './ui.js';
 import {
-  REAL_GIT,
+  type DefaultDrift,
   diagnoseDefaultsDrift,
+  type Git,
   installedPathOf,
+  REAL_GIT,
   recordCopied,
   shippedPathOf,
-  type DefaultDrift,
-  type Git,
 } from '../core/config/defaults-drift.js';
+import { findCheckoutRoot } from './git-root.js';
+import { PLAIN, type Style } from './ui.js';
 
 /**
  * `muffin adopt` — il verbo che mancava a una diagnosi già completa.
@@ -170,13 +170,19 @@ function resoconto(drift: DefaultDrift[], style: Style, out: (l: string) => void
     // con le sue parole.
     const mancanti = liberi.filter((d) => d.status === 'missing');
     if (mancanti.length > 0) {
-      out(`${String(mancanti.length)} mai arrivati in questa casa: ${mancanti.map((d) => d.path).join(', ')}`);
+      out(
+        `${String(mancanti.length)} mai arrivati in questa casa: ${mancanti.map((d) => d.path).join(', ')}`,
+      );
     }
     const vecchi = liberi.filter((d) => d.status === 'adoptable');
-    if (vecchi.length > 0) out(`${String(vecchi.length)} da adottare: ${vecchi.map((d) => d.path).join(', ')}`);
-    out(`  → \`muffin adopt --tutto\`, oppure \`muffin adopt ${liberi[0]?.path ?? ''}\` per uno solo`);
+    if (vecchi.length > 0)
+      out(`${String(vecchi.length)} da adottare: ${vecchi.map((d) => d.path).join(', ')}`);
+    out(
+      `  → \`muffin adopt --tutto\`, oppure \`muffin adopt ${liberi[0]?.path ?? ''}\` per uno solo`,
+    );
   }
-  for (const d of sigillati) out(`  ${style.warn('!')} ${d.path} è dentro il sigillo: ${consegnaSigillata(d)}`);
+  for (const d of sigillati)
+    out(`  ${style.warn('!')} ${d.path} è dentro il sigillo: ${consegnaSigillata(d)}`);
   return 0;
 }
 
@@ -187,15 +193,9 @@ function resoconto(drift: DefaultDrift[], style: Style, out: (l: string) => void
  */
 function consegnaSigillata(d: DefaultDrift): string {
   if (d.status === 'missing') {
-    return (
-      `manca, ma installarlo fa divergere l'hash sigillato e manda l'installazione in safe mode. ` +
-      '`muffin init` lo copia e risigilla nello stesso giro — è l\'unico percorso che entra nel sigillo senza lasciarlo rotto'
-    );
+    return `manca. \`muffin init\` lo ricopia in rot/. Non serve un sigillo (ADR-0108).`;
   }
-  return (
-    `adottarlo fa divergere l'hash sigillato e manda l'installazione in safe mode. ` +
-    `Se la vuoi: \`${d.adoptCommand ?? '(comando non disponibile)'}\`, poi \`muffin rot reseal\``
-  );
+  return `Se la vuoi, usa \`muffin rot migrate\` per i campi additivi (conserva fuso e identity.md). Non serve un sigillo (ADR-0108).`;
 }
 
 /**
@@ -243,7 +243,10 @@ function copiaERegistra(
     try {
       registrare.push({ path: d.path, content: readFileSync(dst) });
     } catch (error) {
-      falliti.push({ path: d.path, why: `copiato, ma non rileggibile per il registro: ${(error as Error).message}` });
+      falliti.push({
+        path: d.path,
+        why: `copiato, ma non rileggibile per il registro: ${(error as Error).message}`,
+      });
       continue;
     }
     nota(d.path, d.status === 'missing' ? 'installato (mancava)' : 'adottato');
@@ -303,10 +306,17 @@ export function reconcileDefaults(
   }
   if (daInstallare.length === 0) return esito;
   if (checkoutRoot === null) {
-    for (const d of daInstallare) esito.falliti.push({ path: d.path, why: 'nessun checkout da cui copiare' });
+    for (const d of daInstallare)
+      esito.falliti.push({ path: d.path, why: 'nessun checkout da cui copiare' });
     return esito;
   }
-  const fatto = copiaERegistra(home, checkoutRoot, daInstallare, deps.copy ?? ((src, dst) => copyFileSync(src, dst)), () => undefined);
+  const fatto = copiaERegistra(
+    home,
+    checkoutRoot,
+    daInstallare,
+    deps.copy ?? ((src, dst) => copyFileSync(src, dst)),
+    () => undefined,
+  );
   esito.installati = fatto.copiati;
   esito.falliti = fatto.falliti;
   return esito;
@@ -320,14 +330,19 @@ export function reconcileDefaults(
  */
 export function rigaRiconciliazione(e: EsitoRiconciliazione): string | null {
   const pezzi: string[] = [];
-  if (e.installati.length > 0) pezzi.push(`installati in casa ${String(e.installati.length)} default che mancavano: ${e.installati.join(', ')}`);
+  if (e.installati.length > 0)
+    pezzi.push(
+      `installati in casa ${String(e.installati.length)} default che mancavano: ${e.installati.join(', ')}`,
+    );
   if (e.sigillati.length > 0)
     pezzi.push(
       `${String(e.sigillati.length)} dentro il sigillo non installati (${e.sigillati.map((d) => d.path).join(', ')}) — ` +
         '`muffin init` li copia e risigilla nello stesso giro',
     );
   if (e.adottabili.length > 0)
-    pezzi.push(`${String(e.adottabili.length)} da aggiornare, mai modificati da te: \`muffin adopt --tutto\``);
+    pezzi.push(
+      `${String(e.adottabili.length)} da aggiornare, mai modificati da te: \`muffin adopt --tutto\``,
+    );
   for (const f of e.falliti) pezzi.push(`${f.path} non installato: ${f.why}`);
   return pezzi.length > 0 ? pezzi.join(' · ') : null;
 }
@@ -336,7 +351,9 @@ export function cmdAdopt(home: string, argv: string[], deps: AdoptDeps): number 
   const out = deps.out;
   const style = deps.style ?? PLAIN;
   const checkoutRoot =
-    deps.checkoutRoot !== undefined ? deps.checkoutRoot : findCheckoutRoot(dirname(fileURLToPath(import.meta.url)));
+    deps.checkoutRoot !== undefined
+      ? deps.checkoutRoot
+      : findCheckoutRoot(dirname(fileURLToPath(import.meta.url)));
   const drift = diagnoseDefaultsDrift(home, checkoutRoot, deps.git ?? REAL_GIT);
 
   if (drift.length === 0) {
@@ -355,7 +372,15 @@ export function cmdAdopt(home: string, argv: string[], deps: AdoptDeps): number 
   // significare «e anche il sigillo».
   const scelti: DefaultDrift[] = tutto
     ? drift.filter((d) => scrivibile(d) && !d.sealed)
-    : paths.map((p) => perPath.get(p) ?? { path: p, sealed: false, status: 'unknown' as const, detail: 'non è un file di defaults/ che io conosca' });
+    : paths.map(
+        (p) =>
+          perPath.get(p) ?? {
+            path: p,
+            sealed: false,
+            status: 'unknown' as const,
+            detail: 'non è un file di defaults/ che io conosca',
+          },
+      );
 
   if (tutto && scelti.length === 0) {
     out('Niente da adottare.');
@@ -406,7 +431,11 @@ export function cmdAdopt(home: string, argv: string[], deps: AdoptDeps): number 
 
   if (fatto.copiati.length > 0) {
     out('');
-    out(style.dim(`registro d'installazione aggiornato — al prossimo giro questi file restano adottabili, non "modificati da te"`));
+    out(
+      style.dim(
+        `registro d'installazione aggiornato — al prossimo giro questi file restano adottabili, non "modificati da te"`,
+      ),
+    );
   }
   return problemi > 0 ? 1 : 0;
 }
