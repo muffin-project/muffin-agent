@@ -81,6 +81,13 @@ export async function cmdChatGPT(
       const session = connection.session();
       out(JSON.stringify(session));
       for (const profile of connection.profiles()) out(JSON.stringify(profile));
+      if (session?.planLimited) {
+        out(
+          `ChatGPT plan usage limit reached${session.planLimitedAt === undefined ? '' : ` (last refusal ${new Date(session.planLimitedAt).toISOString()})`}. Replies fail until it resets; the next successful reply clears this.`,
+        );
+        out(`Manage usage: ${CHATGPT_USAGE_URL}`);
+        return 1;
+      }
       if (!session?.usable && !session?.renewable) {
         const why = session?.needsLogin
           ? 'ChatGPT refused to refresh this session.'

@@ -60,9 +60,18 @@ import { runInit } from './init.js';
 it.each([
   { refreshToken: 'refresh', level: 'ok', detail: 'will attempt to refresh', remedy: undefined },
   { refreshToken: '', level: 'fail', detail: 'expired', remedy: 'muffin chatgpt login' },
+  // A valid token on an exhausted plan is not a usable model.
+  {
+    refreshToken: 'refresh',
+    level: 'fail',
+    detail: 'Plan usage limit reached',
+    remedy: 'check https://chatgpt.com/settings/usage',
+    planLimited: true,
+  },
 ])(
-  'ChatGPT doctor reports an expired session with a $level result',
-  async ({ refreshToken, level, detail, remedy }) => {
+  'ChatGPT doctor reports an expired or limited session with a $level result',
+  async ({ refreshToken, level, detail, remedy, ...limit }) => {
+    const planLimited = 'planLimited' in limit && limit.planLimited === true;
     const dir = home();
     const config = loadConfig(dir);
     saveConfig(
@@ -96,9 +105,10 @@ it.each([
               scopes: ['chatgpt.tokens.use.direct', 'offline_access', 'resource.invoke'],
               receivedAt: 1,
               idTokenReceivedAt: 1,
-              expiresAt: 1,
+              expiresAt: planLimited ? Date.now() + 3_600_000 : 1,
               pendingIdentity: false,
             },
+            ...(planLimited ? { planLimit: { at: 1 } } : {}),
           },
         ],
       })}\n`,

@@ -582,6 +582,7 @@ describe('muffin model', () => {
       renewable: true,
       accessExpired: false,
       needsLogin: false,
+      planLimited: false,
       scopes: ['chatgpt.tokens.use.direct'],
     });
     vi.spyOn(connection, 'listModels').mockResolvedValue([
