@@ -1,14 +1,14 @@
 import { type Provider, ProviderError, ProviderStreamError } from '../../agent/providers/types.js';
 import type { Principal } from '../policy/types.js';
 import type { SpanHandle, Tracer } from '../tracing/types.js';
-import { VECTOR_INDEX_BATCH_SIZE, type VectorIndex } from './vectors.js';
 import { ATTR } from '../tracing/types.js';
-import { extractFacts } from './extract.js';
 import { speakerAttributedContent } from './authorship.js';
-import { describeFailureReason, judgeContradiction, type JudgeOutcome } from './judge.js';
+import { extractFacts } from './extract.js';
+import { describeFailureReason, type JudgeOutcome, judgeContradiction } from './judge.js';
 import { originForProducer, type ProposalStatus } from './proposals.js';
 import { EXTRACTION_VERSION, type FactOrigin } from './schema.js';
 import type { Fact, MemoryStore } from './store.js';
+import { VECTOR_INDEX_BATCH_SIZE, type VectorIndex } from './vectors.js';
 
 /**
  * The ingestion job: episodes in, facts out.
@@ -128,7 +128,13 @@ export type IngestReport = {
    * Italian text of a refusal message would make the run log depend on wording.
    */
   busy: boolean;
-  needsReview: { subject: string; predicate: string; existing: string; incoming: string; why: string }[];
+  needsReview: {
+    subject: string;
+    predicate: string;
+    existing: string;
+    incoming: string;
+    why: string;
+  }[];
   /**
    * Everything that went wrong this round **except** a judge whose answer
    * could not be read — that one entry per candidate lives in
@@ -367,7 +373,9 @@ export async function ingestPending(
       // A model that answers something unusable is not an exception — the
       // function returns normally with `error` set — so without this the span
       // would close green on the exact rounds that produced nothing.
-      extractSpan.end(extraction.error === undefined ? undefined : { error: new Error(extraction.error) });
+      extractSpan.end(
+        extraction.error === undefined ? undefined : { error: new Error(extraction.error) },
+      );
 
       if (extraction.error) {
         const detail = `episodio ${episode.id}: ${extraction.error}`;
@@ -392,7 +400,9 @@ export async function ingestPending(
       if (extraction.malformed !== undefined && extraction.malformed > 0) {
         const detail =
           `episodio ${episode.id}: ${extraction.malformed} candidati fuori schema, tenuti gli altri` +
-          (extraction.malformedWhy === undefined ? '' : ` — ${extraction.malformedWhy.join(' · ')}`);
+          (extraction.malformedWhy === undefined
+            ? ''
+            : ` — ${extraction.malformedWhy.join(' · ')}`);
         report.errors.push(detail);
         deps.store.recordReview({
           tenantId,
@@ -410,7 +420,16 @@ export async function ingestPending(
           now().toISOString(),
         );
 
-        const outcome = await reconcile(deps, tenantId, subjectId, fact, episode, now(), span, report);
+        const outcome = await reconcile(
+          deps,
+          tenantId,
+          subjectId,
+          fact,
+          episode,
+          now(),
+          span,
+          report,
+        );
         if (outcome !== 'skipped') report.factsAdded += 1;
       }
 
@@ -445,9 +464,20 @@ export async function ingestPending(
     const staged = deps.store.pendingProposals(tenantId, PROPOSAL_DRAIN_LIMIT);
     report.proposalPageFull = staged.length === PROPOSAL_DRAIN_LIMIT;
     for (const proposal of staged) {
-      const outcome = await reconcileProposalLocked(deps, tenantId, proposal.id, now(), span, report);
+      const outcome = await reconcileProposalLocked(
+        deps,
+        tenantId,
+        proposal.id,
+        now(),
+        span,
+        report,
+      );
       report.proposalsReconciled = (report.proposalsReconciled ?? 0) + 1;
-      if (outcome.status === 'accepted' || outcome.status === 'superseded' || outcome.status === 'review') {
+      if (
+        outcome.status === 'accepted' ||
+        outcome.status === 'superseded' ||
+        outcome.status === 'review'
+      ) {
         report.factsAdded += 1;
       }
     }
@@ -487,7 +517,12 @@ export async function ingestPending(
         const message = error instanceof Error ? error.message : String(error);
         const detail = `indice vettoriale: ${message} — il recall resta testuale`;
         report.errors.push(detail);
-        deps.store.recordReview({ tenantId, kind: 'error', detail, createdAt: now().toISOString() });
+        deps.store.recordReview({
+          tenantId,
+          kind: 'error',
+          detail,
+          createdAt: now().toISOString(),
+        });
       }
     }
 
@@ -659,7 +694,10 @@ async function reconcile(
   // nothing — while letting a reversion-shaped correction reach the judge
   // like any other change. Proven in ingest.test.ts: "lets a correction that
   // repeats an older active value still reach the judge".
-  if ((candidate.objectValue ?? candidate.objectName ?? '').toLowerCase() === incoming.object.toLowerCase()) {
+  if (
+    (candidate.objectValue ?? candidate.objectName ?? '').toLowerCase() ===
+    incoming.object.toLowerCase()
+  ) {
     return 'skipped';
   }
 
@@ -687,7 +725,9 @@ async function reconcile(
  * their own commit boundaries: the episode path commits bare, the proposal
  * path commits belief and outcome atomically.
  */
-type CandidateDecision = { kind: 'judge-throw'; failure: string } | { kind: 'judged'; verdict: JudgeOutcome };
+type CandidateDecision =
+  | { kind: 'judge-throw'; failure: string }
+  | { kind: 'judged'; verdict: JudgeOutcome };
 
 /**
  * Provider exception messages are untrusted wire text and may echo credentials
@@ -822,7 +862,11 @@ function commitCandidateDecision(
   // candidate, writing two review rows for one judge call.
   if (verdict.failure) {
     const reason = describeFailureReason(verdict.failure.reason);
-    report.judgeUnavailable.push({ subject: incoming.subject, predicate: incoming.predicate, reason });
+    report.judgeUnavailable.push({
+      subject: incoming.subject,
+      predicate: incoming.predicate,
+      reason,
+    });
     const reviewDetail =
       `giudice non disponibile su ${incoming.subject}/${incoming.predicate}: tengo entrambi i valori [${reason}]\n` +
       `risposta grezza: ${verdict.failure.rawResponse || '(vuota)'}`;
@@ -912,7 +956,9 @@ function commitCandidateDecision(
       // An unreadable judge (`verdict.failure`) is not a decision to coexist
       // with — it is a decision the system could not read, and the proposal
       // path records it as `review` rather than a quiet accept.
-      return verdict.failure ? { factId: newId, category: 'review', detail } : { factId: newId, category: 'accepted', detail };
+      return verdict.failure
+        ? { factId: newId, category: 'review', detail }
+        : { factId: newId, category: 'accepted', detail };
   }
 }
 
@@ -979,7 +1025,14 @@ export async function reconcileProposal(
     throw new Error(`memoria occupata (${claim.held}): ${claim.remedy}`);
   }
   try {
-    const out = await reconcileProposalLocked(deps, tenantId, proposalId, at, undefined, opts.report);
+    const out = await reconcileProposalLocked(
+      deps,
+      tenantId,
+      proposalId,
+      at,
+      undefined,
+      opts.report,
+    );
     if (out.status === 'accepted' || out.status === 'superseded' || out.status === 'review') {
       out.report.factsAdded += 1;
     }
@@ -1067,12 +1120,28 @@ export async function reconcileProposalLocked(
   }
   const withdrawn = deps.store.withdrawnEpisodes(tenantId, proposal.sourceEpisodeIds);
   const usable = proposal.sourceEpisodeIds.filter((id) => !withdrawn.includes(id));
-  if (usable.length === 0) {
-    const detail = `evidenza ritirata prima della riconciliazione (episodi ${withdrawn.join(', ')}).`;
-    deps.store.resolveProposal(tenantId, proposalId, { status: 'rejected', factIds: [], detail, decidedAt: at });
+  // Legacy owner proposals did not preserve which source carried the instruction.
+  // Do not guess that an additional citation authorizes the change.
+  const ownerIngress = proposal.ownerIngressEpisodeId;
+  const missingOwnerIngress = proposal.producer === 'owner-stated' && ownerIngress === null;
+  if (
+    missingOwnerIngress ||
+    usable.length === 0 ||
+    (ownerIngress !== null && !usable.includes(ownerIngress))
+  ) {
+    const detail = missingOwnerIngress
+      ? 'La proposta precedente non identifica la richiesta originale. Se è ancora valida, ripeti la richiesta.'
+      : `evidenza ritirata prima della riconciliazione (episodi ${withdrawn.join(', ')}).`;
+    deps.store.resolveProposal(tenantId, proposalId, {
+      status: 'rejected',
+      factIds: [],
+      detail,
+      decidedAt: at,
+    });
     return { proposalId, status: 'rejected', factIds: [], report: rep };
   }
-  const withdrawalNote = withdrawn.length > 0 ? ` [evidenza ritirata: episodi ${withdrawn.join(', ')}]` : '';
+  const withdrawalNote =
+    withdrawn.length > 0 ? ` [evidenza ritirata: episodi ${withdrawn.join(', ')}]` : '';
 
   const subjectId = deps.store.upsertEntity(tenantId, proposal.subject, proposal.subjectKind, at);
   const incoming: IncomingCandidate = {
@@ -1087,7 +1156,7 @@ export async function reconcileProposalLocked(
     // re-tiered episode wash the proposal's taint after the fact.
     trustTier: proposal.trustTier,
     origin: proposal.origin,
-    episodeId: usable[0]!,
+    episodeId: ownerIngress ?? usable[0]!,
   };
 
   const existing = deps.store.activeFacts(tenantId, subjectId, proposal.predicate);
@@ -1098,7 +1167,11 @@ export async function reconcileProposalLocked(
   const committed = deps.store.transact(() => {
     const fresh = deps.store.proposalById(tenantId, proposalId);
     if (!fresh || fresh.status !== 'pending') {
-      return { raced: true as const, status: fresh?.status as ProposalStatus | undefined, factIds: fresh?.resultingFactIds ?? [] };
+      return {
+        raced: true as const,
+        status: fresh?.status as ProposalStatus | undefined,
+        factIds: fresh?.resultingFactIds ?? [],
+      };
     }
     if (existing.length === 0) {
       const factId = insertCandidateFact(deps.store, tenantId, subjectId, incoming, now);
@@ -1113,7 +1186,10 @@ export async function reconcileProposalLocked(
     const candidate = [...existing].sort(
       (a, b) => b.recordedAt.localeCompare(a.recordedAt) || b.id - a.id,
     )[0]!;
-    if ((candidate.objectValue ?? candidate.objectName ?? '').toLowerCase() === incoming.object.toLowerCase()) {
+    if (
+      (candidate.objectValue ?? candidate.objectName ?? '').toLowerCase() ===
+      incoming.object.toLowerCase()
+    ) {
       deps.store.resolveProposal(tenantId, proposalId, {
         status: 'merged',
         factIds: [candidate.id],
@@ -1132,7 +1208,12 @@ export async function reconcileProposalLocked(
   });
 
   if (committed.raced) {
-    return { proposalId, status: committed.status ?? 'rejected', factIds: committed.factIds, report: rep };
+    return {
+      proposalId,
+      status: committed.status ?? 'rejected',
+      factIds: committed.factIds,
+      report: rep,
+    };
   }
   if (committed.status !== null) {
     return { proposalId, status: committed.status, factIds: committed.factIds, report: rep };
@@ -1142,14 +1223,25 @@ export async function reconcileProposalLocked(
   // is awaited. Duplicate proposal retries may still raise the persisted
   // provenance tier outside that lane, so the final transaction adopts the
   // latest tier before it writes a fact.
-  const decision = await decideCandidate(deps, incoming, committed.candidate, {
-    existing: deps.store.episodeById(tenantId, committed.candidate.episodeId)?.content ?? undefined,
-    incoming: proposal.content,
-  }, parent);
+  const decision = await decideCandidate(
+    deps,
+    incoming,
+    committed.candidate,
+    {
+      existing:
+        deps.store.episodeById(tenantId, committed.candidate.episodeId)?.content ?? undefined,
+      incoming: proposal.content,
+    },
+    parent,
+  );
   const judged = deps.store.transact(() => {
     const fresh = deps.store.proposalById(tenantId, proposalId);
     if (!fresh || fresh.status !== 'pending') {
-      return { raced: true as const, status: fresh?.status as ProposalStatus | undefined, factIds: fresh?.resultingFactIds ?? [] };
+      return {
+        raced: true as const,
+        status: fresh?.status as ProposalStatus | undefined,
+        factIds: fresh?.resultingFactIds ?? [],
+      };
     }
     const finalIncoming =
       fresh.trustTier > incoming.trustTier ? { ...incoming, trustTier: fresh.trustTier } : incoming;
@@ -1165,7 +1257,8 @@ export async function reconcileProposalLocked(
         report: rep,
       },
     );
-    const detail = out.detail === null ? withdrawalNote.trim() || null : `${out.detail}${withdrawalNote}`;
+    const detail =
+      out.detail === null ? withdrawalNote.trim() || null : `${out.detail}${withdrawalNote}`;
     deps.store.resolveProposal(tenantId, proposalId, {
       status: out.category,
       factIds: [out.factId],
@@ -1175,7 +1268,12 @@ export async function reconcileProposalLocked(
     return { raced: false as const, status: out.category, factIds: [out.factId] };
   });
   if (judged.raced) {
-    return { proposalId, status: judged.status ?? 'rejected', factIds: judged.factIds, report: rep };
+    return {
+      proposalId,
+      status: judged.status ?? 'rejected',
+      factIds: judged.factIds,
+      report: rep,
+    };
   }
   return { proposalId, status: judged.status, factIds: judged.factIds, report: rep };
 }

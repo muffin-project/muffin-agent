@@ -1,11 +1,27 @@
-import { ContinuationGone, askWhichContinuation, continueTurn, enqueueTurn, resolveContinuation, resolveFollowup, runTurn, type LoopDeps, type TurnDelta, type TurnEvent, type TurnResult } from '../../../agent/loop.js';
+import {
+  type AutomationRule,
+  dispatchRuntimeEvent,
+  type RuntimeEvent,
+} from '../../../agent/automation.js';
+import {
+  askWhichContinuation,
+  ContinuationGone,
+  continueTurn,
+  enqueueTurn,
+  type LoopDeps,
+  resolveContinuation,
+  resolveFollowup,
+  runTurn,
+  type TurnDelta,
+  type TurnEvent,
+  type TurnResult,
+} from '../../../agent/loop.js';
 import type { AudioBlock, ImageBlock } from '../../../agent/providers/types.js';
 import type { TrustTier } from '../../../core/policy/types.js';
-import { LANE_TURNS, type ModelLane } from '../../../core/turns/model-lane.js';
 import type { SessionStore } from '../../../core/session/store.js';
 import type { SurfaceIdentity } from '../../../core/surface/types.js';
+import { LANE_TURNS, type ModelLane } from '../../../core/turns/model-lane.js';
 import type { InboundEvent, IngressPort } from './types.js';
-import { dispatchRuntimeEvent, type AutomationRule, type RuntimeEvent } from '../../../agent/automation.js';
 
 /**
  * Slice 14, the `work` stage: creating the turn and its durable record.
@@ -114,7 +130,6 @@ export type WorkRequest = {
 /** Il lavoro è scritto e tocca alla corsia; nessuna consegna in banda è avvenuta. */
 export type EnqueuedWork = { readonly kind: 'enqueued'; readonly workId: string };
 
-
 export async function runWork(
   deps: WorkDeps,
   port: IngressPort,
@@ -148,6 +163,11 @@ async function runAgentWork(
   event: InboundEvent,
   req: WorkRequest,
 ): Promise<TurnResult | EnqueuedWork> {
+  // Preserve the transport's attribution before composing or redacting text.
+  const authoredText = event.parts
+    .filter((part) => part.source === 'author' || part.source === 'caption')
+    .map((part) => part.text)
+    .join('\n');
   /**
    * L'accodamento va deciso **prima** di aspettare la corsia, o non è un
    * accodamento: la corsia occupata è proprio la condizione che qui non deve
@@ -176,6 +196,7 @@ async function runAgentWork(
         surface: port.surface.id,
         session,
         text: req.text,
+        authoredText,
         contentTaint: req.contentTaint,
         ...(req.images === undefined ? {} : { images: [...req.images] }),
         ...(req.audios === undefined ? {} : { audios: [...req.audios] }),
@@ -234,7 +255,10 @@ async function runAgentWork(
         },
       );
     }
-    const follow = match.kind === 'none' ? resolveFollowup(deps.loop.turns, req.identity.sessionKey, req.text, Date.now()) : null;
+    const follow =
+      match.kind === 'none'
+        ? resolveFollowup(deps.loop.turns, req.identity.sessionKey, req.text, Date.now())
+        : null;
     const target = match.kind === 'single' ? match.turnId : follow?.turnId;
     if (target !== undefined) {
       const row = deps.loop.turns.get(target);
@@ -282,43 +306,44 @@ async function runAgentWork(
     // against it — the same road as a vanished continuation target.
     if (deps.loop.turns.get(req.workId) !== null) throw new ContinuationGone(req.workId);
     return await runTurn(deps.loop, {
-    signal: req.signal,
-    steer: req.steer,
-    principal: req.identity.principal,
-    tenant: req.identity.tenant,
-    // §4 invariant 1: the durable routing key, and the one place it is
-    // written. `port.surface.id` rather than a literal, so it cannot disagree
-    // with the key the door was registered under.
-    surface: port.surface.id,
-    // La chiave viene da `identify` (`core/surface/types.ts`) e non da un
-    // letterale: per l'owner è `owner`, la stessa che apre il terminale, così
-    // una conversazione sola attraversa le due porte (ADR-0056, il failure del
-    // 03/09 «non sembra lo stesso muffin»); per un gruppo è la stanza — due
-    // stanze non condividono mai una sessione, e l'owner che parla *dentro* un
-    // gruppo è un `member` di quel tenant.
-    session,
-    text: req.text,
-    // I byte dell'immagine viaggiano nello stesso messaggio della domanda. Non
-    // serve alzare niente a mano: il turno parte già a `max(tierOf(principal),
-    // contentTaint)` per la riga qui sotto, e l'immagine è contenuto dello
-    // stesso mittente — un'immagine inoltrata eredita il tier del testo che la
-    // accompagna.
-    ...(req.images === undefined ? {} : { images: [...req.images] }),
-    // Solo quando il modello ascolta davvero: `decidiVoce` ha già fatto quella
-    // domanda al provider, e se la risposta era no qui non arriva niente — la
-    // nota vocale è già diventata testo dentro la riga d'arrivo, recintata
-    // come dati.
-    ...(req.audios === undefined ? {} : { audios: [...req.audios] }),
-    contentTaint: req.contentTaint,
-    id: req.workId,
-    replyTo: req.replyTo,
-    // The registry address for *this* conversation — always fully qualified,
-    // even for the owner's own private chat: a mid-turn tool addressing a
-    // follow-up delivery needs the exact room the turn came from, not the
-    // surface's default.
-    replyChannel: event.address.channel,
-    ...(req.onDelta === undefined ? {} : { onDelta: req.onDelta }),
-    ...(req.onProgress === undefined ? {} : { onProgress: req.onProgress }),
+      signal: req.signal,
+      steer: req.steer,
+      principal: req.identity.principal,
+      tenant: req.identity.tenant,
+      // §4 invariant 1: the durable routing key, and the one place it is
+      // written. `port.surface.id` rather than a literal, so it cannot disagree
+      // with the key the door was registered under.
+      surface: port.surface.id,
+      // La chiave viene da `identify` (`core/surface/types.ts`) e non da un
+      // letterale: per l'owner è `owner`, la stessa che apre il terminale, così
+      // una conversazione sola attraversa le due porte (ADR-0056, il failure del
+      // 03/09 «non sembra lo stesso muffin»); per un gruppo è la stanza — due
+      // stanze non condividono mai una sessione, e l'owner che parla *dentro* un
+      // gruppo è un `member` di quel tenant.
+      session,
+      text: req.text,
+      authoredText,
+      // I byte dell'immagine viaggiano nello stesso messaggio della domanda. Non
+      // serve alzare niente a mano: il turno parte già a `max(tierOf(principal),
+      // contentTaint)` per la riga qui sotto, e l'immagine è contenuto dello
+      // stesso mittente — un'immagine inoltrata eredita il tier del testo che la
+      // accompagna.
+      ...(req.images === undefined ? {} : { images: [...req.images] }),
+      // Solo quando il modello ascolta davvero: `decidiVoce` ha già fatto quella
+      // domanda al provider, e se la risposta era no qui non arriva niente — la
+      // nota vocale è già diventata testo dentro la riga d'arrivo, recintata
+      // come dati.
+      ...(req.audios === undefined ? {} : { audios: [...req.audios] }),
+      contentTaint: req.contentTaint,
+      id: req.workId,
+      replyTo: req.replyTo,
+      // The registry address for *this* conversation — always fully qualified,
+      // even for the owner's own private chat: a mid-turn tool addressing a
+      // follow-up delivery needs the exact room the turn came from, not the
+      // surface's default.
+      replyChannel: event.address.channel,
+      ...(req.onDelta === undefined ? {} : { onDelta: req.onDelta }),
+      ...(req.onProgress === undefined ? {} : { onProgress: req.onProgress }),
     });
   } finally {
     deps.lane.release(LANE_TURNS);
