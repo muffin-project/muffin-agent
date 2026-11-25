@@ -41,6 +41,13 @@ export const COMMANDS: readonly CommandSpec[] = [
     primary: true,
   },
   {
+    name: 'fallback',
+    summary: 'ripieghi in ordine quando il provider principale si ferma',
+    audience: 'owner',
+    primary: true,
+    subcommands: ['add', 'remove', 'reset'],
+  },
+  {
     name: 'workspace',
     summary: 'dichiara il progetto in cui lavorano i turni',
     audience: 'owner',
