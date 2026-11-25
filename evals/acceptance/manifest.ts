@@ -79,7 +79,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   ),
   verde(
     'A2',
-    "identity: the installed rot/identity.md — this home's own, not defaults/ — reaches the real system prompt sent to the provider, and `muffin prompt show` matches it",
+    "identity: the shipped foundation (ADR-0112; identical to this home's untouched rot/identity.md seed) reaches the real system prompt sent to the provider, and `muffin prompt show` matches it",
   ),
   verde(
     'A3',

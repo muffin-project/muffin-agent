@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { SHIPPED_IDENTITY } from '../agent/context/identity.js';
 import { buildRuntime } from '../agent/runtime.js';
 import { loadConfig, paths, saveConfig } from '../core/config/config.js';
 import { sha256 } from '../core/rot/verify.js';
@@ -176,9 +177,13 @@ describe('muffin prompt show', () => {
     const { out, code } = capture(() => cmdPromptShow(home, ['--blocks']));
     expect(code).toBe(0);
 
-    const identityHash = sha256(readFileSync(join(paths(home).rot, 'identity.md'))).slice(0, 12);
+    // ADR-0112: a fresh home reads the foundation from the product; the hash
+    // is that shipped file's, and it names the product as its source.
+    const identityHash = sha256(readFileSync(SHIPPED_IDENTITY)).slice(0, 12);
 
-    expect(out).toContain(`--- blocco: identity (rot/identity.md, sha256 ${identityHash}) ---`);
+    expect(out).toContain(
+      `--- blocco: identity (defaults/rot/identity.md (prodotto), sha256 ${identityHash}) ---`,
+    );
     expect(out).not.toContain('blocco: voice');
     expect(out).not.toContain('blocco: persona (persona.md');
     rmSync(home, { recursive: true, force: true });

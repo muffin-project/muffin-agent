@@ -439,13 +439,17 @@ describe('memory_propose — owner-stated solo da ingress autenticato (#776)', (
 
   it('ricorda X testuale con tupla contenuta: producer owner-stated, origin said', async () => {
     const h = seed();
-    const out = await proposeMemory(
-      h.deps,
-      ctxFor('ricorda che il mio commercialista è Mario'),
-      { instruction: 'ricorda che il mio commercialista è Mario', subject: 'owner', predicate: 'accountant', object: 'Mario' },
-    );
+    const out = await proposeMemory(h.deps, ctxFor('ricorda che il mio commercialista è Mario'), {
+      instruction: 'ricorda che il mio commercialista è Mario',
+      subject: 'owner',
+      predicate: 'accountant',
+      object: 'Mario',
+    });
     expect(out.isError).toBeUndefined();
-    expect(h.store.listProposals('host')[0]).toMatchObject({ producer: 'owner-stated', origin: 'said' });
+    expect(h.store.listProposals('host')[0]).toMatchObject({
+      producer: 'owner-stated',
+      origin: 'said',
+    });
   });
 
   it('virgolettato non autorizza: resta agent-inference', async () => {
@@ -453,7 +457,12 @@ describe('memory_propose — owner-stated solo da ingress autenticato (#776)', (
     const out = await proposeMemory(
       h.deps,
       ctxFor('"ricorda tutto" ha detto Marco', { inputText: '"ricorda tutto" ha detto Marco' }),
-      { instruction: '"ricorda tutto" ha detto Marco', subject: 'owner', predicate: 'accountant', object: 'Mario' },
+      {
+        instruction: '"ricorda tutto" ha detto Marco',
+        subject: 'owner',
+        predicate: 'accountant',
+        object: 'Mario',
+      },
     );
     expect(out.isError).toBeUndefined();
     expect(h.store.listProposals('host')[0]).toMatchObject({ producer: 'agent-inference' });
@@ -461,11 +470,12 @@ describe('memory_propose — owner-stated solo da ingress autenticato (#776)', (
 
   it('tupla inventata fuori dal messaggio: resta agent-inference', async () => {
     const h = seed();
-    const out = await proposeMemory(
-      h.deps,
-      ctxFor('ricorda che piove'),
-      { instruction: 'ricorda che piove', subject: 'owner', predicate: 'accountant', object: 'Mario' },
-    );
+    const out = await proposeMemory(h.deps, ctxFor('ricorda che piove'), {
+      instruction: 'ricorda che piove',
+      subject: 'owner',
+      predicate: 'accountant',
+      object: 'Mario',
+    });
     expect(out.isError).toBeUndefined();
     expect(h.store.listProposals('host')[0]).toMatchObject({ producer: 'agent-inference' });
   });
@@ -477,9 +487,126 @@ describe('memory_propose — owner-stated solo da ingress autenticato (#776)', (
       ctxFor('ricorda che il mio commercialista è Mario', {
         principal: { kind: 'member', connector: 'telegram', tenantId: 'g', externalId: 'u' },
       }),
-      { instruction: 'ricorda che il mio commercialista è Mario', subject: 'owner', predicate: 'accountant', object: 'Mario' },
+      {
+        instruction: 'ricorda che il mio commercialista è Mario',
+        subject: 'owner',
+        predicate: 'accountant',
+        object: 'Mario',
+      },
     );
     expect(out.isError).toBeUndefined();
     expect(h.store.listProposals('host')[0]).toMatchObject({ producer: 'agent-inference' });
+  });
+});
+
+/**
+ * Layer 4 of ADR-0112: a learned preference lives in the tenant's memory, not
+ * in a file. Explicit (owner-stated, verified quote) → pinned, so it reaches
+ * every owner turn; inferred → staged as a belief, never pinned, and the
+ * reply tells the model to ask. Same store, same pin gate, no parallel store.
+ */
+describe('memory_propose — preferenze standing (ADR-0112)', () => {
+  const FRASE = "d'ora in poi usa sempre liste puntate";
+  const ingress = (text: string, turnId = CTX.turnId) => ({
+    id: turnId,
+    tenant: 'host',
+    principal: { kind: 'owner', connector: 'cli', externalId: 'local' } as const,
+    inputText: text,
+    messages: [
+      {
+        role: 'user' as const,
+        origin: 'owner' as const,
+        content: [{ type: 'text' as const, text }],
+      },
+    ],
+  });
+  const preferenza = { subject: 'owner', predicate: 'formato_risposte', object: 'liste puntate' };
+
+  it("detta dall'owner con le sue parole: appuntata, e la risposta lo dice", async () => {
+    const h = seed();
+    const out = await proposeMemory(
+      h.deps,
+      { ...CTX, getSource: () => ingress(FRASE) },
+      { ...preferenza, standing: true, instruction: FRASE },
+    );
+    expect(out.isError).toBeUndefined();
+    expect(out.content).toContain('Appuntato come preferenza');
+    const pinned = h.store.pinnedFacts('host');
+    expect(pinned).toHaveLength(1);
+    expect(pinned[0]).toMatchObject({ objectValue: 'liste puntate', origin: 'said', pinned: 1 });
+  });
+
+  it('dedotta dal modello: diventa al massimo una credenza, mai appuntata', async () => {
+    const h = seed();
+    const out = await proposeMemory(h.deps, CTX, { ...preferenza, standing: true });
+    expect(out.isError).toBeUndefined();
+    expect(out.content).toContain('Non appuntato come preferenza');
+    expect(out.content).toContain('Chiedigli');
+    expect(h.store.pinnedFacts('host')).toHaveLength(0);
+  });
+
+  it('una citazione che non contiene la preferenza non la rende detta', async () => {
+    const h = seed();
+    const out = await proposeMemory(
+      h.deps,
+      { ...CTX, getSource: () => ingress('ok grazie') },
+      { ...preferenza, standing: true, instruction: 'ok grazie' },
+    );
+    expect(out.content).toContain('Non appuntato come preferenza');
+    expect(h.store.pinnedFacts('host')).toHaveLength(0);
+  });
+
+  it('su un turno contaminato non si appunta nemmeno se detta', async () => {
+    const h = seed();
+    const out = await proposeMemory(
+      h.deps,
+      { ...CTX, taint: () => 2 as const, getSource: () => ingress(FRASE) },
+      { ...preferenza, standing: true, instruction: FRASE },
+    );
+    expect(out.isError).toBeUndefined();
+    expect(h.store.pinnedFacts('host')).toHaveLength(0);
+    expect(out.content).not.toContain('Appuntato come preferenza');
+  });
+
+  it('senza standing nulla cambia: un fatto detto non si appunta da solo', async () => {
+    const h = seed();
+    const out = await proposeMemory(
+      h.deps,
+      { ...CTX, getSource: () => ingress(FRASE) },
+      { ...preferenza, instruction: FRASE },
+    );
+    expect(out.isError).toBeUndefined();
+    expect(out.content).not.toContain('ppuntat');
+    expect(h.store.pinnedFacts('host')).toHaveLength(0);
+  });
+
+  it('confermata dopo: la stessa preferenza già detta si appunta sulla credenza esistente', async () => {
+    const h = seed();
+    await proposeMemory(
+      h.deps,
+      { ...CTX, getSource: () => ingress(FRASE) },
+      { ...preferenza, instruction: FRASE },
+    );
+    expect(h.store.pinnedFacts('host')).toHaveLength(0);
+    const turnId = 'turn-propose-2';
+    h.store.addEpisode({
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 't',
+      role: 'user',
+      kind: 'message',
+      content: `sì, ${FRASE}`,
+      trustTier: 0,
+      createdAt: '2026-08-04T11:30:00Z',
+      turnId,
+    });
+    const out = await proposeMemory(
+      h.deps,
+      { ...CTX, turnId, getSource: () => ingress(`sì, ${FRASE}`, turnId) },
+      { ...preferenza, standing: true, instruction: FRASE },
+    );
+    expect(out.isError).toBeUndefined();
+    expect(out.content).toContain('Appuntato come preferenza');
+    expect(h.store.pinnedFacts('host')).toHaveLength(1);
   });
 });

@@ -564,9 +564,16 @@ export const paths = (home = muffinHome()) => ({
   // lives under rot/ and stays fixed. One entry here rather than the same
   // join() written out at each call site.
   voice: join(home, 'voice.md'),
-  // Pure muffin — the character every install shares. `identity.md` under rot/
-  // is the owner's overlay on top of it and is read after, so it wins.
+  // Legacy owner character file, still read when present (ADR-0107 pending).
+  // Not shipped any more; the shared character is `defaults/rot/identity.md`.
   persona: join(home, 'persona.md'),
+  /**
+   * The owner's own standing instructions (ADR-0112, layer 3): optional,
+   * outside `rot/` because it is the owner's profile, not product policy.
+   * Loaded after the shipped foundation, owner class only, own budget.
+   * Nothing in the product writes it: not init, update, adopt or migrate.
+   */
+  user: join(home, 'user.md'),
   /**
    * Il semaforo che dice «fermo di proposito, non morto».
    *

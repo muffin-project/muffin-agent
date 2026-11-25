@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveIdentityLayers } from '../agent/context/identity.js';
 import { migrateRotHome, readShippedBudgets } from '../core/rot/migrate.js';
 import { findCheckoutRoot } from './git-root.js';
 
@@ -27,6 +28,7 @@ export function runRotMigrate(home: string): number {
   }
   const report = migrateRotHome(home, readShippedBudgets(shippedDir));
   for (const line of report.notes) process.stdout.write(`${line}\n`);
+  process.stdout.write(`${identityMigrateNote(home)}\n`);
   if (report.written.length > 0) {
     process.stdout.write(`scritti: ${report.written.join(', ')}\n`);
   }
@@ -35,4 +37,24 @@ export function runRotMigrate(home: string): number {
   }
   if (!report.writable) return 77;
   return 0;
+}
+
+/**
+ * Where the identity stands, said by the command an owner runs after an
+ * update (ADR-0112). It writes nothing: migrating identity is the owner
+ * creating `~/.muffin/user.md`, never a copy over the home pact.
+ */
+export function identityMigrateNote(home: string): string {
+  const layers = resolveIdentityLayers(home);
+  switch (layers.mode) {
+    case 'foundation':
+      return 'identità: la fondazione arriva dal prodotto; nessun user.md. Niente da migrare.';
+    case 'foundation+user':
+      return "identità: fondazione dal prodotto + ~/.muffin/user.md. rot/identity.md in home, se c'è, non è più letto e non lo tocco.";
+    case 'legacy-home':
+      return (
+        'identità: rot/identity.md in home è modificato e sostituisce ancora la fondazione. Non lo riscrivo. ' +
+        'Per ricevere la fondazione aggiornata sposta le righe tue in ~/.muffin/user.md (vedi `muffin doctor`).'
+      );
+  }
 }

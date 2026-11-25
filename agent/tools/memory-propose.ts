@@ -66,6 +66,9 @@ export const memoryProposeSpec: ToolSpec = {
     'The runtime records your interpreted tuple as agent-inference and keeps its source evidence. ' +
     'The answer tells you whether it became a belief, merged with one, went to ' +
     'review, or was rejected — report that honestly, never claim "lo ricordo" for a mere proposal. ' +
+    'Set `standing: true` only for a lasting preference about how to help the owner ("d\'ora in poi usa sempre liste puntate"): ' +
+    'it is pinned, so it reaches every future owner turn, only when the owner said it in their own words and you pass them as `instruction`. ' +
+    'A preference you inferred is never pinned: ask the owner whether to keep it, and propose again with their answer. ' +
     'e.g. memory_propose({subject: "owner", predicate: "accountant", object: "Mario"}).',
   inputSchema: {
     type: 'object',
@@ -87,6 +90,11 @@ export const memoryProposeSpec: ToolSpec = {
         type: 'string',
         description:
           'When it became true out there, if stated (YYYY-MM-DD). Omit when nobody said.',
+      },
+      standing: {
+        type: 'boolean',
+        description:
+          'True for a lasting preference about how to help the owner. Pinned only when owner-stated (see `instruction`); never for an inference.',
       },
       instruction: {
         type: 'string',
@@ -125,6 +133,7 @@ type RawArgs = {
   confidence?: unknown;
   valid_from?: unknown;
   instruction?: unknown;
+  standing?: unknown;
 };
 
 function str(raw: unknown): string | null {
@@ -229,6 +238,8 @@ export async function proposeMemory(
       ? raw.valid_from.trim()
       : null;
   const contextTier = ctx.taint();
+  const standing = raw.standing === true;
+  const pinRequested = standing && producer === 'owner-stated';
 
   // Provenance is read off the evidence, never trusted from the arguments:
   // `proposeMemoryRecord` throws on foreign episodes, and derives the tier
@@ -247,6 +258,10 @@ export async function proposeMemory(
       contextTier,
       content: `${subject} ${predicate} ${object}`,
       confidence,
+      // Layer 4 of ADR-0112: a standing preference is pinned only when the
+      // owner said it (verified quote). An inference is staged, never pinned;
+      // `addFact` re-checks tier and origin on its own regardless.
+      ...(pinRequested ? { pinned: true } : {}),
     }));
   } catch (error) {
     return {
@@ -310,20 +325,23 @@ export async function proposeMemory(
           };
       }
     }
+    const note = standing
+      ? standingNote(deps.store, ctx.tenant, out.status, out.factIds, pinRequested, tier)
+      : '';
     switch (out.status) {
       case 'accepted':
         return {
-          content: `Ricordo: ${subject} ${predicate} ${object} (fatto #${out.factIds[0]}, proposta #${proposalId}).`,
+          content: `Ricordo: ${subject} ${predicate} ${object} (fatto #${out.factIds[0]}, proposta #${proposalId}).${note}`,
           tier,
         };
       case 'merged':
         return {
-          content: `Lo sapevo già: ${subject} ${predicate} ${object} (fatto #${out.factIds[0]}, proposta #${proposalId} unita).`,
+          content: `Lo sapevo già: ${subject} ${predicate} ${object} (fatto #${out.factIds[0]}, proposta #${proposalId} unita).${note}`,
           tier,
         };
       case 'superseded':
         return {
-          content: `Aggiorno: ${subject} ${predicate} ${object} (nuovo fatto #${out.factIds[0]}, proposta #${proposalId}).`,
+          content: `Aggiorno: ${subject} ${predicate} ${object} (nuovo fatto #${out.factIds[0]}, proposta #${proposalId}).${note}`,
           tier,
         };
       case 'review':
@@ -371,4 +389,46 @@ function worstTier(store: MemoryStore, tenant: string, ids: number[]): 0 | 1 | 2
 function proposalDetail(deps: ProposeDeps, tenant: string, proposalId: number): string {
   const detail = deps.store.proposalById(tenant, proposalId)?.detail;
   return detail ?? 'nessun dettaglio';
+}
+
+/**
+ * What became of a standing preference, said in the same reply so the model
+ * cannot announce a pin that did not happen. Read off the fact row, not off
+ * the request: `addFact`'s gate may have declined it.
+ *
+ * A merge into an existing belief pins that belief only under the gate
+ * `addFact` applies to a new one — owner tier on both this turn and the row,
+ * and `origin = 'said'` — so an older inferred row, or a tainted turn, cannot
+ * promote a belief to the pinned core.
+ */
+function standingNote(
+  store: MemoryStore,
+  tenant: string,
+  status: string,
+  factIds: number[],
+  pinRequested: boolean,
+  tier: TrustTier,
+): string {
+  if (!pinRequested) {
+    return (
+      " Non appuntato come preferenza: è una tua deduzione, non parole dell'owner. " +
+      'Chiedigli se vuole che diventi una preferenza fissa; solo con le sue parole si appunta.'
+    );
+  }
+  const id = factIds[0];
+  const fact = id === undefined ? null : store.factById(tenant, id);
+  if (
+    fact &&
+    fact.pinned !== 1 &&
+    status === 'merged' &&
+    tier === 0 &&
+    fact.trustTier === 0 &&
+    fact.origin === 'said'
+  ) {
+    store.setPinned(tenant, fact.id, true);
+  }
+  const pinned = id !== undefined && store.factById(tenant, id)?.pinned === 1;
+  return pinned
+    ? ' Appuntato come preferenza dell’owner: entra in ogni suo turno. Diglielo in una frase; si toglie con memory_forget o `muffin memory unpin`.'
+    : ' Non appuntato: la memoria non lo ha accettato come preferenza fissa (provenienza non sufficiente).';
 }

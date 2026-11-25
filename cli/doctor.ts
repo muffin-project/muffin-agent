@@ -4,6 +4,11 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import DatabaseCtor from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
+import {
+  type IdentityLayers,
+  resolveIdentityLayers,
+  USER_OVERLAY_TOKEN_BUDGET,
+} from '../agent/context/identity.js';
 import { CONTINUATION_TTL_MS } from '../agent/loop.js';
 import {
   CONSERVATIVE,
@@ -673,7 +678,11 @@ export async function runDoctor(
   const moduleDir = dirname(fileURLToPath(import.meta.url));
   const checkoutRoot =
     options.checkoutRoot !== undefined ? options.checkoutRoot : findCheckoutRoot(moduleDir);
-  const drift = diagnoseDefaultsDrift(home, checkoutRoot);
+  // `rot/identity.md` is the identity check's below (ADR-0112): its home
+  // copy is no longer the foundation, so "HEAD moved on" is not drift there.
+  const drift = diagnoseDefaultsDrift(home, checkoutRoot).filter(
+    (d) => d.path !== 'rot/identity.md',
+  );
   if (drift.length === 0) {
     warn(
       'defaults',
@@ -703,9 +712,10 @@ export async function runDoctor(
   if (installedCharacter.length > 0) {
     ok(
       'prompt sources',
-      `${installedCharacter.join(' e ')} ${installedCharacter.length === 1 ? 'è nel prompt owner' : 'sono nel prompt owner'}, insieme a rot/identity.md. Assemblare il prompt non riscrive il sigillo.`,
+      `${installedCharacter.join(' e ')} ${installedCharacter.length === 1 ? 'è nel prompt owner' : 'sono nel prompt owner'}, insieme al patto. Assemblare il prompt non riscrive il sigillo.`,
     );
   }
+  identityCheck(ok, warn, resolveIdentityLayers(home));
 
   // The caps that bind, and which file they came from. Same shape of invisible
   // fact as the policy matrix above and worse in consequence: for months the
@@ -1817,6 +1827,71 @@ function sealedDriftGroupCheck(
       `andato avanti: ${files.map((f) => f.path).join(', ')}`,
     sealedAdoptRemedy(files),
   );
+}
+
+/**
+ * Which layers make up the owner's identity on this home (ADR-0112), read
+ * from the same resolver the prompt is built from. Informational, like every
+ * identity line since ADR-0108: no safe mode, no reseal, no `cp`.
+ *
+ * The one ordinary warn is the legacy home copy: a hand-edited
+ * `rot/identity.md` that still *replaces* the shipped foundation, so character
+ * updates never reach this install. The remedy is a cut-over the owner
+ * chooses (creating `user.md`), never a copy over their text.
+ */
+export function identityCheck(
+  ok: (name: string, detail: string) => void,
+  warn: (name: string, detail: string, remedy?: string) => void,
+  layers: IdentityLayers,
+): void {
+  switch (layers.mode) {
+    case 'foundation':
+      ok(
+        'identità',
+        'fondazione letta dal prodotto (defaults/rot/identity.md): gli aggiornamenti arrivano con `muffin update`. Nessun ~/.muffin/user.md.',
+      );
+      return;
+    case 'foundation+user': {
+      const user = layers.user;
+      if (user?.overBudget) {
+        warn(
+          'identità',
+          `~/.muffin/user.md supera il tetto (${String(user.tokens)} token stimati su ${String(USER_OVERLAY_TOKEN_BUDGET)}) e non viene caricato`,
+          'accorcialo: tieni solo direttive stabili su come vuoi essere aiutato; i fatti vanno in memoria',
+        );
+        return;
+      }
+      const ignored =
+        layers.ignoredHomeCopy === null
+          ? ''
+          : ' ~/.muffin/rot/identity.md resta su disco ma non è più letto.';
+      ok(
+        'identità',
+        `fondazione dal prodotto + ~/.muffin/user.md (${String(user?.tokens ?? 0)} token stimati).${ignored}`,
+      );
+      return;
+    }
+    case 'legacy-home':
+      if (layers.foundationMissing) {
+        warn(
+          'identità',
+          'questa build non contiene defaults/rot/identity.md: il patto viene solo da ~/.muffin/rot/identity.md e user.md non è caricato',
+          'reinstalla o aggiorna Muffin (`muffin update`): il pacchetto è incompleto',
+        );
+        return;
+      }
+      warn(
+        'identità',
+        '~/.muffin/rot/identity.md è stato modificato a mano e sostituisce la fondazione spedita: gli aggiornamenti del carattere non arrivano a questa installazione',
+        'quando vuoi: sposta in ~/.muffin/user.md solo le righe davvero tue (come vuoi essere aiutato, al massimo ~4000 caratteri). ' +
+          'Da quel momento la fondazione arriva dal prodotto e rot/identity.md non è più letto; niente sigillo da rifare (ADR-0108, ADR-0112).',
+      );
+      return;
+    default: {
+      const _exhaustive: never = layers.mode;
+      throw new Error(`identità: modo non gestito (${String(_exhaustive)})`);
+    }
+  }
 }
 
 /**

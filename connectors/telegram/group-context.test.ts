@@ -1,18 +1,18 @@
-import DatabaseCtor from 'better-sqlite3';
-import type { Update } from '@grammyjs/types';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Update } from '@grammyjs/types';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import { runInit } from '../../cli/init.js';
-import { buildRuntime } from '../../agent/runtime.js';
 import type { LoopDeps } from '../../agent/loop.js';
 import type { ChatCall, ChatResult, Provider } from '../../agent/providers/types.js';
-import { TelegramConnector, type TelegramConfig } from './connector.js';
+import { buildRuntime } from '../../agent/runtime.js';
+import { runInit } from '../../cli/init.js';
 import { ModelLane } from '../../core/turns/model-lane.js';
 import type { TelegramApi } from './api.js';
-import { UpdateInbox } from './updates.js';
+import { type TelegramConfig, TelegramConnector } from './connector.js';
 import { TelegramDeliveryStore } from './delivery.js';
+import { UpdateInbox } from './updates.js';
 
 /**
  * A real group turn, through the real connector, gets the group context.
@@ -148,7 +148,7 @@ describe('a group turn arriving off the wire', () => {
       // name a piece at a time. An equality against `prompts.group` alone would
       // have gone green the moment both classes pointed at the same string.
       expect(text).not.toContain('Al primo incontro');
-      expect(text).not.toContain('Non mi dai ragione per farmi contento');
+      expect(text).not.toContain('Non ti limiti a dare ragione');
       // Unique to the group persona. `/ospite/` used to stand here and matched
       // `voice.md`, which both classes carry — so it stayed green with the
       // whole posture block deleted.

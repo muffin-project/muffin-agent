@@ -178,9 +178,9 @@ export const ROT_READERS: RotEntry[] = [
     file: 'identity.md',
     readers: [
       {
-        module: 'agent/context/assemble.ts',
-        fn: 'buildSystemPromptBlocks',
-        why: "the owner's conduct pact, concatenated into every system prompt after persona and before the voice",
+        module: 'agent/context/identity.ts',
+        fn: 'resolveIdentityLayers',
+        why: 'a hand-edited home copy that still replaces the shipped foundation (ADR-0112); an untouched or missing copy is not read — the foundation comes from the product',
       },
     ],
   },
