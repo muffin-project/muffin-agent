@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
-  MAX_WAIT_MS,
-  MIN_WAIT_MS,
   approvalFootnote,
   decodeWaitFor,
   encodeWaitFor,
+  MAX_OWNER_REPLY_BYTES,
+  MAX_WAIT_MS,
+  MIN_WAIT_MS,
   parseWait,
   satisfied,
   wakeReport,
@@ -86,9 +87,51 @@ describe('la barriera su disco', () => {
     // The value comes off disk: a row written by a future version, or edited by
     // hand, must not take down the process that reads it. `null` means "this
     // turn has only its deadline", which is the direction that still ends.
-    for (const junk of ['', 'boh', 'process_exit:', 'process_exit:zero', 'file_changed:/tmp/x', null]) {
+    for (const junk of [
+      '',
+      'boh',
+      'process_exit:',
+      'process_exit:zero',
+      'file_changed:/tmp/x',
+      null,
+    ]) {
       expect(decodeWaitFor(junk)).toBeNull();
     }
+  });
+});
+
+describe('owner reply barrier', () => {
+  const id = 'a1'.repeat(32);
+  const barrier = { kind: 'owner_reply', id, question: 'Choose: "A", or B?\n→ C? 🥐' } as const;
+
+  it('round-trips punctuation, newlines and Unicode through the existing text column', () => {
+    const raw = encodeWaitFor(barrier);
+    expect(raw).toMatch(/^owner_reply:/);
+    expect(decodeWaitFor(raw)).toEqual(barrier);
+  });
+
+  it('enforces the lowercase digest and a bounded serialized payload in both directions', () => {
+    for (const bad of [id.slice(1), id.toUpperCase(), `${id}\n`, 'g'.repeat(64)]) {
+      expect(() => encodeWaitFor({ ...barrier, id: bad })).toThrow();
+      expect(decodeWaitFor(`owner_reply:${bad}:"Question?"`)).toBeNull();
+    }
+    const tooWide = '界'.repeat(Math.ceil(MAX_OWNER_REPLY_BYTES / 3));
+    const tooEscaped = '\u0001'.repeat(Math.ceil(MAX_OWNER_REPLY_BYTES / 6));
+    for (const question of [tooWide, tooEscaped, '  ']) {
+      expect(() => encodeWaitFor({ ...barrier, question })).toThrow();
+      expect(decodeWaitFor(`owner_reply:${id}:${JSON.stringify(question)}`)).toBeNull();
+    }
+    for (const suffix of ['not JSON', 'null', '{"question":"fake"}', '"Question?":junk']) {
+      expect(decodeWaitFor(`owner_reply:${id}:${suffix}`)).toBeNull();
+    }
+  });
+
+  it('has no sweep evaluator and reports a timeout without inventing an answer', () => {
+    const unexpected = () => {
+      throw new Error('consulted an unrelated barrier');
+    };
+    expect(satisfied(barrier, { alive: unexpected, answered: unexpected })).toBe(false);
+    expect(wakeReport(barrier, 'timer')).toMatch(/no reply/i);
   });
 });
 

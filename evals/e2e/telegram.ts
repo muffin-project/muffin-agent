@@ -1,12 +1,23 @@
 import { spawn } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { loadConfig, muffinHome, readSecret } from '../../core/config/config.js';
+import Database from 'better-sqlite3';
+import { negoziazioneTelegram } from '../../connectors/telegram/negoziazione.js';
 import { TELEGRAM_MAX } from '../../connectors/telegram/render.js';
+import { normalizeInboundRich, richPlain } from '../../connectors/telegram/rich.js';
+import { loadConfig, muffinHome, paths, readSecret } from '../../core/config/config.js';
 import { type Installazione, risolviCredenziali } from './credenziali.js';
 
 /**
@@ -22,7 +33,7 @@ import { type Installazione, risolviCredenziali } from './credenziali.js';
  * update che riceve, e le asserzioni si fanno su quella registrazione — non
  * su una sensazione, e non su una risposta sintetica.
  *
- * Cosa serve, tutto dall'ambiente e mai stampato:
+ * Credenziali dall'ambiente o dall'installazione locale (vedi README.md):
  *
  *   LLM_API_KEY (o OPENROUTER_API_KEY)   la chiave del modello
  *   MUFFIN_E2E_TELEGRAM_TOKEN            il token di un bot **di prova**
@@ -31,11 +42,11 @@ import { type Installazione, risolviCredenziali } from './credenziali.js';
  *   MUFFIN_E2E_OWNER_ID                  la tua user id Telegram
  *
  *   npx tsx evals/e2e/telegram.ts
- *   npx tsx evals/e2e/telegram.ts --model qwen/qwen3.6-27b --keep
+ *   npx tsx evals/e2e/telegram.ts --group --keep
  *
  * Il passo umano è dichiarato: lo script dice cosa mandare al bot, aspetta
- * che il filo mostri il risultato, e dice ✓ o ✗ con il perché. Il ritmo lo
- * dai tu; il verdetto lo dà il filo.
+ * che il filo mostri il risultato, e dice ✓ o ✗ con il perché. Per l'ASK
+ * legge anche lo stato durevole nella Home di prova; la decisione resta umana.
  */
 
 const { values } = parseArgs({
@@ -43,13 +54,20 @@ const { values } = parseArgs({
     model: { type: 'string' },
     'base-url': { type: 'string' },
     keep: { type: 'boolean' },
+    group: { type: 'boolean' },
     home: { type: 'string' },
     'step-timeout-s': { type: 'string' },
   },
 });
 
 const installato = ((): Installazione => {
-  const assente = { apiKey: '', ownerId: 0, tokenDedicato: '', tokenInstallato: '', gatewayVivo: false };
+  const assente = {
+    apiKey: '',
+    ownerId: 0,
+    tokenDedicato: '',
+    tokenInstallato: '',
+    gatewayVivo: false,
+  };
   try {
     const home = muffinHome();
     const cfg = loadConfig(home);
@@ -91,17 +109,33 @@ const { apiKey, token, ownerId } = avvio.credenziali;
 const MODEL = values.model ?? 'anthropic/claude-sonnet-5';
 const BASE_URL = values['base-url'] ?? 'https://openrouter.ai/api/v1';
 const STEP_TIMEOUT_MS = Number(values['step-timeout-s'] ?? '180') * 1000;
-const ROOT = values.home ?? mkdtempSync(join(tmpdir(), 'muffin-e2e-'));
+const ROOT =
+  values.home === undefined ? mkdtempSync(join(tmpdir(), 'muffin-e2e-')) : resolve(values.home);
 const HOME = join(ROOT, 'home');
 const WORKSPACE = join(ROOT, 'workspace');
 const WIRE = join(ROOT, 'wire.jsonl');
 const CLI = join(import.meta.dirname, '..', '..', 'cli', 'main.ts');
-mkdirSync(HOME, { recursive: true });
-mkdirSync(WORKSPACE, { recursive: true });
+const nodeArgs = ['--import', import.meta.resolve('tsx'), CLI];
+if (values.home !== undefined) mkdirSync(ROOT); // Refuse to reuse state or erase an existing root.
+mkdirSync(HOME);
+mkdirSync(WORKSPACE);
+const runEnv = { ...process.env, MUFFIN_HOME: HOME, MUFFIN_WORKSPACE: WORKSPACE, NO_COLOR: '1' };
 
 // ---------------------------------------------------------------------------
 // Il filo: ogni chiamata del gateway alla Bot API, e ogni update ricevuto.
 // ---------------------------------------------------------------------------
+
+type WireUpdate = {
+  updateId: number;
+  chatId?: number;
+  threadId?: number;
+  messageId?: number;
+  fromId?: number;
+  text?: string;
+  callback?: string;
+  callbackId?: string;
+  stoppedDraftId?: number;
+};
 
 type Chiamata = {
   n: number;
@@ -112,7 +146,7 @@ type Chiamata = {
   /** `message_id` di un messaggio creato, quando c'è. */
   messageId?: number;
   /** Per `getUpdates`: gli update tornati, ridotti a ciò che serve. */
-  updates?: { updateId: number; messageId?: number; fromId?: number; text?: string; callback?: string }[];
+  updates?: WireUpdate[];
 };
 
 const filo: Chiamata[] = [];
@@ -163,25 +197,50 @@ function avviaProxy(): Promise<{ server: Server; url: string }> {
         bodyText = await upstream.text();
       } catch (error) {
         status = 502;
-        bodyText = JSON.stringify({ ok: false, description: senzaToken(error instanceof Error ? error.message : String(error)) });
+        bodyText = JSON.stringify({
+          ok: false,
+          description: senzaToken(error instanceof Error ? error.message : String(error)),
+        });
       }
-      const entry: Chiamata = { n: ++contatore, at: new Date().toISOString(), method, payload, status };
+      const entry: Chiamata = {
+        n: ++contatore,
+        at: new Date().toISOString(),
+        method,
+        payload,
+        status,
+      };
       try {
         const parsed = JSON.parse(bodyText) as { ok?: boolean; result?: unknown };
         if (method === 'getUpdates' && Array.isArray(parsed.result)) {
           entry.updates = (parsed.result as Array<Record<string, unknown>>).map((u) => {
             const m = (u['message'] ?? {}) as Record<string, unknown>;
             const cq = (u['callback_query'] ?? {}) as Record<string, unknown>;
+            const stop = (u['stopped_message_generation'] ?? {}) as Record<string, unknown>;
+            const message = (cq['message'] ?? m) as Record<string, unknown>;
+            const chat = (stop['chat'] ?? message['chat'] ?? {}) as Record<string, unknown>;
             const from = (m['from'] ?? cq['from'] ?? {}) as Record<string, unknown>;
             return {
               updateId: Number(u['update_id']),
-              ...(typeof m['message_id'] === 'number' ? { messageId: m['message_id'] } : {}),
+              ...(typeof chat['id'] === 'number' ? { chatId: chat['id'] } : {}),
+              ...(message['is_topic_message'] === true &&
+              typeof message['message_thread_id'] === 'number'
+                ? { threadId: message['message_thread_id'] }
+                : {}),
+              ...(typeof message['message_id'] === 'number'
+                ? { messageId: message['message_id'] }
+                : {}),
               ...(typeof from['id'] === 'number' ? { fromId: from['id'] } : {}),
               ...(typeof m['text'] === 'string' ? { text: m['text'] } : {}),
               ...(typeof cq['data'] === 'string' ? { callback: cq['data'] } : {}),
+              ...(typeof cq['id'] === 'string' ? { callbackId: cq['id'] } : {}),
+              ...(typeof stop['draft_id'] === 'number' ? { stoppedDraftId: stop['draft_id'] } : {}),
             };
           });
-        } else if (parsed.result && typeof parsed.result === 'object' && 'message_id' in (parsed.result as object)) {
+        } else if (
+          parsed.result &&
+          typeof parsed.result === 'object' &&
+          'message_id' in (parsed.result as object)
+        ) {
           entry.messageId = Number((parsed.result as { message_id: number }).message_id);
         }
       } catch {
@@ -227,10 +286,13 @@ function avviaProxy(): Promise<{ server: Server; url: string }> {
  * test unitario poteva incontrare, perche' vive solo quando il banco gira
  * intero.
  */
-function muffin(args: string[], stdin?: string): Promise<{ code: number; out: string; err: string }> {
+function muffin(
+  args: string[],
+  stdin?: string,
+): Promise<{ code: number; out: string; err: string }> {
   return new Promise((resolve) => {
-    const child = spawn('npx', ['tsx', CLI, ...args], {
-      env: { ...process.env, MUFFIN_HOME: HOME, NO_COLOR: '1' },
+    const child = spawn(process.execPath, [...nodeArgs, ...args], {
+      env: runEnv,
       cwd: WORKSPACE,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -278,16 +340,102 @@ function esito(nome: string, ok: boolean, dettaglio: string): void {
   process.stderr.write(`${ok ? '✓' : '✗'} ${nome}\n    ${dettaglio}\n`);
 }
 
-const inviati = (): Chiamata[] => filo.filter((c) => c.method === 'sendMessage' || c.method === 'editMessageText');
-const testo = (c: Chiamata): string => String(c.payload['text'] ?? '');
-const dopo = (n: number): Chiamata[] => filo.filter((c) => c.n > n);
-/** Gli update dell'owner arrivati dopo il punto `n`, con il numero della chiamata `getUpdates` che li ha portati. */
-const messaggiOwner = (n: number): { n: number; messageId: number; text: string }[] =>
-  dopo(n).flatMap((c) =>
-    (c.updates ?? [])
-      .filter((u) => u.fromId === ownerId && u.text !== undefined && u.messageId !== undefined)
-      .map((u) => ({ n: c.n, messageId: u.messageId!, text: u.text! })),
+const accepted = (c: Chiamata): boolean => c.status >= 200 && c.status < 300;
+const isDraft = (c: Chiamata): boolean =>
+  c.method === 'sendMessageDraft' || c.method === 'sendRichMessageDraft';
+const isTextSend = (c: Chiamata): boolean =>
+  c.method === 'sendMessage' || c.method === 'sendRichMessage';
+const isTextEdit = (c: Chiamata): boolean => c.method === 'editMessageText'; // rich and legacy share the wire method
+const isChatMessage = (c: Chiamata): boolean =>
+  isTextSend(c) || isTextEdit(c) || c.method === 'sendDocument' || c.method === 'deleteMessage';
+const messageIdOf = (c: Chiamata): unknown => c.payload['message_id'] ?? c.messageId;
+const after = (n: number): Chiamata[] => filo.filter((c) => c.n > n);
+const callsIn = (n: number, chatId: number): Chiamata[] =>
+  after(n).filter((c) => c.payload['chat_id'] === chatId);
+const updatesAfter = (n: number): (WireUpdate & { n: number })[] =>
+  after(n).flatMap((c) => (c.updates ?? []).map((u) => ({ ...u, n: c.n })));
+const buttons = (c: Chiamata): { text?: string; callback_data?: string }[] =>
+  (
+    c.payload['reply_markup'] as
+      | { inline_keyboard?: { text?: string; callback_data?: string }[][] }
+      | undefined
+  )?.inline_keyboard?.flat() ?? [];
+
+function visibleText(c: Chiamata): string {
+  const rich = c.payload['rich_message'] as
+    | { html?: string; markdown?: string; blocks?: { type: string; text?: unknown }[] }
+    | undefined;
+  // The inbound normalizer intentionally hides the contents of draft-only thinking blocks.
+  const rendered = normalizeInboundRich({ rich_message: rich });
+  if (rendered !== null) {
+    const thinking =
+      rich?.blocks?.filter((b) => b.type === 'thinking').map((b) => richPlain(b.text, 0)) ?? [];
+    return [rendered, ...thinking].join('\n').trim();
+  }
+  return (
+    rich?.markdown ??
+    String(rich?.html ?? c.payload['text'] ?? '')
+      .replace(/<[^>]*>/g, '')
+      .replace(
+        /&(?:amp|lt|gt|quot|#39);/g,
+        (entity) =>
+          ({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'" })[entity] ??
+          entity,
+      )
   );
+}
+
+const processLog =
+  /\b(?:Processo|leggo un file|eseguo un comando|cerco in memoria|fs_read|shell_run_write)\b/i;
+const statusText =
+  /\b(?:preparo il contesto|aspetto il modello|sto pensando|sto lavorando|sto (?:ricevendo|scrivendo) la risposta)\b/i;
+
+function checkNoProcess(scene: string, calls: Chiamata[]): void {
+  const leaks = calls.filter(
+    (c) => (isDraft(c) || isChatMessage(c)) && processLog.test(visibleText(c)),
+  );
+  esito(
+    `${scene} · nessun registro dei passi`,
+    leaks.length === 0,
+    leaks.map((c) => `${c.method} #${c.n}`).join(', ') || 'solo testo utile',
+  );
+}
+
+function checkSingleFinal(scene: string, calls: Chiamata[], final: Chiamata): void {
+  const writes = calls.filter((c) => accepted(c) && isChatMessage(c));
+  esito(
+    `${scene} · un solo messaggio definitivo`,
+    writes.length === 1 &&
+      writes[0] === final &&
+      final.messageId !== undefined &&
+      buttons(final).length === 0,
+    writes.map((c) => `${c.method} #${c.n}`).join(', ') || 'nessun messaggio',
+  );
+  checkNoProcess(scene, calls);
+}
+
+function approvalState(id: string) {
+  const db = new Database(paths(HOME).db, { readonly: true });
+  try {
+    return db
+      .prepare(`SELECT a.prompt, a.resource, a.capability, a.decision, a.decided_by, a.consumed_at, t.status, t.wait_for
+                       FROM approvals a JOIN turns t ON t.id = a.turn_id WHERE a.id = ?`)
+      .get(id) as
+      | {
+          prompt: string;
+          resource: string | null;
+          capability: string;
+          decision: string | null;
+          decided_by: string | null;
+          consumed_at: string | null;
+          status: string;
+          wait_for: string | null;
+        }
+      | undefined;
+  } finally {
+    db.close();
+  }
+}
 
 async function aspetta(cond: () => boolean, ms = STEP_TIMEOUT_MS): Promise<boolean> {
   const inizio = Date.now();
@@ -296,6 +444,37 @@ async function aspetta(cond: () => boolean, ms = STEP_TIMEOUT_MS): Promise<boole
     await new Promise((r) => setTimeout(r, 250));
   }
   return true;
+}
+
+async function expectOnWire<T>(
+  label: string,
+  find: () => T | undefined,
+  ms = STEP_TIMEOUT_MS,
+): Promise<T> {
+  let found: T | undefined;
+  await aspetta(() => {
+    found = find();
+    return found !== undefined;
+  }, ms);
+  if (found === undefined) throw new Error(label);
+  return found;
+}
+
+function ownerMessage(n: number, matches: (text: string) => boolean, group = false) {
+  return expectOnWire('messaggio atteso dell’owner non ricevuto', () => {
+    for (const u of updatesAfter(n)) {
+      const { chatId, messageId, text } = u;
+      if (
+        u.fromId === ownerId &&
+        chatId !== undefined &&
+        (group ? chatId < 0 : chatId === ownerId) &&
+        messageId !== undefined &&
+        text !== undefined &&
+        matches(text)
+      )
+        return { ...u, chatId, messageId };
+    }
+  });
 }
 
 function chiedi(cosa: string): void {
@@ -307,20 +486,34 @@ function chiedi(cosa: string): void {
 process.stderr.write(`corsia reale Telegram · ${MODEL}\nscratch: ${ROOT}\n\n`);
 writeFileSync(WIRE, '');
 writeFileSync(join(WORKSPACE, 'spesa.txt'), 'pane 2.10\nlatte 1.35\nmele 5.00\n');
+writeFileSync(join(WORKSPACE, 'spesa-extra.txt'), 'riso 4.27\n');
 
 const { server: proxy, url: proxyUrl } = await avviaProxy();
 let gateway: ReturnType<typeof spawn> | null = null;
+let scene = 'setup';
 
 try {
-  const init = await muffin(['init', '--provider', 'openai-compat', '--base-url', BASE_URL, '--model', MODEL], apiKey);
+  const init = await muffin(
+    ['init', '--provider', 'openai-compat', '--base-url', BASE_URL, '--model', MODEL],
+    apiKey,
+  );
   if (init.code !== 0) throw new Error(`muffin init: ${init.err.slice(-300)}`);
   const tok = await muffin(['secret', 'set', 'telegram_token'], token);
   if (tok.code !== 0) throw new Error(`secret set: ${senzaToken(tok.err.slice(-300))}`);
-  const enable = await muffin(['surface', 'enable', 'telegram', '--api-base', proxyUrl, '--owner', String(ownerId)]);
+  const enable = await muffin([
+    'surface',
+    'enable',
+    'telegram',
+    '--api-base',
+    proxyUrl,
+    '--owner',
+    String(ownerId),
+  ]);
   if (enable.code !== 0) throw new Error(`surface enable: ${senzaToken(enable.err.slice(-300))}`);
 
-  gateway = spawn('npx', ['tsx', CLI, 'gateway', 'run'], {
-    env: { ...process.env, MUFFIN_HOME: HOME, NO_COLOR: '1' },
+  // Spawn the gateway directly so cleanup signals reach the only poller.
+  gateway = spawn(process.execPath, [...nodeArgs, 'gateway', 'run'], {
+    env: runEnv,
     cwd: WORKSPACE,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -334,168 +527,326 @@ try {
   }
   process.stderr.write('gateway connesso al bot di prova, attraverso il proxy.\n');
 
-  // ---- 1. la trascrizione: parole, passi, e niente cancellato ---------------
   {
-    const da = contatore;
-    // `echo ciao > saluto.txt`, non `echo ciao`: dall'ADR-0074 (06/09) la corsia
-    // di sola lettura `shell_run` non chiede mai, e la corsa dell'08/09 con un bot
-    // vero lo ha mostrato — nessun ASK, correttamente, e l'asserzione D12 rossa
-    // per una domanda sbagliata. Una scrittura passa da `shell_run_write`, che
-    // chiede sempre: è quello l'ASK che D12 misura.
-    chiedi('Manda al bot: «leggi spesa.txt e dimmi quanto ho speso in tutto, poi esegui `echo ciao > saluto.txt` e riporta cosa risponde». Quando chiede di approvare il comando, premi Consenti.');
-    const arrivato = await aspetta(() => messaggiOwner(da).length >= 1);
-    if (!arrivato) esito('trascrizione · messaggio ricevuto', false, 'nessun messaggio dell\'owner sul filo');
+    scene = 'DM · risultato (B11/B13)';
+    const start = contatore;
+    const prompt =
+      'Quanto ho speso in totale? Somma le voci di spesa.txt e spesa-extra.txt. Dammi solo il totale in euro.';
+    chiedi(`In privato manda: «${prompt}»`);
+    const incoming = await ownerMessage(start, (text) => text === prompt);
+    const calls = () => callsIn(incoming.n, ownerId);
+    const total = /\b12[,.]72\b/;
+    const final = await expectOnWire('manca il risultato con il totale 12,72', () =>
+      calls().find(
+        (c) => accepted(c) && (isTextSend(c) || isTextEdit(c)) && total.test(visibleText(c)),
+      ),
+    );
+    // Leave a short window for an extra bubble or a stale draft refresh to surface.
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    checkSingleFinal(scene, calls(), final);
+    esito(
+      `${scene} · risultato in risposta alla richiesta`,
+      isTextSend(final) &&
+        rispondeA(final) === incoming.messageId &&
+        !statusText.test(visibleText(final)),
+      `risultato: ${visibleText(final).slice(0, 100)}`,
+    );
+    const drafts = calls().filter((c) => accepted(c) && isDraft(c));
+    const before = drafts.filter((c) => c.n < final.n);
+    const id = before[0]?.payload['draft_id'];
+    esito(
+      `${scene} · anteprima utile con Stop nativo`,
+      typeof id === 'number' &&
+        id !== 0 &&
+        before.some((c) => statusText.test(visibleText(c)) || total.test(visibleText(c))) &&
+        before.every(
+          (c) =>
+            c.payload['draft_id'] === id &&
+            c.payload['can_stop'] === true &&
+            c.payload['keep_on_stop'] !== true,
+        ) &&
+        before.length === drafts.length,
+      `${before.length} bozze prima del risultato, ${drafts.length - before.length} dopo; draft_id=${String(id)}`,
+    );
+    const exposedPaths = calls().filter(
+      (c) => (isDraft(c) || isChatMessage(c)) && /\bspesa(?:-extra)?\.txt\b/.test(visibleText(c)),
+    );
+    esito(
+      `${scene} · nessun argomento degli strumenti esposto`,
+      exposedPaths.length === 0,
+      `${exposedPaths.length} scritture mostrano i nomi dei file anziché soltanto stato o risultato`,
+    );
+    // A short turn need not refresh. A long one cannot leave a TTL-sized gap,
+    // including the stretch from the last preview to the durable reply.
+    const times = [...before, final].map((c) => Date.parse(c.at));
+    const gap = times.slice(1).reduce((max, at, i) => Math.max(max, at - (times[i] ?? at)), 0);
+    esito(
+      `${scene} · nessun buco nella bozza prima della consegna`,
+      before.length > 0 && gap < negoziazioneTelegram('direct').draftTtlMs,
+      `${gap} ms di intervallo massimo; ${Math.max(0, before.length - 1)} aggiornamenti`,
+    );
+  }
+
+  {
+    scene = 'DM · approvazione (D12)';
+    const start = contatore;
+    // A read-only command would not ASK (ADR-0074). This writes only to scratch.
+    const command = 'echo ciao > saluto.txt';
+    const description = 'scrive ciao in un file di prova';
+    const effect = join(WORKSPACE, 'saluto.txt');
+    const prompt = `Esegui esattamente il comando ${command} dalla directory corrente, con descrizione «${description}». Se riesce, rispondi «File di prova creato».`;
+    chiedi(`In privato manda: «${prompt}» e aspetta le istruzioni prima di premere un pulsante.`);
+    await ownerMessage(start, (text) => text === prompt);
+    const calls = () => callsIn(start, ownerId);
+    const ask = await expectOnWire('nessuna domanda con tastiera', () =>
+      calls().find((c) => accepted(c) && isTextSend(c) && buttons(c).length > 0),
+    );
+    const allow = buttons(ask).find((b) => b.text === 'Consenti "sys.shell.write"')?.callback_data;
+    const approvalId = allow?.match(/^ok:([0-9a-f]+)$/)?.[1];
+    if (
+      approvalId === undefined ||
+      ask.messageId === undefined ||
+      !buttons(ask).some((b) => b.text === 'Rifiuta' && b.callback_data === `no:${approvalId}`)
+    ) {
+      throw new Error('la domanda non ha i due pulsanti per la stessa approvazione shell');
+    }
+    const waiting = await expectOnWire('il turno non si è sospeso sulla domanda registrata', () => {
+      const state = approvalState(approvalId);
+      return state?.status === 'waiting' && state.wait_for === `approval:${approvalId}`
+        ? state
+        : undefined;
+    });
+    const question = visibleText(ask).replace(/\s+/g, ' ');
+    if (
+      waiting.capability !== 'sys.shell.write' ||
+      waiting.resource === null ||
+      !waiting.resource.split(' · ').includes(`command: ${command}`) ||
+      !question.includes(waiting.resource.replace(/\s+/g, ' ')) ||
+      !question.includes(waiting.prompt.replace(/\s+/g, ' ')) ||
+      !question.toLowerCase().includes(description) ||
+      waiting.decision !== null ||
+      waiting.consumed_at !== null ||
+      existsSync(effect)
+    ) {
+      throw new Error(
+        'domanda incompleta, azione diversa da quella attesa o effetto già eseguito; non approvare',
+      );
+    }
+    esito(
+      `${scene} · domanda integrale e turno in attesa`,
+      true,
+      `comando: ${command}; tastiera sul messaggio #${ask.messageId}`,
+    );
+    chiedi(
+      `Controlla la domanda sul telefono e premi Consenti solo per «${command}». Non inviare un altro messaggio.`,
+    );
+    const click = await expectOnWire('non è arrivato il click dell’owner su quella domanda', () =>
+      updatesAfter(ask.n).find(
+        (u) =>
+          u.fromId === ownerId &&
+          u.chatId === ownerId &&
+          u.messageId === ask.messageId &&
+          u.callback === allow &&
+          u.callbackId !== undefined,
+      ),
+    );
+    const ack = await expectOnWire('nessuna conferma del click', () =>
+      after(click.n).find(
+        (c) =>
+          accepted(c) &&
+          c.method === 'answerCallbackQuery' &&
+          c.payload['callback_query_id'] === click.callbackId &&
+          visibleText(c) === 'Consentito.',
+      ),
+    );
+    const final = await expectOnWire('manca il risultato del turno ripreso', () =>
+      calls().find(
+        (c) =>
+          c.n > ack.n &&
+          accepted(c) &&
+          (isTextSend(c) || isTextEdit(c)) &&
+          /\bfile di prova creato\b/i.test(visibleText(c)),
+      ),
+    );
+    const keyboardCleared = () => {
+      const lastMarkup = calls()
+        .filter(
+          (c) =>
+            c.n > click.n &&
+            accepted(c) &&
+            messageIdOf(c) === ask.messageId &&
+            (c.method === 'editMessageReplyMarkup' || isTextEdit(c)) &&
+            c.payload['reply_markup'] !== undefined,
+        )
+        .at(-1);
+      return lastMarkup !== undefined && buttons(lastMarkup).length === 0;
+    };
+    const cleared = await aspetta(keyboardCleared, 5_000);
+    const resumed = approvalState(approvalId);
+    esito(
+      `${scene} · decisione manuale consumata e scrittura eseguita`,
+      resumed?.decision === 'allow' &&
+        resumed.decided_by === 'owner' &&
+        resumed.consumed_at !== null &&
+        resumed.status === 'done' &&
+        existsSync(effect) &&
+        readFileSync(effect, 'utf8') === 'ciao\n',
+      `decisione=${resumed?.decision ?? 'assente'}; stato=${resumed?.status ?? 'assente'}`,
+    );
+    const lastEdit = calls()
+      .filter((c) => accepted(c) && isTextEdit(c) && messageIdOf(c) === ask.messageId)
+      .at(-1);
+    const messages = calls().filter(
+      (c) =>
+        accepted(c) &&
+        (isTextSend(c) || c.method === 'sendDocument' || c.method === 'deleteMessage'),
+    );
+    esito(
+      `${scene} · tastiera rimossa e risultato sulla stessa bolla`,
+      cleared &&
+        messages.length === 1 &&
+        messages[0] === ask &&
+        messageIdOf(final) === ask.messageId &&
+        lastEdit !== undefined &&
+        /\bfile di prova creato\b/i.test(visibleText(lastEdit)) &&
+        !/aspetto la tua approvazione/i.test(visibleText(lastEdit)) &&
+        buttons(lastEdit).length === 0,
+      `tastiera rimossa=${cleared}; ${messages.length} invii/cancellazioni durevoli`,
+    );
+    checkNoProcess(scene, calls());
+  }
+
+  {
+    scene = 'DM · coda (B2)';
+    const start = contatore;
+    const story = 'Raccontami una storia di trenta righe su una mongolfiera.';
+    const ping = 'Ci sei? Rispondi solo con «eccomi».';
+    chiedi(`In privato manda «${story}» e, appena compare la bozza, manda «${ping}».`);
+    const first = await ownerMessage(start, (text) => text === story);
+    const second = await ownerMessage(start, (text) => text === ping);
+    const replies = () => callsIn(first.n, ownerId).filter((c) => accepted(c) && isTextSend(c));
+    const ack = await expectOnWire(
+      'nessuna conferma «in coda» al secondo messaggio (era ancora in corso il primo?)',
+      () =>
+        replies().find(
+          (c) => rispondeA(c) === second.messageId && /^(?:📥\s*)?in coda\b/i.test(visibleText(c)),
+        ),
+      60_000,
+    );
+    const firstAnswer = await expectOnWire('manca la risposta al primo messaggio', () =>
+      replies().find(
+        (c) =>
+          rispondeA(c) === first.messageId &&
+          /mongolfier/i.test(visibleText(c)) &&
+          visibleText(c).length > 80,
+      ),
+    );
+    const secondAnswer = await expectOnWire('manca la risposta al secondo messaggio', () =>
+      replies().find(
+        (c) => rispondeA(c) === second.messageId && /^eccomi[.!]?$/i.test(visibleText(c).trim()),
+      ),
+    );
+    esito(
+      `${scene} · conferma e consegne in ordine`,
+      ack.n < firstAnswer.n && firstAnswer.n < secondAnswer.n,
+      `conferma #${ack.n}; risposte #${firstAnswer.n} e #${secondAnswer.n}`,
+    );
+  }
+
+  for (const native of [true, false]) {
+    scene = native ? 'DM · Stop nativo (B2)' : 'DM · /stop (B2)';
+    const start = contatore;
+    const prompt = native
+      ? 'Scrivi un poema di sessanta righe sul mare.'
+      : 'Scrivi un poema di sessanta righe sulla montagna.';
+    chiedi(
+      `In privato manda «${prompt}» e, appena compare la bozza, ${native ? 'premi il suo pulsante Stop' : 'manda «/stop»'}.`,
+    );
+    const incoming = await ownerMessage(start, (text) => text === prompt);
+    const calls = () => callsIn(incoming.n, ownerId);
+    const replies = () => calls().filter((c) => accepted(c) && isTextSend(c));
+    const stop = native
+      ? await expectOnWire('nessun update Stop nativo per quella bozza', () =>
+          updatesAfter(incoming.n).find(
+            (u) =>
+              u.chatId === ownerId &&
+              u.stoppedDraftId !== undefined &&
+              calls().some(
+                (c) =>
+                  c.n < u.n &&
+                  accepted(c) &&
+                  isDraft(c) &&
+                  c.payload['can_stop'] === true &&
+                  c.payload['draft_id'] === u.stoppedDraftId,
+              ),
+          ),
+        )
+      : await ownerMessage(incoming.n, (text) => text === '/stop');
+    const interrupted = await expectOnWire(
+      'manca «Interrotto.» in risposta alla richiesta originale',
+      () =>
+        replies().find(
+          (c) =>
+            c.n > stop.n && rispondeA(c) === incoming.messageId && visibleText(c) === 'Interrotto.',
+        ),
+      60_000,
+    );
+    if (native) checkSingleFinal(scene, calls(), interrupted);
     else {
-      // Da #388 la risposta finale edita il messaggio dei passi: non arriva un
-      // `sendMessage` pulito, arriva l'ultima `editMessageText` con i passi e,
-      // sotto, la risposta. Si aspetta quella (la corsa dell'08/09 ha aspettato
-      // 180 s un messaggio separato che per costruzione non esiste più).
-      const finito = await aspetta(() => {
-        const t = dopo(da).filter(
-          (c) => (c.method === 'sendMessage' || c.method === 'editMessageText') && c.payload['reply_markup'] === undefined,
-        );
-        return t.some((c) => /spesa totale|totale spesa/i.test(testo(c)) && !/⏳|sto pensando/.test(testo(c)));
-      });
-      const c = dopo(da);
-      const trascrizioni = c.filter((x) => (x.method === 'sendMessage' || x.method === 'editMessageText') && /✓ leggo un file/.test(testo(x)));
-      esito('trascrizione · i passi restano in un messaggio vero', trascrizioni.length > 0, `${String(trascrizioni.length)} scritture con «✓ leggo un file»`);
-      esito('trascrizione · niente cancellato', !c.some((x) => x.method === 'deleteMessage'), `${String(c.filter((x) => x.method === 'deleteMessage').length)} deleteMessage`);
-
-      /**
-       * B11 in privato, dopo la decisione dell'owner del 06/09/2026:
-       * `Surface.negotiate('direct')` dichiara `['draft','edit','off']` con
-       * `draftTtlMs` 30 s, quindi il filo deve contenere `sendMessageDraft`,
-       * con lo **stesso** `draft_id` per tutto il turno, e senza mai un buco
-       * piu' lungo della finestra dichiarata.
-       *
-       * Perche' qui e non solo nell'unita': l'unita' misura il timer con un
-       * orologio finto, e un timer perfetto che nessuno arma non si vede.
-       * Solo il filo di un bot vero dice che la Bot API ha davvero ricevuto
-       * un rinnovo, e che l'ha ricevuto in tempo. Il rosso che questo passo
-       * esiste per catturare e' esattamente il difetto della PR #388 letto al
-       * contrario: una bolla mostrata una volta e mai piu' rinnovata.
-       */
-      const bozze = c.filter((x) => x.method === 'sendMessageDraft');
-      const idBozza = new Set(bozze.map((x) => String(x.payload['draft_id'] ?? '')));
-      esito(
-        'B11 privato · l\'anteprima esiste e ha un solo draft_id per turno',
-        bozze.length > 0 && idBozza.size === 1 && !idBozza.has('') && !idBozza.has('0'),
-        `${String(bozze.length)} sendMessageDraft, draft_id: ${[...idBozza].join(', ') || 'nessuno'}`,
+      const ack = await expectOnWire(
+        'manca «fermato» in risposta a /stop',
+        () =>
+          replies().find(
+            (c) =>
+              c.n > stop.n && rispondeA(c) === stop.messageId && /^fermato\b/i.test(visibleText(c)),
+          ),
+        60_000,
       );
-      const tempi = bozze.map((x) => Date.parse(x.at));
-      const buco = tempi.slice(1).reduce((m, t, i) => Math.max(m, t - tempi[i]!), 0);
       esito(
-        'B11 privato · rinnovata dentro la finestra dichiarata (30 s)',
-        bozze.length > 1 && buco < 30_000,
-        bozze.length > 1 ? `buco massimo fra due rinnovi: ${String(buco)}ms` : 'una sola anteprima: nessun rinnovo osservato',
-      );
-
-      /**
-       * Lo **stato finale** del messaggio della trascrizione, non l'esistenza
-       * di una scrittura qualsiasi.
-       *
-       * I due controlli sopra, da soli, non chiudono B13. «Almeno una scrittura
-       * conteneva un passo» resta vero anche se l'ultima `editMessageText` su
-       * quel messaggio sostituisce l'elenco dei passi con la sola risposta: e
-       * cancellare i passi con una edit invece che con un `deleteMessage` e'
-       * esattamente cio' di cui l'owner si e' lamentato il 03/09 — «non voglio
-       * perdere gli step che ha fatto». Un banco che guarda solo le scritture
-       * intermedie non puo' vedere la differenza fra «i passi restano» e «i
-       * passi sono stati sovrascritti», che e' la domanda.
-       *
-       * Quindi: si prende il `message_id` del messaggio di trascrizione, si
-       * guarda l'ULTIMA scrittura che lo tocca, e si pretende che i passi
-       * siano ancora li'.
-       */
-      const nato = c.find((x) => x.method === 'sendMessage' && /✓ leggo un file/.test(testo(x)));
-      const idTrascrizione = nato?.messageId;
-      let ultima: (typeof c)[number] | undefined;
-      if (nato === undefined || idTrascrizione === undefined) {
-        esito(
-          'trascrizione · i passi ci sono ancora alla fine',
-          false,
-          'nessun messaggio di trascrizione con un message_id: non posso guardarne lo stato finale',
-        );
-      } else {
-        const suQuelMessaggio = c.filter(
-          (x) => x.method === 'editMessageText' && x.payload['message_id'] === idTrascrizione,
-        );
-        ultima = suQuelMessaggio.at(-1) ?? nato;
-        esito(
-          'trascrizione · i passi ci sono ancora alla fine, non solo durante',
-          /✓ leggo un file/.test(testo(ultima)),
-          `${String(suQuelMessaggio.length)} edit sul messaggio #${String(idTrascrizione)}; ultima: ${testo(ultima).slice(0, 120).replace(/\n/g, ' ⏎ ')}`,
-        );
-      }
-      const troppo = inviati().filter((x) => testo(x).length > TELEGRAM_MAX);
-      esito('niente tagliato · ogni messaggio entro il limite', troppo.length === 0, `${String(troppo.length)} oltre ${String(TELEGRAM_MAX)} caratteri`);
-      const ask = c.find((x) => x.method === 'sendMessage' && x.payload['reply_markup'] !== undefined);
-      esito(
-        'ASK · comando intero e frase del modello',
-        ask !== undefined && /command: echo ciao/.test(testo(ask)) && /<i>.+<\/i>/.test(testo(ask)),
-        ask === undefined ? 'nessun ASK con tastiera' : testo(ask).slice(0, 200).replace(/\n/g, ' ⏎ '),
-      );
-      /**
-       * La risposta arriva **nello stesso messaggio** dei passi, non a parte.
-       *
-       * Fino al 04/09 questo caso pretendeva un `sendMessage` separato dopo
-       * l'ultima edit — ed era giusto per il disegno di allora. #388 l'ha
-       * cambiato di proposito, per chiudere la lamentela dell'owner «mi sta
-       * rispondendo due volte»: c'erano due bolle per turno, la scia dei tool
-       * e la consegna durevole, e ora la risposta finale **edita** il
-       * messaggio che la scia gia' possiede.
-       *
-       * Quindi la promessa non e' piu' «due messaggi in ordine» ma «un
-       * messaggio solo che alla fine contiene entrambe le cose» — ed e'
-       * quella che si misura qui. Il caso e' rimasto rosso una corsa intera
-       * su un prodotto corretto: un banco che porta avanti la specifica di
-       * ieri accusa il codice di oggi.
-       */
-      // «Spesa totale» o «Totale spesa»: il modello sceglie l'ordine, la regex no (08/09: rosso per questo).
-      const rispostaNelloStesso = /spesa totale|totale spesa/i.test(testo(ultima ?? nato ?? { payload: {} } as never));
-      esito(
-        'risposta · nello stesso messaggio dei passi, dopo di essi (#388)',
-        finito && rispostaNelloStesso,
-        rispostaNelloStesso ? 'passi e risposta nello stesso messaggio' : 'la risposta non e\' finita nel messaggio della trascrizione',
+        `${scene} · comando confermato e turno interrotto`,
+        true,
+        `conferma #${ack.n}; interruzione #${interrupted.n}`,
       );
     }
   }
 
-  // ---- 2. la coda: un secondo messaggio mentre il primo gira ---------------
-  {
-    const da = contatore;
-    chiedi('Manda due messaggi di fila, entro pochi secondi: «raccontami una storia di venti righe» e poi «ciao, ci sei?».');
-    const due = await aspetta(() => messaggiOwner(da).length >= 2);
-    if (!due) esito('coda · due messaggi ricevuti', false, `${String(messaggiOwner(da).length)} messaggi dell'owner sul filo`);
-    else {
-      const [primo, secondo] = messaggiOwner(da);
-      const conferma = await aspetta(() => dopo(da).some((c) => c.method === 'sendMessage' && /in coda/.test(testo(c))), 60_000);
-      const ack = dopo(da).find((c) => c.method === 'sendMessage' && /in coda/.test(testo(c)));
-      const rispostaAlPrimo = dopo(da).find((c) => c.method === 'sendMessage' && c.payload['reply_markup'] === undefined && !/in coda|[✓✗⏳⏸]/.test(testo(c)) && testo(c).length > 80);
-      esito(
-        'coda · confermata subito, prima della prima risposta',
-        conferma && ack !== undefined && rispondeA(ack) === secondo!.messageId && (rispostaAlPrimo === undefined || ack.n < rispostaAlPrimo.n),
-        ack === undefined ? 'nessuna conferma «in coda» (il secondo messaggio è arrivato a turno finito?)' : `ack #${String(ack.n)} in risposta a ${String(secondo!.messageId)}; prima risposta ${rispostaAlPrimo === undefined ? 'non ancora' : `#${String(rispostaAlPrimo.n)}`}`,
-      );
-      const entrambe = await aspetta(() => dopo(da).filter((c) => c.method === 'sendMessage' && c.payload['reply_markup'] === undefined && !/in coda|[✓✗⏳⏸]/.test(testo(c))).length >= 2);
-      esito('coda · entrambi risposti, nell\'ordine', entrambe, entrambe ? `messaggi ${String(primo!.messageId)} e ${String(secondo!.messageId)} risposti` : 'la seconda risposta non è arrivata');
-    }
-  }
-
-  // ---- 3. /stop a metà turno ------------------------------------------------
-  {
-    const da = contatore;
-    chiedi('Manda «scrivi un poema di quaranta righe» e subito dopo «/stop».');
-    const arrivati = await aspetta(() => messaggiOwner(da).some((m) => m.text === '/stop'));
-    if (!arrivati) esito('/stop · ricevuto', false, 'nessun /stop sul filo');
-    else {
-      const interrotto = await aspetta(() => dopo(da).some((c) => c.method === 'sendMessage' && testo(c) === 'Interrotto.'), 60_000);
-      const fermato = dopo(da).some((c) => c.method === 'sendMessage' && /fermato/.test(testo(c)));
-      esito('/stop · «fermato» e poi «Interrotto.»', interrotto && fermato, `fermato=${String(fermato)} interrotto=${String(interrotto)}`);
-    }
+  if (values.group === true) {
+    scene = 'gruppo · typing e risultato';
+    const start = contatore;
+    const username = /telegram abilitata: @([A-Za-z][A-Za-z0-9_]*)/.exec(enable.out)?.[1];
+    if (username === undefined) throw new Error('username del bot di prova non trovato');
+    const prompt = `@${username} Racconta una storia di venti righe su un tasso e chiudila con «Fine della storia».`;
+    chiedi(`In un gruppo di prova o in un suo topic, manda: «${prompt}»`);
+    const incoming = await ownerMessage(start, (text) => text === prompt, true);
+    const calls = () => callsIn(incoming.n, incoming.chatId);
+    const final = await expectOnWire('nessun risultato in risposta al messaggio nel gruppo', () =>
+      calls().find(
+        (c) =>
+          accepted(c) &&
+          isTextSend(c) &&
+          rispondeA(c) === incoming.messageId &&
+          c.payload['message_thread_id'] === incoming.threadId &&
+          /fine della storia/i.test(visibleText(c)) &&
+          visibleText(c).length > 80,
+      ),
+    );
+    const typing = calls().some(
+      (c) =>
+        c.n < final.n &&
+        accepted(c) &&
+        c.method === 'sendChatAction' &&
+        c.payload['action'] === 'typing' &&
+        c.payload['message_thread_id'] === incoming.threadId,
+    );
+    esito(
+      `${scene} · typing nel posto giusto, nessuna bozza`,
+      typing && !calls().some(isDraft),
+      `typing prima della risposta=${typing}`,
+    );
+    checkSingleFinal(scene, calls(), final);
   }
 } catch (error) {
-  esito('setup', false, senzaToken(error instanceof Error ? error.message : String(error)));
+  esito(scene, false, senzaToken(error instanceof Error ? error.message : String(error)));
 } finally {
   if (gateway !== null) {
     gateway.kill('SIGTERM');
@@ -505,8 +856,18 @@ try {
   proxy.close();
 }
 
+const overLimit = filo.filter(
+  (c) => typeof c.payload['text'] === 'string' && c.payload['text'].length > TELEGRAM_MAX,
+);
+esito(
+  'testo legacy · entro il limite',
+  overLimit.length === 0,
+  `${overLimit.length} scritture oltre ${TELEGRAM_MAX} caratteri`,
+);
 const rossi = passi.filter((p) => !p.ok);
-process.stderr.write(`\n${String(passi.length - rossi.length)}/${String(passi.length)} verdi · filo: ${WIRE}\n`);
+process.stderr.write(
+  `\n${String(passi.length - rossi.length)}/${String(passi.length)} verdi · filo: ${WIRE}\n`,
+);
 if (values.keep !== true && rossi.length === 0) rmSync(ROOT, { recursive: true, force: true });
 else process.stderr.write(`scratch tenuto: ${ROOT}\n`);
 process.exit(rossi.length === 0 ? 0 : 1);
