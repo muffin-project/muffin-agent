@@ -82,7 +82,7 @@ export function makeCapabilitySearchTool(): RegisteredTool {
         result.omitted > 0
           ? ' ' +
             String(result.omitted) +
-            ' additional match(es) were not loaded because of the profile exposure ceiling.'
+            ' additional match(es) exceeded the result limit for this search.'
           : '';
       return {
         content: 'Selected for the next model round in this lease: ' + loaded + '.' + suffix,

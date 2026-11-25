@@ -208,7 +208,7 @@ function deps(script: (ChatResult | ProviderError)[], overrides: Partial<LoopDep
   const db = new DatabaseCtor(':memory:');
   const turns = new TurnStore(db);
   const todos = new TodoStore(db);
-  const capabilities = new Map(decls.map((d) => [d.id, d]));
+  const capabilities = overrides.capabilities ?? new Map(decls.map((d) => [d.id, d]));
   const base: LoopDeps = {
     provider: new ScriptedProvider(script),
     profile: CONSERVATIVE,
@@ -282,14 +282,7 @@ describe('agent loop', () => {
     expect(calls).not.toContain('demo_write'); // the handler never ran
   });
 
-  it('filters before it caps, so host-only tools cannot crowd a member out of the window', async () => {
-    // Unobservable on a stock registry (9 tools, smallest cap 10) — this
-    // fixture is what makes the order testable: cap 2, and the two hostOnly
-    // tools registered FIRST. Cap-then-filter hands a member an empty menu
-    // while their usable tool sits outside the window; the moment MCP attaches
-    // (hostOnly, appended last) that stops being hypothetical on consumer
-    // profiles. The judge's mutation reversing the order survived 546 tests;
-    // this is the test that was missing.
+  it('offers the member their open tool when host-only tools precede it in the catalogue', async () => {
     const member: Principal = {
       kind: 'member',
       connector: 'telegram',
@@ -325,7 +318,6 @@ describe('agent loop', () => {
     const provider = new ScriptedProvider([answer('ciao')]);
     const { deps: d, store } = deps([], {
       provider,
-      profile: { ...CONSERVATIVE, maxToolsExposed: 2 },
       tools: [tool('host_a', 'cap.a'), tool('host_b', 'cap.b'), tool('open_c', 'cap.c')],
       capabilities: new Map([
         ['cap.a', hostDecl('cap.a')],
@@ -1950,8 +1942,9 @@ describe('agent loop · progress (B13)', () => {
     });
   });
 
-  it('tool_start carries the name and capability; tool_end carries how long it took and whether it errored', async () => {
-    const { deps: d, store } = deps([callTool('demo_read', { q: 1 }), answer('fatto')]);
+  it('tool_start identifies the invocation and tool_end reports its duration and outcome', async () => {
+    const request = callTool('demo_read', { q: 1 });
+    const { deps: d, store } = deps([request, answer('fatto')]);
     const events: TurnEvent[] = [];
     await runTurn(d, { ...input(store), onProgress: (e) => events.push(e) });
 
@@ -1961,7 +1954,13 @@ describe('agent loop · progress (B13)', () => {
     // vuoto. Sono gli argomenti **come il modello li ha chiesti**: quale campo
     // valga la pena mostrare, e come accorciarlo, lo decide chi stampa.
     expect(byType(events, 'tool_start')).toEqual([
-      { type: 'tool_start', name: 'demo_read', capability: 'demo.read', args: { q: 1 } },
+      {
+        type: 'tool_start',
+        name: 'demo_read',
+        capability: 'demo.read',
+        callId: request.toolCalls[0]?.id,
+        args: { q: 1 },
+      },
     ]);
     const [end] = byType(events, 'tool_end');
     expect(end).toMatchObject({

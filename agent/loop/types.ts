@@ -17,7 +17,10 @@ import type { TurnStopped, TurnStore } from '../../core/turns/store.js';
 import type { TodoStore } from '../../core/turns/todo.js';
 import type { WaitSpec } from '../../core/turns/wait.js';
 import type { UndoJournal } from '../../core/undo/journal.js';
-import type { CapabilityDiscoveryPort } from '../capability-exposure.js';
+import type {
+  CapabilityDiscoveryPort,
+  CapabilityExposureSnapshot,
+} from '../capability-exposure.js';
 import type { IstanzaFacts, SystemPrompts } from '../context/assemble.js';
 import type { Profile, ProfileOrigin } from '../profiles/profile.js';
 import type { AudioBlock, ImageBlock, Provider, ToolSpec } from '../providers/types.js';
@@ -127,13 +130,9 @@ export type ToolContext = {
    * so the barrier has to travel with the turn — not with the tool.
    */
   suspend: (spec: WaitSpec) => void;
-  /**
-   * Turn-local progressive capability projection (#469).
-   *
-   * Absent when the authority-filtered catalogue already fits the profile cap.
-   * The handler may only search/load the eligible catalogue the engine built
-   * before the model call; execution still goes through runTool + the kernel.
-   */
+  /** The schema menu the turn last sent to the model, including in flat mode. */
+  capabilityExposure?: (() => CapabilityExposureSnapshot) | undefined;
+  /** Search and stage schemas from the eligible catalogue when discovery is configured. */
   capabilityDiscovery?: CapabilityDiscoveryPort | undefined;
   /** Durability guard for this turn: a write failure disables later tools. */
   durability?: {
@@ -1012,7 +1011,7 @@ export type TurnEvent =
    * frase in italiano vive in `cli/repl.ts` e non su `ToolSpec`. Chi li stampa
    * li tratta come non fidati: dentro c'è testo scritto dal modello.
    */
-  | { type: 'tool_start'; name: string; capability: string; args?: unknown }
+  | { type: 'tool_start'; name: string; capability: string; callId?: string; args?: unknown }
   /**
    * La chiamata non è finita e non è fallita: **è ferma su di te**.
    *
@@ -1022,7 +1021,7 @@ export type TurnEvent =
    * non si è rotto. Chi guarda lo schermo in quel momento sta cercando di
    * capire se deve fare qualcosa lui — ed è esattamente quello che deve fare.
    */
-  | { type: 'ask'; name: string; capability: string }
+  | { type: 'ask'; name: string; capability: string; callId?: string }
   /**
    * Un tentativo transitorio è andato male e se ne fa un altro.
    *
