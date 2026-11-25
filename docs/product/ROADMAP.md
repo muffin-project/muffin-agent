@@ -149,7 +149,8 @@ Capabilities already on `dev` are not re-specified here. The exit is an observat
 
 **D5, decided.** #914, #915, #924 and #925 are not in this train. They were closed on 2026-11-21 with a pointer back here and to #972.
 
-Root of trust, the effect journal, and owner approval are not on this list.
+**D6, decided 2026-11-25.** The data-tier seal ceremony is retired (ADR-0108). Owner-editable `rot/` files keep real safety through the code-tier kernel, the runtime deny of `rot.write`, backups, and per-effect approval for changes the agent proposes. Hash manifests, `muffin rot reseal`, and safe mode (or a refused boot) because a file drifted from a hash are no longer the mechanism. The code-tier root of trust, the effect journal, and owner approval remain.
+
 
 ## Phase placement
 
