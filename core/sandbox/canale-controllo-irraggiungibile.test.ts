@@ -4,6 +4,7 @@ import { connect, type Socket } from 'node:net';
 import { platform, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { capability } from '../../test-support/requires.js';
 import type { TurnResult } from '../../agent/loop/types.js';
 import {
   type ControlServer,
@@ -15,7 +16,6 @@ import { type ForwardDeps, ForwardHost } from '../gateway/forward.js';
 import { mandatoryGuards } from '../rot/guards.js';
 import { ModelLane } from '../turns/model-lane.js';
 import { SandboxExecutor } from './executor.js';
-import { probeSandbox } from './probe.js';
 
 /**
  * #638, falsificatore live: la corsia in sola lettura non raggiunge il
@@ -38,6 +38,9 @@ import { probeSandbox } from './probe.js';
  */
 const host = platform();
 
+/** Contenimento di produzione misurato dal globalSetup: `test-support/capabilities.ts`. */
+const sandboxCap = capability('sandbox');
+
 const linuxGate: { run: boolean; why: string } = (() => {
   if (host !== 'linux') {
     return {
@@ -45,12 +48,10 @@ const linuxGate: { run: boolean; why: string } = (() => {
       why: 'falsificatore solo Linux (bwrap --ro-bind + filtro seccomp AF_UNIX); su macOS vale il test unitario sulla deny-list',
     };
   }
-  const p = probeSandbox();
-  if (p.available) return { run: true, why: `linux: ${p.mechanism} contained a real probe` };
-  return { run: false, why: `linux: sandbox unavailable — ${p.reason}: ${p.detail}` };
+  return { run: sandboxCap.ok, why: sandboxCap.reason };
 })();
 
-const containmentRequired = process.env['MUFFIN_REQUIRE_SANDBOX'] === '1';
+const containmentRequired = sandboxCap.required;
 
 describe('il falsificatore dichiara se e girato', () => {
   it('o la prova e girata, o lo skip e dichiarato', () => {

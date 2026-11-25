@@ -24,6 +24,8 @@
     "cli/**/*.ts",
     "evals/**/*.ts",
     "scripts/**/*.ts",
+    "test-support/**/*.ts",
+    "vitest.capabilities.ts",
     "**/*.test.ts",
     ".claude/hooks/**/*.ts"
   ]

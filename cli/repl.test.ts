@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { capability, withReason } from '../test-support/requires.js';
 import { COMANDI, debugCommand, thinkingCommand } from '../agent/comandi.js';
 import type { TurnEvent } from '../agent/loop.js';
 import { TOOL_PHRASES, toolLine, toolPhrase, toolSubject } from '../agent/tool-phrase.js';
@@ -11,12 +12,18 @@ import { SurfaceRegistry } from '../core/surface/registry.js';
 import { DELIVERED, MUTA, type Surface } from '../core/surface/types.js';
 import { LANE_JOBS, LANE_TURNS, ModelLane } from '../core/turns/model-lane.js';
 import { startFakeProvider } from '../evals/acceptance/provider.js';
-import { shellNonDisponibileQui } from '../evals/acceptance/sandbox-host.js';
 import { runInit } from './init.js';
 import { closingLine, formatProgressLine, makeReplCliWrite, runRepl, statusFor } from './repl.js';
 import { applica } from './schermo.js';
 
-const itWithShell = it.skipIf(shellNonDisponibileQui() !== null);
+/**
+ * The registered shell (production containment plus the shared boundary),
+ * measured once per run by the globalSetup: `test-support/capabilities.ts`.
+ * The reason lands in the test name when it skips.
+ */
+const shellBoundary = capability('shell-boundary');
+const itWithShell = (name: string, fn: () => Promise<void>) =>
+  it.skipIf(!shellBoundary.ok)(withReason(name, shellBoundary), fn);
 
 // ADR-0103: i test qui guidano turni foreground nel REPL, che in produzione
 // girano solo sul gateway. L'hatch ripristina l'esecuzione locale per tutto

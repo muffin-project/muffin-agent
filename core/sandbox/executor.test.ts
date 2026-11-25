@@ -12,8 +12,8 @@ import { createServer } from 'node:net';
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { capability } from '../../test-support/requires.js';
 import { type ExecRequest, SandboxExecutor, STERILE_GIT_CONFIG_ENV } from './executor.js';
-import { probeSandbox } from './probe.js';
 
 /**
  * These are the tracer bullets of ADR-0026, as tests: each one executes a real
@@ -47,15 +47,12 @@ const host = platform();
  * condition* (Ubuntu 24.04 restricts unprivileged user namespaces — ADR-0018,
  * field note 2026-08-04), not a bug in this repo.
  */
-const gate: { run: boolean; why: string } = (() => {
-  if (host === 'darwin') return { run: true, why: 'macOS: seatbelt is part of the OS' };
-  if (host === 'linux') {
-    const p = probeSandbox();
-    if (p.available) return { run: true, why: `linux: ${p.mechanism} contained a real probe` };
-    return { run: false, why: `linux: sandbox unavailable — ${p.reason}: ${p.detail}` };
-  }
-  return { run: false, why: `no OS-level sandbox on ${host}` };
-})();
+/**
+ * Il contenimento di produzione (`verify()`, hook Git compresi), misurato una
+ * volta per run dal globalSetup: `test-support/capabilities.ts`.
+ */
+const sandboxCap = capability('sandbox');
+const gate: { run: boolean; why: string } = { run: sandboxCap.ok, why: sandboxCap.reason };
 
 /**
  * The flag that makes a skip fail. Set it wherever the containment is supposed
@@ -63,7 +60,7 @@ const gate: { run: boolean; why: string } = (() => {
  * VPS. Unset on a laptop, where skipping on an unsupported platform is a fact
  * about the laptop and not a defect.
  */
-const containmentRequired = process.env['MUFFIN_REQUIRE_SANDBOX'] === '1';
+const containmentRequired = sandboxCap.required;
 
 function scaffold() {
   const base = mkdtempSync(join(tmpdir(), 'muffin-exec-test-'));

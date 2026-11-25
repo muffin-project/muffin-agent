@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
+import { capability, withReason } from '../test-support/requires.js';
 import { runDoctor } from '../cli/doctor.js';
 import { runInit } from '../cli/init.js';
 import { cmdUndo } from '../cli/undo.js';
@@ -20,7 +21,6 @@ import { loadConfig, paths, saveConfig, secretDir } from '../core/config/config.
 import { muffinWorkspace } from '../core/config/workspace.js';
 import type { Principal } from '../core/policy/types.js';
 import { seal } from '../core/rot/verify.js';
-import { probeSandbox } from '../core/sandbox/probe.js';
 import { UndoJournal } from '../core/undo/journal.js';
 import { enqueueTurn, type LoopDeps, runTurn, type ToolContext } from './loop.js';
 import { OpenAICompatProvider } from './providers/openai-compat.js';
@@ -82,14 +82,24 @@ const member: Principal = {
   externalId: 'u1',
 };
 
-const productionSandboxAvailable =
-  probeSandbox().available || process.env.MUFFIN_REQUIRE_SANDBOX === '1';
+/**
+ * The shell `buildRuntime` registers: production containment (`verify()`, Git
+ * hooks included) plus the shared shell boundary, measured once per run by the
+ * globalSetup (`test-support/capabilities.ts`). CI requires it; the AppArmor
+ * mutation step forces it (`MUFFIN_FORCE_CAPABILITIES`) so this test runs and
+ * fails for the real reason.
+ */
+const shellBoundary = capability('shell-boundary');
+const productionSandboxAvailable = shellBoundary.ok;
 
 describe('the registered shell write tool contains Git hooks through the production runtime', () => {
   const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
 
   it.runIf(productionSandboxAvailable)(
-    'one real turn keeps ordinary writes and nested Git tracking while denying new nested and top-level hooks',
+    withReason(
+      'one real turn keeps ordinary writes and nested Git tracking while denying new nested and top-level hooks',
+      shellBoundary,
+    ),
     async () => {
       const home = homeAllowing('ok.example.com');
       const workspace = mkdtempSync(join(tmpdir(), 'muffin-wiring-shell-hooks-'));

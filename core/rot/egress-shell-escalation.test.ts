@@ -1,9 +1,9 @@
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir, platform } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { capability } from '../../test-support/requires.js';
 import { SandboxExecutor } from '../sandbox/executor.js';
-import { probeSandbox } from '../sandbox/probe.js';
 import { mandatoryGuards } from './guards.js';
 import { runInit } from '../../cli/init.js';
 import { paths } from '../config/config.js';
@@ -50,19 +50,15 @@ import { paths } from '../config/config.js';
  * discipline as `core/sandbox/executor.test.ts`, because a security guarantee
  * asserted against a fake executor only proves the fake agrees with itself.
  */
-const host = platform();
 
-const gate: { run: boolean; why: string } = (() => {
-  if (host === 'darwin') return { run: true, why: 'macOS: seatbelt is part of the OS' };
-  if (host === 'linux') {
-    const p = probeSandbox();
-    if (p.available) return { run: true, why: `linux: ${p.mechanism} contained a real probe` };
-    return { run: false, why: `linux: sandbox unavailable — ${p.reason}: ${p.detail}` };
-  }
-  return { run: false, why: `no OS-level sandbox on ${host}` };
-})();
+/**
+ * Il contenimento di produzione (`verify()`, hook Git compresi), misurato una
+ * volta per run dal globalSetup: `test-support/capabilities.ts`.
+ */
+const sandboxCap = capability('sandbox');
+const gate: { run: boolean; why: string } = { run: sandboxCap.ok, why: sandboxCap.reason };
 
-const containmentRequired = process.env['MUFFIN_REQUIRE_SANDBOX'] === '1';
+const containmentRequired = sandboxCap.required;
 
 describe('la suite di contenimento dichiara se è girata', () => {
   it('gira davvero, o lo skip è dichiarato — e dove serve provarlo uno skip è un fallimento', () => {

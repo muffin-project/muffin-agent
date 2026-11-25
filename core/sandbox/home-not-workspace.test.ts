@@ -3,9 +3,9 @@ import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'n
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { capability, withReason } from '../../test-support/requires.js';
 import { mandatoryGuards } from '../rot/guards.js';
 import { SandboxExecutor } from './executor.js';
-import { probeSandbox } from './probe.js';
 
 /**
  * The Muffin home is not a workspace, proven the only way it is worth proving:
@@ -91,17 +91,14 @@ import { probeSandbox } from './probe.js';
 const host = platform();
 
 /** Same gate, and same reasoning, as `core/sandbox/executor.test.ts`. */
-const gate: { run: boolean; why: string } = (() => {
-  if (host === 'darwin') return { run: true, why: 'macOS: seatbelt is part of the OS' };
-  if (host === 'linux') {
-    const p = probeSandbox();
-    if (p.available) return { run: true, why: `linux: ${p.mechanism} contained a real probe` };
-    return { run: false, why: `linux: sandbox unavailable — ${p.reason}: ${p.detail}` };
-  }
-  return { run: false, why: `no OS-level sandbox on ${host}` };
-})();
+/**
+ * Il contenimento di produzione (`verify()`, hook Git compresi), misurato una
+ * volta per run dal globalSetup: `test-support/capabilities.ts`.
+ */
+const sandboxCap = capability('sandbox');
+const gate: { run: boolean; why: string } = { run: sandboxCap.ok, why: sandboxCap.reason };
 
-const containmentRequired = process.env['MUFFIN_REQUIRE_SANDBOX'] === '1';
+const containmentRequired = sandboxCap.required;
 
 /** The line every attack tries to leave behind. */
 const PWNED = 'pwned\n';
@@ -172,7 +169,9 @@ const ROWS: [string, string][] = [
  * workspace can reach; it cannot say that production puts a turn there — see
  * the header for where that is proven.
  */
-describe.runIf(gate.run)('the shape the braces produce: a workspace scope reaches nothing in the installation', () => {
+describe.runIf(gate.run)(
+  withReason('the shape the braces produce: a workspace scope reaches nothing in the installation', sandboxCap),
+  () => {
   const s = scaffold();
   const exec = new SandboxExecutor(mandatoryGuards(s.home, s.workspace));
 
@@ -220,7 +219,9 @@ describe.runIf(gate.run)('the shape the braces produce: a workspace scope reache
  * `makeShellTool` when the gateway's cwd was the home. This is the judge's own
  * measurement, re-run against today's guards.
  */
-describe.runIf(gate.run)('the belt: the deny holds even when a write scope names the home', () => {
+describe.runIf(gate.run)(
+  withReason('the belt: the deny holds even when a write scope names the home', sandboxCap),
+  () => {
   const s = scaffold();
   const exec = new SandboxExecutor(mandatoryGuards(s.home, s.home));
   const inHome = { cwd: s.home, writeScope: [s.home] as const };
