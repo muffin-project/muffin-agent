@@ -9,8 +9,7 @@ import { runInit } from '../../cli/init.js';
 import { isSameOrNestedPath } from '../../core/config/workspace.js';
 import { connectServer } from '../../core/mcp/connect.js';
 import { pinTools, saveMcpRegistry } from '../../core/mcp/registry.js';
-import { probeSandbox } from '../../core/sandbox/probe.js';
-import { assessShellBoundary } from '../../core/sandbox/shell-boundary.js';
+import { capability, withReason } from '../../test-support/requires.js';
 
 /**
  * The M3 definition of done, asserted against the PRODUCTION assembly.
@@ -52,16 +51,14 @@ import { assessShellBoundary } from '../../core/sandbox/shell-boundary.js';
  * documenta come già successo — la disciplina era stata scritta lì e non era
  * arrivata al file accanto.
  */
-const probe = probeSandbox();
 /**
  * The shared boundary (#642), not `probe.available`: these `runIf` gates must
- * match what `buildRuntime` registers. A green probe on bubblewrap with an
- * unverified patch posture exposes no shell tools — running the shell
- * acceptance against a runtime that refused them would be a different claim
- * than "the registered shell is contained".
+ * match what `buildRuntime` registers — production containment (`verify()`,
+ * Git hooks included) plus the bubblewrap patch floor. Measured once per run by
+ * the globalSetup (`test-support/capabilities.ts`).
  */
-const boundary = assessShellBoundary(probe);
-const contained = boundary.usable;
+const boundary = capability('shell-boundary');
+const contained = boundary.ok;
 /**
  * Dove il contenimento *deve* essere dimostrabile, un salto è un difetto.
  * Impostata in CI, sul runner che sta al posto della VPS di produzione; assente
@@ -70,7 +67,7 @@ const contained = boundary.usable;
  * `core/sandbox/executor.test.ts`, di proposito: due nomi per la stessa regola
  * si sarebbero scollati.
  */
-const containmentRequired = process.env['MUFFIN_REQUIRE_SANDBOX'] === '1';
+const containmentRequired = boundary.required;
 
 describe('questa accettazione dichiara se il sandbox ha davvero girato', () => {
   it('o il contenimento c’è, o il salto è dichiarato — e dove era richiesto, saltare è fallire', () => {
@@ -80,7 +77,7 @@ describe('questa accettazione dichiara se il sandbox ha davvero girato', () => {
     const perche = boundary.reason;
     if (containmentRequired) {
       throw new Error(
-        `MUFFIN_REQUIRE_SANDBOX=1 e su questo host la shell boundary non è usable — ${perche}. ` +
+        `shell-boundary richiesta e su questo host la shell boundary non è usable — ${perche}. ` +
           `La riga di DoD "un comando da CLI gira dentro il sandbox" non è stata verificata, ` +
           `e questo rosso è la variabile che funziona: un contenimento saltato non deve mai leggersi come passato.`,
       );
@@ -254,7 +251,10 @@ describe('M3 acceptance — through the production runtime', () => {
   }, 40_000);
 
   it.runIf(contained)(
-    'the shell tool the runtime registered contains a write outside the workspace',
+    withReason(
+      'the shell tool the runtime registered contains a write outside the workspace',
+      boundary,
+    ),
     async () => {
       // Production path: not the hand-built executor of executor.test, but the
       // shell tool buildRuntime wired, with the workspace as its scope.
@@ -290,7 +290,10 @@ describe('M3 acceptance — through the production runtime', () => {
    * decision: the assertion is on the tool the runtime actually registered.
    */
   it.runIf(contained)(
-    'a runtime built with the home as its cwd works somewhere else, and says so',
+    withReason(
+      'a runtime built with the home as its cwd works somewhere else, and says so',
+      boundary,
+    ),
     async () => {
       const supervisionato = buildRuntime(home, home);
       try {
@@ -342,7 +345,10 @@ describe('M3 acceptance — through the production runtime', () => {
    * through `FsScope.root`.
    */
   it.runIf(contained)(
-    "a turn's own writes land in runtime.workspace — the positive claim the deny cannot make",
+    withReason(
+      "a turn's own writes land in runtime.workspace — the positive claim the deny cannot make",
+      boundary,
+    ),
     async () => {
       const supervisionato = buildRuntime(home, home);
       try {

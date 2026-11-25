@@ -72,6 +72,8 @@ export type ExecRequest = {
   writeScope: readonly string[];
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** Recheck a caller's approved directory identity across async setup. */
+  validateScope?: () => void;
 };
 
 /**
@@ -1303,6 +1305,7 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
 
   private async execute(req: ExecRequest): Promise<ExecResult> {
     await this.ensureInit();
+    req.validateScope?.();
     const scratch = this.scratch();
     const timeoutMs = Math.min(req.timeoutMs ?? EXEC_DEFAULT_TIMEOUT_MS, EXEC_MAX_TIMEOUT_MS);
     const readScope = buildReadScope([req.cwd, ...req.writeScope, scratch]);
@@ -1403,6 +1406,7 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
   ): Promise<ExecResult> {
     return new Promise((resolvePromise, rejectPromise) => {
       const [programma = '', ...argomenti] = argv;
+      req.validateScope?.();
       const child = spawn(programma, argomenti, {
         cwd: req.cwd,
         env,
