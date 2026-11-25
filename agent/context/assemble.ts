@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { type PromptVersion, paths } from '../../core/config/config.js';
 import type { CapabilityDecl, CapabilityId, Principal, TenantId } from '../../core/policy/types.js';
 import { renderTodos, type TodoItem } from '../../core/turns/todo.js';
+import type { SearchStartupBlocker } from '../tools/search.js';
 import { estimateTokens, type PrefixBlockReport, prefixBreakdown } from './tokens.js';
 
 /**
@@ -233,6 +234,8 @@ export type IstanzaFacts = {
   jobAttivi: number;
   /** `null` quando il root of trust è integro — stessa condizione di `sys_inspect`, non un errore. */
   safeMode: { reason: string } | null;
+  /** Safe category, without the local diagnostic's paths and secret reference. */
+  webSearchUnavailable?: SearchStartupBlocker;
 };
 
 /**
@@ -391,6 +394,15 @@ function istanzaRighe(f: IstanzaFacts): string[] {
   return [
     `- Cartella di lavoro: ${f.cwd} — ${f.voci.length} element${f.voci.length === 1 ? 'o' : 'i'} di primo livello: ${elenco}.`,
     `- Istanza: ${f.provider} · ${f.jobAttivi} job attiv${f.jobAttivi === 1 ? 'o' : 'i'} · ${rot}.`,
+    ...(f.webSearchUnavailable === undefined
+      ? []
+      : [
+          f.webSearchUnavailable === 'credential'
+            ? '- Ricerca web indisponibile. La credenziale del servizio configurato manca o non è leggibile.'
+            : '- Ricerca web indisponibile. L’accesso di rete del servizio configurato non è autorizzato.',
+          '- Per leggere un URL già fornito usa http_get, con le regole di accesso del turno. Se manca dal menu e vedi capability_search, cerca lo strumento per la lettura di URL.',
+          '- Se ti serve trovare una fonte e non hai uno strumento di ricerca adatto, chiedi un URL. Per trovare o aprire fonti web evita il terminale e i tentativi sui file locali.',
+        ]),
   ];
 }
 
