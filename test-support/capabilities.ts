@@ -33,23 +33,11 @@ import { planUnit, systemdDiagnosticsForUnit } from '../core/gateway/unit.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { assessShellBoundary } from '../core/sandbox/shell-boundary.js';
 
-export const CAPABILITY_NAMES = ['sandbox', 'shell-boundary', 'systemd-analyze'] as const;
-export type CapabilityName = (typeof CAPABILITY_NAMES)[number];
+export * from './capability-policy.js';
 
-export type Capability = {
-  /** La capacità c'è (o è stata forzata, vedi `forced`). */
-  ok: boolean;
-  /** Perché sì o perché no, in parole. Mai vuota. */
-  reason: string;
-  /** Questa run la pretende: un salto qui sarebbe un difetto. */
-  required: boolean;
-  /** Forzata con `MUFFIN_FORCE_CAPABILITIES`: i test girano anche se il probe dice no. */
-  forced: boolean;
-};
+import type { CapabilityName } from './capability-policy.js';
 
-export type CapabilityReport = Record<CapabilityName, Capability>;
-
-type Probe = { ok: boolean; reason: string };
+export type Probe = { ok: boolean; reason: string };
 
 /**
  * Il sandbox di produzione, con la stessa porta che usano `doctor` e `muffin
@@ -142,73 +130,6 @@ function probeSystemdAnalyze(): Probe {
   }
 }
 
-function parseList(name: string, value: string | undefined): CapabilityName[] {
-  if (value === undefined || value.trim() === '') return [];
-  const names = value
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s !== '');
-  for (const n of names) {
-    if (!(CAPABILITY_NAMES as readonly string[]).includes(n)) {
-      throw new Error(
-        `${name}: capacità sconosciuta «${n}». Note: ${CAPABILITY_NAMES.join(', ')}.`,
-      );
-    }
-  }
-  return names as CapabilityName[];
-}
-
-/**
- * Le capacità pretese da questa run. Le due variabili storiche restano alias:
- * `MUFFIN_REQUIRE_SANDBOX=1` pretendeva sia il contenimento sia il confine shell
- * (vedi `evals/system/acceptance.test.ts`), `MUFFIN_REQUIRE_SYSTEMD=1` il parser.
- */
-export function requiredCapabilities(env: NodeJS.ProcessEnv = process.env): Set<CapabilityName> {
-  const required = new Set(
-    parseList('MUFFIN_REQUIRE_CAPABILITIES', env['MUFFIN_REQUIRE_CAPABILITIES']),
-  );
-  if (env['MUFFIN_REQUIRE_SANDBOX'] === '1') {
-    required.add('sandbox');
-    required.add('shell-boundary');
-  }
-  if (env['MUFFIN_REQUIRE_SYSTEMD'] === '1') required.add('systemd-analyze');
-  return required;
-}
-
-/**
- * Capacità forzate: i test girano anche se il probe dice no, e falliscono per
- * il motivo vero. Serve alla prova di mutazione della CI (togli i deny
- * AppArmor, il test di produzione deve diventare rosso nominando
- * `git_hooks_unprotected`): senza forzatura quel test salterebbe.
- */
-export function forcedCapabilities(env: NodeJS.ProcessEnv = process.env): Set<CapabilityName> {
-  return new Set(parseList('MUFFIN_FORCE_CAPABILITIES', env['MUFFIN_FORCE_CAPABILITIES']));
-}
-
-/** Combina probe, richieste e forzature. Puro: è la parte che i test unitari coprono. */
-export function decide(
-  probes: Record<CapabilityName, Probe>,
-  required: Set<CapabilityName>,
-  forced: Set<CapabilityName>,
-): { report: CapabilityReport; missingRequired: CapabilityName[] } {
-  const report = {} as CapabilityReport;
-  const missingRequired: CapabilityName[] = [];
-  for (const name of CAPABILITY_NAMES) {
-    const probe = probes[name];
-    const isForced = forced.has(name) && !probe.ok;
-    report[name] = {
-      ok: probe.ok || isForced,
-      reason: isForced
-        ? `forzata da MUFFIN_FORCE_CAPABILITIES; il probe dice: ${probe.reason}`
-        : probe.reason,
-      required: required.has(name),
-      forced: isForced,
-    };
-    if (required.has(name) && !probe.ok && !isForced) missingRequired.push(name);
-  }
-  return { report, missingRequired };
-}
-
 export async function probeAll(): Promise<Record<CapabilityName, Probe>> {
   const sandbox = await probeSandbox();
   return {
@@ -216,14 +137,4 @@ export async function probeAll(): Promise<Record<CapabilityName, Probe>> {
     'shell-boundary': await probeShellBoundary(sandbox),
     'systemd-analyze': probeSystemdAnalyze(),
   };
-}
-
-/** Una riga per capacità, per il log della run. */
-export function describeReport(report: CapabilityReport): string {
-  return CAPABILITY_NAMES.map((name) => {
-    const c = report[name];
-    const stato = c.forced ? 'FORZATA' : c.ok ? 'sì' : 'no';
-    const req = c.required ? ' (richiesta)' : '';
-    return `[capacità] ${name}: ${stato}${req} — ${c.reason}`;
-  }).join('\n');
 }

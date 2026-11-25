@@ -2,7 +2,7 @@ import { linkSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { capability } from '../../test-support/requires.js';
+import { capability, withReason } from '../../test-support/requires.js';
 import { mandatoryGuards } from '../rot/guards.js';
 import { SandboxExecutor } from './executor.js';
 
@@ -68,7 +68,7 @@ describe('il confine dichiara se è stato provato', () => {
 });
 
 describe.runIf(gate.run)(
-  `B2: un segreto negato dentro una root permessa resta negato (${gate.why})`,
+  withReason('B2: un segreto negato dentro una root permessa resta negato', sandboxCap),
   () => {
     const base = mkdtempSync(join(tmpdir(), 'muffin-deny-in-allowed-'));
     const workspace = join(base, 'workspace');

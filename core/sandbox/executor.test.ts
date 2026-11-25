@@ -12,7 +12,7 @@ import { createServer } from 'node:net';
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { capability } from '../../test-support/requires.js';
+import { capability, withReason } from '../../test-support/requires.js';
 import { type ExecRequest, SandboxExecutor, STERILE_GIT_CONFIG_ENV } from './executor.js';
 
 /**
@@ -98,7 +98,9 @@ describe('the containment suite declares whether it ran', () => {
   });
 });
 
-describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate.why})`, () => {
+const titolo = withReason('sandboxed execution holds (real containment)', sandboxCap);
+
+describe.runIf(gate.run)(titolo, () => {
   const s = scaffold();
   const executor = new SandboxExecutor({
     denyWrite: [s.guarded, s.secrets],

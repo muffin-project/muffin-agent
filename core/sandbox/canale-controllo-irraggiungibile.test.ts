@@ -5,7 +5,7 @@ import { platform, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { TurnResult } from '../../agent/loop/types.js';
-import { capability } from '../../test-support/requires.js';
+import { capability, withReason } from '../../test-support/requires.js';
 import {
   type ControlServer,
   resolveSocketPath,
@@ -70,7 +70,11 @@ describe('il falsificatore dichiara se e girato', () => {
 });
 
 describe.runIf(linuxGate.run)(
-  `runReadOnly non raggiunge il socket di controllo (${linuxGate.why})`,
+  withReason('runReadOnly non raggiunge il socket di controllo', {
+    ...sandboxCap,
+    ok: linuxGate.run,
+    reason: linuxGate.why,
+  }),
   () => {
     it.each([
       { label: 'home breve', longHome: false },

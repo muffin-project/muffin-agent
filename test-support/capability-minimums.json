@@ -1,0 +1,6 @@
+{
+  "$comment": "Quanti test marcati [richiede <capacità>] devono girare dove la capacità è richiesta (CI, job verifica). Misurati il 25/11/2026: 68 sandbox, 6 shell-boundary, 1 systemd-analyze. Si alza quando si aggiungono test; si abbassa solo con una modifica rivista che dice quale test è sparito e perché. Lo legge scripts/test-capability-report.ts --ci.",
+  "sandbox": 68,
+  "shell-boundary": 6,
+  "systemd-analyze": 1
+}

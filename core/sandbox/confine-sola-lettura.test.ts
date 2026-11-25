@@ -4,7 +4,7 @@ import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { capability } from '../../test-support/requires.js';
+import { capability, withReason } from '../../test-support/requires.js';
 import { SandboxExecutor } from './executor.js';
 
 /**
@@ -66,7 +66,7 @@ describe('il confine fra le due corsie dichiara se è stato provato', () => {
   });
 });
 
-describe.runIf(gate.run)(`le due corsie contengono cose diverse (${gate.why})`, () => {
+describe.runIf(gate.run)(withReason('le due corsie contengono cose diverse', sandboxCap), () => {
   const base = mkdtempSync(join(tmpdir(), 'muffin-corsie-'));
   const workspace = join(base, 'workspace');
   const secrets = join(base, 'secrets');

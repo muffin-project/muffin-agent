@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { runInit } from '../../cli/init.js';
-import { capability } from '../../test-support/requires.js';
+import { capability, withReason } from '../../test-support/requires.js';
 import { paths } from '../config/config.js';
 import { SandboxExecutor } from '../sandbox/executor.js';
 import { mandatoryGuards } from './guards.js';
@@ -141,7 +141,7 @@ function parsePtyProbe(code: number | null, stdout: string, stderr: string): Pty
 }
 
 describe.runIf(gate.run)(
-  `sys.shell non può allargare l egress (contenimento reale — ${gate.why})`,
+  withReason('sys.shell non può allargare l egress (contenimento reale)', sandboxCap),
   () => {
     const base = mkdtempSync(join(tmpdir(), 'muffin-shell-escalation-'));
     const home = join(base, 'home');
