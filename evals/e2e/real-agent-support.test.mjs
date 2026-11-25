@@ -75,7 +75,7 @@ test('budget blocks the eleventh completion, the 180s boundary, and aggregate in
   );
 });
 
-test('positive oracle requires hidden schema, model-selected discovery, authorized effect, and independent artifact', () => {
+test('positive file oracle requires an offered native write, a recorded host effect and exact content', () => {
   const expectedDecisionLine = `- Decision: ${REAL_AGENT_EXPECTED.sharedDecision}`;
   for (const note of ['alpha.md', 'beta.md']) {
     const source = readFileSync(
@@ -87,78 +87,80 @@ test('positive oracle requires hidden schema, model-selected discovery, authoriz
       `${note} must contain the fixture's exact shared decision`,
     );
   }
-  const events = [
-    { kind: 'request', toolNames: ['fs_read', 'capability_search'] },
-    { kind: 'response', index: 0, toolCalls: [{ name: 'fs_read' }] },
-    { kind: 'request', toolNames: ['fs_read', 'capability_search'] },
-    { kind: 'response', index: 1, toolCalls: [{ name: 'capability_search' }] },
-    { kind: 'request', toolNames: ['fs_read', 'capability_search', 'fs_write'] },
-    {
-      kind: 'response',
-      index: 2,
-      toolCalls: [{ id: 'write-1', name: 'fs_write', arguments: '{"path":"shared-decisions.md"}' }],
-    },
-  ];
-  const rows = [
-    {
-      tool: 'fs_write',
-      call_id: 'write-1',
-      resource: join('/tmp/work', REAL_AGENT_EXPECTED.outputPath),
-      decision: 'draft',
-      is_error: 0,
-      ended_at: '2026-10-10T00:00:00Z',
-    },
-  ];
+  const write = {
+    id: 'write-1',
+    name: 'fs_write',
+    arguments: JSON.stringify({ path: REAL_AGENT_EXPECTED.outputPath }),
+  };
+  const request = { kind: 'request', index: 0, toolNames: ['fs_read', 'fs_write'] };
+  const response = { kind: 'response', index: 0, toolCalls: [write] };
+  const row = {
+    tool: 'fs_write',
+    call_id: write.id,
+    resource: join('/tmp/work', REAL_AGENT_EXPECTED.outputPath),
+    decision: 'draft',
+    effect_row: 'host',
+    is_error: 0,
+    ended_at: '2026-10-10T00:00:00Z',
+  };
   const args = {
-    events,
+    events: [request, response],
     artifact: REAL_AGENT_EXPECTED.sharedDecision,
-    rows,
+    rows: [row],
     workspace: '/tmp/work',
   };
-  assert.equal(positiveOracle(args).status, 'PASS');
+  const immediate = positiveOracle(args);
+  assert.equal(immediate.status, 'PASS');
+  assert.equal(immediate.checks.writerVisibleInitially, true);
+  assert.equal(immediate.checks.modelSelectedDiscovery, false);
   assert.equal(positiveOracle({ ...args, artifact: `${args.artifact}\n` }).status, 'PASS');
-  assert.equal(
-    positiveOracle({ ...args, rows: [{ ...rows[0], call_id: 'unrelated-call' }] }).status,
-    'FAIL',
-  );
-  const premature = events.map((event) =>
-    event.kind === 'response' && event.index === 0
-      ? { ...event, toolCalls: events[5].toolCalls }
-      : event.kind === 'response' && event.index === 2
-        ? { ...event, toolCalls: [] }
-        : event,
-  );
-  assert.equal(positiveOracle({ ...args, events: premature }).status, 'FAIL');
-  assert.equal(positiveOracle({ ...args, events: premature }).taskStatus, 'PASS');
-  assert.equal(positiveOracle({ ...args, rows: [] }).taskStatus, 'FAIL');
-  assert.equal(positiveOracle({ ...args, rows: [{ ...rows[0], ended_at: null }] }).status, 'FAIL');
-  assert.equal(
-    positiveOracle({ ...args, rows: [{ ...rows[0], ended_at: undefined }] }).status,
-    'FAIL',
-  );
-  assert.equal(
-    positiveOracle({
-      ...args,
-      events: [{ ...events[0], toolNames: ['fs_read', 'capability_search', 'fs_write'] }],
-    }).status,
-    'NOT_RUN',
-  );
-  assert.equal(
-    positiveOracle({
-      ...args,
-      events: events.filter((event) => event.kind !== 'response' || event.index !== 1),
-    }).status,
-    'FAIL',
-  );
+
+  const discovered = positiveOracle({
+    ...args,
+    events: [
+      { kind: 'request', index: 0, toolNames: ['capability_search'] },
+      { kind: 'response', index: 0, toolCalls: [{ name: 'capability_search' }] },
+      { ...request, index: 1 },
+      {
+        ...response,
+        index: 1,
+        toolCalls: [{ ...write, arguments: { path: REAL_AGENT_EXPECTED.outputPath } }],
+      },
+    ],
+  });
+  assert.equal(discovered.status, 'PASS');
+  assert.equal(discovered.checks.writerVisibleInitially, false);
+  assert.equal(discovered.checks.modelSelectedDiscovery, true);
+
+  const priorWriterOnly = [
+    request,
+    { ...request, index: 1, toolNames: ['fs_read'] },
+    {
+      ...response,
+      index: 1,
+    },
+  ];
+  assert.equal(positiveOracle({ ...args, events: priorWriterOnly }).status, 'FAIL');
+  assert.equal(positiveOracle({ ...args, rows: [] }).status, 'FAIL');
+  for (const incorrectRow of [
+    { ...row, call_id: 'unrelated-call' },
+    { ...row, effect_row: 'context' },
+    { ...row, resource: '/tmp/elsewhere/shared-decisions.md' },
+    { ...row, decision: 'deny' },
+    { ...row, ended_at: null },
+  ]) {
+    assert.equal(positiveOracle({ ...args, rows: [incorrectRow] }).status, 'FAIL');
+  }
 });
 
 test('positive artifact oracle accepts only the fixture sentence, with one optional terminal newline', () => {
   const events = [
-    { kind: 'request', toolNames: ['capability_search'] },
-    { kind: 'response', toolCalls: [{ name: 'capability_search' }] },
-    { kind: 'request', toolNames: ['capability_search', 'fs_write'] },
+    { kind: 'request', index: 0, toolNames: ['capability_search'] },
+    { kind: 'response', index: 0, toolCalls: [{ name: 'capability_search' }] },
+    { kind: 'request', index: 1, toolNames: ['capability_search', 'fs_write'] },
     {
       kind: 'response',
+      index: 1,
       toolCalls: [
         {
           id: 'write-1',
@@ -177,6 +179,7 @@ test('positive artifact oracle accepts only the fixture sentence, with one optio
         call_id: 'write-1',
         resource: join('/tmp/work', REAL_AGENT_EXPECTED.outputPath),
         decision: 'allow',
+        effect_row: 'host',
         is_error: 0,
         ended_at: '2026-10-10T00:00:00Z',
       },
@@ -202,6 +205,7 @@ test('positive artifact oracle accepts only the fixture sentence, with one optio
     null,
     undefined,
   ];
+  assert.equal(positiveOracle(args).status, 'PASS');
   for (const artifact of invalidArtifacts) {
     const result = positiveOracle({ ...args, artifact });
     assert.equal(result.status, 'FAIL', `accepted invalid artifact: ${String(artifact)}`);
@@ -867,19 +871,14 @@ test('the eleventh completion is rejected locally and immediately stops the owne
   }
 });
 
-test('a first-request witness violation stops the owned CLI child without forwarding or calling a model', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'g0-runner-witness-'));
+test('the recorder forwards a valid bounded request with the native writer already visible', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'g0-native-writer-'));
   const key = 'synthetic-private-key';
   let upstreamCalls = 0;
-  let stopped = null;
-  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
-  await new Promise((resolve, reject) => {
-    child.once('spawn', resolve);
-    child.once('error', reject);
-  });
   const upstream = createServer((_req, res) => {
     upstreamCalls += 1;
-    res.writeHead(200).end('{}');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ model: DEFAULT_FREE_MODEL, choices: [] }));
   });
   await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
   const address = upstream.address();
@@ -887,13 +886,8 @@ test('a first-request witness violation stops the owned CLI child without forwar
     target: `http://127.0.0.1:${address.port}`,
     upstreamPrefix: '/api/v1',
     wirePath: join(root, 'wire.jsonl'),
-    guardFirstWrite: true,
     modelId: DEFAULT_FREE_MODEL,
     apiKey: key,
-    onProviderUnavailable: (failure) => {
-      stopped = failure;
-      stopOwnedProcess(child);
-    },
   });
   try {
     const response = await fetch(`${recorder.baseUrl}/chat/completions`, {
@@ -906,22 +900,13 @@ test('a first-request witness violation stops the owned CLI child without forwar
         tools: [{ function: { name: 'fs_write' } }],
       }),
     });
-    assert.equal(response.status, 429);
+    assert.equal(response.status, 200);
     await response.arrayBuffer();
-    assert.equal(upstreamCalls, 0);
-    assert.equal(recorder.metrics().completionRequests, 0);
-    assert.equal(stopped.kind, 'runner-validation');
-    assert.match(stopped.reason, /fs_write present in first provider request/);
-    assert.equal(
-      runnerStopResult(stopped, recorder.metrics().completionRequests).status,
-      'NOT_RUN',
-    );
-    const childExit = await new Promise((resolve) =>
-      child.once('close', (code, signal) => resolve({ code, signal })),
-    );
-    assert.equal(childExit.signal, 'SIGTERM');
+    assert.equal(upstreamCalls, 1);
+    assert.equal(recorder.metrics().completionRequests, 1);
+    assert.deepEqual(recorder.events[0].toolNames, ['fs_write']);
+    assert.equal(recorder.violation(), null);
   } finally {
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     await recorder.close();
     await new Promise((resolve) => upstream.close(resolve));
     rmSync(root, { recursive: true, force: true });
