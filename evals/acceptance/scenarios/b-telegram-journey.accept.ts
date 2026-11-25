@@ -827,9 +827,9 @@ describe('acceptance · #746 · una seconda approvazione in un turno ripreso res
     const inst = await install({
       main: [
         { tool: { name: 'fs_read', args: { path: 'resources.txt' } } },
-        // ADR-0109: consent runs the saved call itself; the model does not
-        // issue it again after the turn resumes.
         firstRead,
+        firstRead,
+        secondRead,
         secondRead,
         { text: 'entrambe le letture sono terminate' },
       ],
