@@ -58,7 +58,7 @@ describe('il confine fra le due corsie dichiara se è stato provato', () => {
     }
     if (containmentRequired) {
       throw new Error(
-        `MUFFIN_REQUIRE_SANDBOX=1 e nessun contenimento reale è girato su questo host — ${gate.why}.`,
+        `sandbox richiesta (MUFFIN_REQUIRE_CAPABILITIES) e nessun contenimento reale è girato su questo host — ${gate.why}.`,
       );
     }
     console.warn(`[sandbox] confine sola-lettura NON provato — ${gate.why}`);

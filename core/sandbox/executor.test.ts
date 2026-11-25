@@ -33,7 +33,8 @@ import { type ExecRequest, SandboxExecutor, STERILE_GIT_CONFIG_ENV } from './exe
  * containments had never run on Linux — the platform of the production VPS —
  * on any machine, ever. The skip reason was right; what was missing is that
  * nothing ever turned the skip into a failure where the containment was
- * supposed to be provable. That is `MUFFIN_REQUIRE_SANDBOX` below.
+ * supposed to be provable. That is the `sandbox` capability's `required` flag
+ * below (`MUFFIN_REQUIRE_CAPABILITIES`, see `test-support/capabilities.ts`).
  */
 const host = platform();
 
@@ -89,7 +90,7 @@ describe('the containment suite declares whether it ran', () => {
     }
     if (containmentRequired) {
       throw new Error(
-        `MUFFIN_REQUIRE_SANDBOX=1 and no real containment was executed on this host — ${gate.why}. ` +
+        `sandbox required (MUFFIN_REQUIRE_CAPABILITIES) and no real containment was executed on this host — ${gate.why}. ` +
           'This failure is the flag working: a skipped containment must never read as a pass.',
       );
     }

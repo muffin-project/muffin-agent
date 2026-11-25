@@ -14,10 +14,12 @@ import {
 } from './capabilities.js';
 import { withReason } from './requires.js';
 
-const probes = (over: Partial<Record<CapabilityName, { ok: boolean; reason: string }>> = {}) => ({
+type Probes = Record<CapabilityName, { ok: boolean; reason: string }>;
+const probes = (over: Partial<Probes> = {}): Probes => ({
   sandbox: { ok: false, reason: 'linux: git_hooks_unprotected — fixture' },
   'shell-boundary': { ok: false, reason: 'richiede sandbox — fixture' },
   'systemd-analyze': { ok: true, reason: 'systemd-analyze verify funziona su questo host' },
+  plutil: { ok: false, reason: 'plutil esiste solo su macOS (qui: linux)' },
   ...over,
 });
 
@@ -158,7 +160,7 @@ describe('conteggio dei test marcati dal report JSON', () => {
   it('un etichetta con un nome sconosciuto è un refuso da segnalare', () => {
     const s = tallyMarked([t('a [richiede sandbx] uno', 'passed')]);
     expect(judgeMarked(s, new Set(), {})).toEqual([
-      'etichetta sconosciuta [richiede sandbx]: note sandbox, shell-boundary, systemd-analyze',
+      'etichetta sconosciuta [richiede sandbx]: note sandbox, shell-boundary, systemd-analyze, plutil',
     ]);
   });
 });

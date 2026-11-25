@@ -3,7 +3,7 @@
  * decisione e il conteggio dei test marcati. Niente probe e nessun import
  * pesante, così la può usare anche `scripts/test-capability-report.ts`.
  */
-export const CAPABILITY_NAMES = ['sandbox', 'shell-boundary', 'systemd-analyze'] as const;
+export const CAPABILITY_NAMES = ['sandbox', 'shell-boundary', 'systemd-analyze', 'plutil'] as const;
 export type CapabilityName = (typeof CAPABILITY_NAMES)[number];
 
 export type Capability = {
