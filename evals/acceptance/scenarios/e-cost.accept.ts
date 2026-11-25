@@ -1,14 +1,14 @@
-import DatabaseCtor from 'better-sqlite3';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { describe } from 'vitest';
-import { install, until, type Run } from '../harness.js';
-import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
-import { extraction } from '../provider.js';
-import { scenario } from '../scenario.js';
-import { MemoryStore } from '../../../core/memory/store.js';
 import { CONSOLIDATION_CAPABILITY } from '../../../core/memory/consolidator.js';
 import { RERANK_MIN_CANDIDATES } from '../../../core/memory/rerank.js';
+import { MemoryStore } from '../../../core/memory/store.js';
+import { install, type Run, until } from '../harness.js';
+import { extraction } from '../provider.js';
+import { scenario } from '../scenario.js';
+import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
 
 /**
  * E · Economics and observability.
@@ -82,7 +82,8 @@ async function tettoPerJob(): Promise<void> {
       '0.01',
       'riassumi la giornata',
     ]);
-    if (creato.code !== 0) throw new Error(`jobs add --per-job-usd: exit ${creato.code}\n${creato.err}`);
+    if (creato.code !== 0)
+      throw new Error(`jobs add --per-job-usd: exit ${creato.code}\n${creato.err}`);
     if (!creato.out.includes('tetto $0.01/mese')) {
       throw new Error(`add non conferma il tetto: ${JSON.stringify(creato.out)}`);
     }
@@ -110,7 +111,12 @@ async function tettoPerJob(): Promise<void> {
     await until(
       () =>
         inst.db(
-          (d) => (d.prepare(`SELECT COUNT(*) AS n FROM turns WHERE status = 'done'`).get() as { n: number }).n,
+          (d) =>
+            (
+              d.prepare(`SELECT COUNT(*) AS n FROM turns WHERE status = 'done'`).get() as {
+                n: number;
+              }
+            ).n,
         ) >= 1,
       60_000,
     );
@@ -125,13 +131,17 @@ async function tettoPerJob(): Promise<void> {
     }
     const visto = `${gateway.stdout()}${gateway.stderr()}`;
     if (visto.includes('NON DEVE MAI COMPARIRE')) {
-      throw new Error(`la risposta del modello è arrivata all'owner: il job è partito comunque\n${visto}`);
+      throw new Error(
+        `la risposta del modello è arrivata all'owner: il job è partito comunque\n${visto}`,
+      );
     }
 
     // (2) La riga durevole, e dice perché.
     const turni = inst.db(
       (d) =>
-        d.prepare(`SELECT model, turn_outcome, counters, job_id, messages FROM turns`).all() as Array<{
+        d
+          .prepare(`SELECT model, turn_outcome, counters, job_id, messages FROM turns`)
+          .all() as Array<{
           model: string;
           turn_outcome: string | null;
           counters: string;
@@ -139,14 +149,22 @@ async function tettoPerJob(): Promise<void> {
           messages: string;
         }>,
     );
-    if (turni.length !== 1) throw new Error(`atteso un solo turno per l'occorrenza, trovati ${turni.length}`);
+    if (turni.length !== 1)
+      throw new Error(`atteso un solo turno per l'occorrenza, trovati ${turni.length}`);
     const riga = turni[0]!;
-    if (riga.turn_outcome !== 'budget') throw new Error(`esito atteso "budget", trovato ${riga.turn_outcome}`);
+    if (riga.turn_outcome !== 'budget')
+      throw new Error(`esito atteso "budget", trovato ${riga.turn_outcome}`);
     if (!riga.model.includes('tetto per-job')) {
-      throw new Error(`la riga non dichiara di non aver visto il modello: model=${JSON.stringify(riga.model)}`);
+      throw new Error(
+        `la riga non dichiara di non aver visto il modello: model=${JSON.stringify(riga.model)}`,
+      );
     }
-    if (riga.job_id !== jobId) throw new Error(`la riga non è attribuita al job: job_id=${riga.job_id}`);
-    const counters = JSON.parse(riga.counters) as { spentUsd?: number; usage?: { inputTokens: number } };
+    if (riga.job_id !== jobId)
+      throw new Error(`la riga non è attribuita al job: job_id=${riga.job_id}`);
+    const counters = JSON.parse(riga.counters) as {
+      spentUsd?: number;
+      usage?: { inputTokens: number };
+    };
     if (counters.spentUsd !== 0 || counters.usage?.inputTokens !== 0) {
       throw new Error(`il turno rifiutato dichiara una spesa: ${riga.counters}`);
     }
@@ -185,7 +203,9 @@ async function rerankerSulJob(): Promise<void> {
     // La corsia light serve tre chiamanti; qui conta il reranker.
     // L'estrazione risponde vuota (il neutro onesto), il reranker ordina.
     light: (request) =>
-      request.transcript.includes('Ordini frammenti') ? { text: '{"order":[0,1]}' } : extraction([]),
+      request.transcript.includes('Ordini frammenti')
+        ? { text: '{"order":[0,1]}' }
+        : extraction([]),
     env: { MUFFIN_GATEWAY_TICK_MS: '300' },
   });
   try {
@@ -193,10 +213,18 @@ async function rerankerSulJob(): Promise<void> {
     await gateway.waitFor(/muffin gateway/, 20_000);
 
     const creato = await inst.muffin([
-      'jobs', 'add', '--cron', '0 8 * * *', '--channel', 'cli', '--per-job-usd', '5',
+      'jobs',
+      'add',
+      '--cron',
+      '0 8 * * *',
+      '--channel',
+      'cli',
+      '--per-job-usd',
+      '5',
       'riassumi la giornata',
     ]);
-    if (creato.code !== 0) throw new Error(`jobs add --per-job-usd: exit ${creato.code}\n${creato.err}`);
+    if (creato.code !== 0)
+      throw new Error(`jobs add --per-job-usd: exit ${creato.code}\n${creato.err}`);
     const jobId = inst.db((d) => (d.prepare(`SELECT id FROM jobs`).get() as { id: string }).id);
 
     // Abbastanza episodi che nominano la parola dell'obiettivo da superare
@@ -218,7 +246,9 @@ async function rerankerSulJob(): Promise<void> {
           createdAt: now,
         });
       }
-      db.prepare(`UPDATE jobs SET next_fire_at = ?`).run(new Date(Date.now() - 60_000).toISOString());
+      db.prepare(`UPDATE jobs SET next_fire_at = ?`).run(
+        new Date(Date.now() - 60_000).toISOString(),
+      );
     } finally {
       db.close();
     }
@@ -226,7 +256,12 @@ async function rerankerSulJob(): Promise<void> {
     await until(
       () =>
         inst.db(
-          (d) => (d.prepare(`SELECT COUNT(*) AS n FROM turns WHERE status = 'done'`).get() as { n: number }).n,
+          (d) =>
+            (
+              d.prepare(`SELECT COUNT(*) AS n FROM turns WHERE status = 'done'`).get() as {
+                n: number;
+              }
+            ).n,
         ) >= 1,
       60_000,
     );
@@ -235,7 +270,10 @@ async function rerankerSulJob(): Promise<void> {
     // che cerchiamo non potrebbe esistere e lo scenario passerebbe per il
     // motivo sbagliato.
     const rerank = inst.provider.requests.find((r) => r.transcript.includes('Ordini frammenti'));
-    if (!rerank) throw new Error('il reranker non è stato chiamato: la fixture non supera RERANK_MIN_CANDIDATES');
+    if (!rerank)
+      throw new Error(
+        'il reranker non è stato chiamato: la fixture non supera RERANK_MIN_CANDIDATES',
+      );
 
     const righe = inst.db(
       (d) =>
@@ -252,7 +290,9 @@ async function rerankerSulJob(): Promise<void> {
       );
     }
     if (light.some((r) => r.model !== rerank.model)) {
-      throw new Error(`la riga light non nomina il modello servito: ${JSON.stringify(light)} vs ${rerank.model}`);
+      throw new Error(
+        `la riga light non nomina il modello servito: ${JSON.stringify(light)} vs ${rerank.model}`,
+      );
     }
 
     await gateway.stop();
@@ -282,17 +322,28 @@ describe('acceptance · E · economia e osservabilità', () => {
           db.close();
         }
 
-        const r = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'qualsiasi cosa']);
+        const r = await inst.muffin([
+          'run',
+          '--timeout',
+          String(HEADLESS_TURN_TIMEOUT_SECONDS),
+          'qualsiasi cosa',
+        ]);
         if (r.code !== 4) {
-          throw new Error(`atteso exit 4 (budget) con il mese già sopra il tetto, trovato ${r.code}\nout: ${r.out}\nerr: ${r.err}`);
+          throw new Error(
+            `atteso exit 4 (budget) con il mese già sopra il tetto, trovato ${r.code}\nout: ${r.out}\nerr: ${r.err}`,
+          );
         }
         if (!r.out.includes('Budget esaurito')) {
-          throw new Error(`la risposta non dice che si è fermato per il budget: ${JSON.stringify(r.out)}`);
+          throw new Error(
+            `la risposta non dice che si è fermato per il budget: ${JSON.stringify(r.out)}`,
+          );
         }
         // Stopped *before* spending, not after: the fake provider must never
         // have been called.
         if (inst.provider.requests.length !== 0) {
-          throw new Error(`il modello è stato comunque chiamato ${inst.provider.requests.length} volte dopo il tetto`);
+          throw new Error(
+            `il modello è stato comunque chiamato ${inst.provider.requests.length} volte dopo il tetto`,
+          );
         }
       } finally {
         await inst.cleanup();
@@ -313,8 +364,14 @@ describe('acceptance · E · economia e osservabilità', () => {
     async () => {
       const inst = await install({ main: [{ text: 'una spesa da leggere dopo' }] });
       try {
-        const said = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'ciao']);
-        if (said.code !== 0) throw new Error(`turno per generare spesa: exit ${said.code}\n${said.err}`);
+        const said = await inst.muffin([
+          'run',
+          '--timeout',
+          String(HEADLESS_TURN_TIMEOUT_SECONDS),
+          'ciao',
+        ]);
+        if (said.code !== 0)
+          throw new Error(`turno per generare spesa: exit ${said.code}\n${said.err}`);
 
         // `/spend` is the one owner-facing surface that answers "how much has
         // today cost" in dollars — `doctor`'s "tetto di spesa" check only ever
@@ -333,10 +390,14 @@ describe('acceptance · E · economia e osservabilità', () => {
         // is a real caller and deserves its own scenario another day.
         const repl = await inst.muffin(['repl'], '/spend\n/exit\n');
         if (!/\$\d+(\.\d+)? \/ \$80 questo mese/.test(repl.err)) {
-          throw new Error(`/spend non ha stampato una cifra leggibile in dollari: ${JSON.stringify(repl.err)}`);
+          throw new Error(
+            `/spend non ha stampato una cifra leggibile in dollari: ${JSON.stringify(repl.err)}`,
+          );
         }
         if (/\$0(\.0+)? \/ \$80/.test(repl.err)) {
-          throw new Error(`/spend mostra $0 dopo un turno che ha speso — non sta leggendo la spesa reale: ${repl.err}`);
+          throw new Error(
+            `/spend mostra $0 dopo un turno che ha speso — non sta leggendo la spesa reale: ${repl.err}`,
+          );
         }
 
         // DAY-1 requirement E2 asks "so quanto costa una giornata?", not "so quanto
@@ -390,11 +451,25 @@ describe('acceptance · E · economia e osservabilità', () => {
           extractionCalls += 1;
           return extractionCalls === 1
             ? extraction([
-                { subject: 'owner', predicate: 'accountant', object: 'Marco', subjectKind: 'person', validFrom: null, confidence: 0.9 },
+                {
+                  subject: 'owner',
+                  predicate: 'accountant',
+                  object: 'Marco',
+                  subjectKind: 'person',
+                  validFrom: null,
+                  confidence: 0.9,
+                },
               ])
-          : extraction([
-              { subject: 'owner', predicate: 'accountant', object: 'Lucia', subjectKind: 'person', validFrom: null, confidence: 0.9 },
-            ]);
+            : extraction([
+                {
+                  subject: 'owner',
+                  predicate: 'accountant',
+                  object: 'Lucia',
+                  subjectKind: 'person',
+                  validFrom: null,
+                  confidence: 0.9,
+                },
+              ]);
         },
       });
       try {
@@ -402,8 +477,12 @@ describe('acceptance · E · economia e osservabilità', () => {
         // fact index on the same deterministic fake provider so this scenario
         // does not depend on a local Ollama service or record an unrelated
         // pipeline error in the review register.
-        const secret = await inst.muffin(['secret', 'set', 'fake_embed_key'], 'fake_embed_key-value');
-        if (secret.code !== 0) throw new Error(`secret set fake_embed_key: exit ${secret.code}\n${secret.err}`);
+        const secret = await inst.muffin(
+          ['secret', 'set', 'fake_embed_key'],
+          'fake_embed_key-value',
+        );
+        if (secret.code !== 0)
+          throw new Error(`secret set fake_embed_key: exit ${secret.code}\n${secret.err}`);
         const configPath = join(inst.home, 'config.json');
         const config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
         config['embedder'] = {
@@ -415,9 +494,19 @@ describe('acceptance · E · economia e osservabilità', () => {
         };
         writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
 
-        const first = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'Marco è il mio commercialista']);
+        const first = await inst.muffin([
+          'run',
+          '--timeout',
+          String(HEADLESS_TURN_TIMEOUT_SECONDS),
+          'Marco è il mio commercialista',
+        ]);
         if (first.code !== 0) throw new Error(`primo turno: exit ${first.code}\n${first.err}`);
-        const second = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'ho cambiato commercialista, ora è Lucia']);
+        const second = await inst.muffin([
+          'run',
+          '--timeout',
+          String(HEADLESS_TURN_TIMEOUT_SECONDS),
+          'ho cambiato commercialista, ora è Lucia',
+        ]);
         if (second.code !== 0) throw new Error(`secondo turno: exit ${second.code}\n${second.err}`);
 
         // `muffin run` headless never consolidates on its own (the idle timer
@@ -430,48 +519,71 @@ describe('acceptance · E · economia e osservabilità', () => {
         // (`cli/memory.ts`), and a round with one real problem should say so.
         const extract = await inst.muffin(['memory', 'extract']);
         if (extract.code !== 1) {
-          throw new Error(`muffin memory extract: atteso exit 1 (un problema reale), trovato ${extract.code}\nout: ${extract.out}\nerr: ${extract.err}`);
+          throw new Error(
+            `muffin memory extract: atteso exit 1 (un problema reale), trovato ${extract.code}\nout: ${extract.out}\nerr: ${extract.err}`,
+          );
         }
         // The manual drain prints one grouped judge summary
         // (`formatConsolidationLines`) beside the actionable per-candidate
         // conflict. The conflict carries its typed reason without repeating
         // the summary phrase; only the durable review row keeps the full
         // detail. Exactly once, not twice.
-        const judgeLineHits = extract.err.split('giudice non disponibile su owner/accountant').length - 1;
+        const judgeLineHits =
+          extract.err.split('giudice non disponibile su owner/accountant').length - 1;
         if (judgeLineHits !== 1) {
           throw new Error(
             `la riga di consolidamento dovrebbe comparire una volta sola, trovata ${judgeLineHits} volte: ${JSON.stringify(extract.err)}`,
           );
         }
-        if (!extract.err.includes('giudice non disponibile su owner/accountant — vedi muffin memory review')) {
-          throw new Error(`la riga di consolidamento non è quella attesa: ${JSON.stringify(extract.err)}`);
+        if (
+          !extract.err.includes(
+            'giudice non disponibile su owner/accountant — vedi muffin memory review',
+          )
+        ) {
+          throw new Error(
+            `la riga di consolidamento non è quella attesa: ${JSON.stringify(extract.err)}`,
+          );
         }
         if (/×\d/.test(extract.err)) {
-          throw new Error(`un solo candidato non dovrebbe portare un moltiplicatore: ${JSON.stringify(extract.err)}`);
+          throw new Error(
+            `un solo candidato non dovrebbe portare un moltiplicatore: ${JSON.stringify(extract.err)}`,
+          );
         }
 
         const quiet = await inst.muffin(['memory', 'review']);
         if (quiet.code !== 1) {
-          throw new Error(`muffin memory review: atteso exit 1 per la decisione aperta, trovato ${quiet.code}\nout: ${quiet.out}\nerr: ${quiet.err}`);
+          throw new Error(
+            `muffin memory review: atteso exit 1 per la decisione aperta, trovato ${quiet.code}\nout: ${quiet.out}\nerr: ${quiet.err}`,
+          );
         }
         if (!quiet.out.includes('giudice non disponibile su owner/accountant')) {
-          throw new Error(`la riga non nomina il fallimento del giudice: ${JSON.stringify(quiet.out)}`);
+          throw new Error(
+            `la riga non nomina il fallimento del giudice: ${JSON.stringify(quiet.out)}`,
+          );
         }
         // The typed reason is on the default view; the model's own words are
         // deliberately not, until asked for them.
         if (!quiet.out.includes('[non-json]')) {
-          throw new Error(`la ragione tipizzata non è sulla riga per default: ${JSON.stringify(quiet.out)}`);
+          throw new Error(
+            `la ragione tipizzata non è sulla riga per default: ${JSON.stringify(quiet.out)}`,
+          );
         }
         if (quiet.out.includes('risposta grezza')) {
-          throw new Error(`la risposta grezza appare senza --verbose: ${JSON.stringify(quiet.out)}`);
+          throw new Error(
+            `la risposta grezza appare senza --verbose: ${JSON.stringify(quiet.out)}`,
+          );
         }
 
         const verbose = await inst.muffin(['memory', 'review', '--verbose']);
         if (verbose.code !== 1) {
-          throw new Error(`muffin memory review --verbose: atteso exit 1 per la decisione aperta, trovato ${verbose.code}\nout: ${verbose.out}\nerr: ${verbose.err}`);
+          throw new Error(
+            `muffin memory review --verbose: atteso exit 1 per la decisione aperta, trovato ${verbose.code}\nout: ${verbose.out}\nerr: ${verbose.err}`,
+          );
         }
         if (!verbose.out.includes('risposta grezza')) {
-          throw new Error(`--verbose non aggiunge la risposta grezza: ${JSON.stringify(verbose.out)}`);
+          throw new Error(
+            `--verbose non aggiunge la risposta grezza: ${JSON.stringify(verbose.out)}`,
+          );
         }
         if (!verbose.out.includes(brokenJudgeAnswer)) {
           throw new Error(
@@ -522,30 +634,49 @@ describe('acceptance · E · economia e osservabilità', () => {
         ],
       });
       try {
-        writeFileSync(join(inst.workspace, 'appunti.txt'), `password: "${SECRET}"\naltro testo innocuo\n`);
+        writeFileSync(
+          join(inst.workspace, 'appunti.txt'),
+          `password: "${SECRET}"\naltro testo innocuo\n`,
+        );
 
-        const r = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'leggi appunti.txt']);
+        const r = await inst.muffin([
+          'run',
+          '--timeout',
+          String(HEADLESS_TURN_TIMEOUT_SECONDS),
+          'leggi appunti.txt',
+        ]);
         if (r.code !== 0) throw new Error(`il turno non completa: exit ${r.code}\n${r.err}`);
         if (r.out.includes(SECRET)) {
-          throw new Error(`la chiave finta è arrivata nella risposta finale: ${JSON.stringify(r.out)}`);
+          throw new Error(
+            `la chiave finta è arrivata nella risposta finale: ${JSON.stringify(r.out)}`,
+          );
         }
 
         const call = inst.db(
           (db) =>
             db
-              .prepare(`SELECT content FROM turn_tool_calls WHERE tool = 'fs_read' ORDER BY started_at DESC LIMIT 1`)
+              .prepare(
+                `SELECT content FROM turn_tool_calls WHERE tool = 'fs_read' ORDER BY started_at DESC LIMIT 1`,
+              )
               .get() as { content: string | null } | undefined,
         );
         if (!call) throw new Error('nessuna fs_read registrata');
         if ((call.content ?? '').includes(SECRET)) {
-          throw new Error(`turn_tool_calls.content porta la chiave in chiaro: ${JSON.stringify(call.content)}`);
+          throw new Error(
+            `turn_tool_calls.content porta la chiave in chiaro: ${JSON.stringify(call.content)}`,
+          );
         }
         if (!(call.content ?? '').includes('«redacted:')) {
-          throw new Error(`nessun marcatore di redazione nel content registrato: ${JSON.stringify(call.content)}`);
+          throw new Error(
+            `nessun marcatore di redazione nel content registrato: ${JSON.stringify(call.content)}`,
+          );
         }
 
         const turnRow = inst.db(
-          (db) => db.prepare(`SELECT messages FROM turns ORDER BY created_at DESC LIMIT 1`).get() as { messages: string },
+          (db) =>
+            db.prepare(`SELECT messages FROM turns ORDER BY created_at DESC LIMIT 1`).get() as {
+              messages: string;
+            },
         );
         if (turnRow.messages.includes(SECRET)) {
           throw new Error('turns.messages porta la chiave in chiaro');
@@ -554,44 +685,73 @@ describe('acceptance · E · economia e osservabilità', () => {
         // --- reconstruction: an arbitrary (second) turn, found again by its
         //     own printed id, and only that turn's evidence ------------------
         mkdirSync(join(inst.workspace, 'una-sottocartella'), { recursive: true });
-        const second = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'elenca il contenuto di una-sottocartella']);
-        if (second.code !== 0) throw new Error(`il secondo turno non completa: exit ${second.code}\n${second.err}`);
+        const second = await inst.muffin([
+          'run',
+          '--timeout',
+          String(HEADLESS_TURN_TIMEOUT_SECONDS),
+          'elenca il contenuto di una-sottocartella',
+        ]);
+        if (second.code !== 0)
+          throw new Error(`il secondo turno non completa: exit ${second.code}\n${second.err}`);
 
         const traceIdOf = (run: Run): string => {
           const m = /trace ([0-9a-f]+)/.exec(run.err);
-          if (!m) throw new Error(`nessun trace id nell'output del turno: ${JSON.stringify(run.err)}`);
+          if (!m)
+            throw new Error(`nessun trace id nell'output del turno: ${JSON.stringify(run.err)}`);
           return m[1]!;
         };
         const traceA = traceIdOf(r);
         const traceB = traceIdOf(second);
-        if (traceA === traceB) throw new Error('i due turni condividono lo stesso trace id — fixture inutile');
+        if (traceA === traceB)
+          throw new Error('i due turni condividono lo stesso trace id — fixture inutile');
 
         // `trace turn <id>` — the id the SECOND turn printed for itself.
         const turnB = await inst.muffin(['trace', 'turn', traceB]);
-        if (turnB.code !== 0) throw new Error(`muffin trace turn ${traceB}: exit ${turnB.code}\n${turnB.out}${turnB.err}`);
+        if (turnB.code !== 0)
+          throw new Error(
+            `muffin trace turn ${traceB}: exit ${turnB.code}\n${turnB.out}${turnB.err}`,
+          );
         if (!turnB.out.includes('fs_list')) {
-          throw new Error(`\`trace turn\` non ricostruisce la tool call del secondo turno (fs_list): ${turnB.out}`);
+          throw new Error(
+            `\`trace turn\` non ricostruisce la tool call del secondo turno (fs_list): ${turnB.out}`,
+          );
         }
         if (turnB.out.includes('fs_read')) {
-          throw new Error(`\`trace turn\` del secondo turno include anche lo step del primo (fs_read) — non isola il turno chiesto: ${turnB.out}`);
+          throw new Error(
+            `\`trace turn\` del secondo turno include anche lo step del primo (fs_read) — non isola il turno chiesto: ${turnB.out}`,
+          );
         }
 
         // The same isolation, the other direction — proves it is not an
         // accident of which turn happened to run last.
         const turnA = await inst.muffin(['trace', 'turn', traceA]);
-        if (turnA.code !== 0) throw new Error(`muffin trace turn ${traceA}: exit ${turnA.code}\n${turnA.out}${turnA.err}`);
-        if (!turnA.out.includes('fs_read')) throw new Error(`\`trace turn\` non ricostruisce la tool call del primo turno (fs_read): ${turnA.out}`);
+        if (turnA.code !== 0)
+          throw new Error(
+            `muffin trace turn ${traceA}: exit ${turnA.code}\n${turnA.out}${turnA.err}`,
+          );
+        if (!turnA.out.includes('fs_read'))
+          throw new Error(
+            `\`trace turn\` non ricostruisce la tool call del primo turno (fs_read): ${turnA.out}`,
+          );
         if (turnA.out.includes('fs_list')) {
-          throw new Error(`\`trace turn\` del primo turno include anche lo step del secondo (fs_list): ${turnA.out}`);
+          throw new Error(
+            `\`trace turn\` del primo turno include anche lo step del secondo (fs_list): ${turnA.out}`,
+          );
         }
 
         // `trace grep PATTERN` — the other reconstruction path the row names,
         // searched by content rather than by id.
         const grepped = await inst.muffin(['trace', 'grep', 'fs_list']);
-        if (grepped.code !== 0) throw new Error(`muffin trace grep fs_list: exit ${grepped.code}\n${grepped.out}${grepped.err}`);
-        if (!grepped.out.includes('fs_list')) throw new Error(`\`trace grep fs_list\` non trova lo span atteso: ${grepped.out}`);
+        if (grepped.code !== 0)
+          throw new Error(
+            `muffin trace grep fs_list: exit ${grepped.code}\n${grepped.out}${grepped.err}`,
+          );
+        if (!grepped.out.includes('fs_list'))
+          throw new Error(`\`trace grep fs_list\` non trova lo span atteso: ${grepped.out}`);
         if (grepped.out.includes('fs_read')) {
-          throw new Error(`\`trace grep fs_list\` ha trovato anche uno span del primo turno: ${grepped.out}`);
+          throw new Error(
+            `\`trace grep fs_list\` ha trovato anche uno span del primo turno: ${grepped.out}`,
+          );
         }
       } finally {
         await inst.cleanup();
@@ -633,24 +793,35 @@ describe('acceptance · E · economia e osservabilità', () => {
         ],
       });
       try {
-        const first = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'spiegami tecnicamente come funzioni e cosa stai usando adesso']);
+        const first = await inst.muffin([
+          'run',
+          '--timeout',
+          String(HEADLESS_TURN_TIMEOUT_SECONDS),
+          'spiegami tecnicamente come funzioni e cosa stai usando adesso',
+        ]);
         if (first.code !== 0) throw new Error(`primo turno: exit ${first.code}\n${first.err}`);
 
         // Il tool_result di sys_inspect viaggia dentro la SECONDA richiesta al
         // modello finto (la prima è quella che ha chiesto sys_inspect).
         const beforeCalls = inst.provider.main();
         if (beforeCalls.length < 2) {
-          throw new Error(`atteso un secondo giro dopo sys_inspect, chiamate: ${beforeCalls.length}`);
+          throw new Error(
+            `atteso un secondo giro dopo sys_inspect, chiamate: ${beforeCalls.length}`,
+          );
         }
         const before = beforeCalls[1]!.transcript;
         if (!before.includes('modello: anthropic/claude-sonnet-5 (main)')) {
-          throw new Error(`il report non nomina il modello main iniziale, letto dalla config reale:\n${before}`);
+          throw new Error(
+            `il report non nomina il modello main iniziale, letto dalla config reale:\n${before}`,
+          );
         }
         if (!before.includes('root of trust: single-user, integro')) {
           throw new Error(`il report non nomina lo stato live del root of trust:\n${before}`);
         }
         if (!before.includes('sys_inspect')) {
-          throw new Error(`il report non elenca sys_inspect fra le capability esposte a questo turno:\n${before}`);
+          throw new Error(
+            `il report non elenca sys_inspect fra le capability esposte a questo turno:\n${before}`,
+          );
         }
 
         // La condizione reale cambia: nessuna finzione, `muffin model` scrive
@@ -658,18 +829,29 @@ describe('acceptance · E · economia e osservabilità', () => {
         // generico: il provider finto non è mai in nessun catalogo noto).
         const cambiato = await inst.muffin(['model', 'main', 'test-model-e7-live']);
         if (cambiato.code !== 0) {
-          throw new Error(`muffin model main: exit ${cambiato.code}\nout: ${cambiato.out}\nerr: ${cambiato.err}`);
+          throw new Error(
+            `muffin model main: exit ${cambiato.code}\nout: ${cambiato.out}\nerr: ${cambiato.err}`,
+          );
         }
         if (!cambiato.out.includes('test-model-e7-live')) {
-          throw new Error(`muffin model non conferma la scrittura: ${JSON.stringify(cambiato.out)}`);
+          throw new Error(
+            `muffin model non conferma la scrittura: ${JSON.stringify(cambiato.out)}`,
+          );
         }
 
-        const second = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'spiegami di nuovo tecnicamente cosa stai usando adesso']);
+        const second = await inst.muffin([
+          'run',
+          '--timeout',
+          String(HEADLESS_TURN_TIMEOUT_SECONDS),
+          'spiegami di nuovo tecnicamente cosa stai usando adesso',
+        ]);
         if (second.code !== 0) throw new Error(`secondo turno: exit ${second.code}\n${second.err}`);
 
         const afterCalls = inst.provider.main();
         if (afterCalls.length < 4) {
-          throw new Error(`atteso un quarto giro dopo il secondo sys_inspect, chiamate: ${afterCalls.length}`);
+          throw new Error(
+            `atteso un quarto giro dopo il secondo sys_inspect, chiamate: ${afterCalls.length}`,
+          );
         }
         const after = afterCalls[3]!.transcript;
         // Design ≠ stato live è esattamente il punto della riga: se
@@ -678,10 +860,14 @@ describe('acceptance · E · economia e osservabilità', () => {
         // asserzione lo scoprirebbe qui, non a mano sull'installazione
         // dell'owner.
         if (!after.includes('modello: test-model-e7-live (main)')) {
-          throw new Error(`il report NON riflette il cambio di modello reale — recita ancora lo stato vecchio:\n${after}`);
+          throw new Error(
+            `il report NON riflette il cambio di modello reale — recita ancora lo stato vecchio:\n${after}`,
+          );
         }
         if (after.includes('anthropic/claude-sonnet-5')) {
-          throw new Error(`il report ripete ancora il modello iniziale dopo il cambio: BROKEN, non distingue design da live:\n${after}`);
+          throw new Error(
+            `il report ripete ancora il modello iniziale dopo il cambio: BROKEN, non distingue design da live:\n${after}`,
+          );
         }
       } finally {
         await inst.cleanup();
