@@ -1,11 +1,11 @@
 import { z } from 'zod';
-import type { CapabilityDecl } from '../../core/policy/types.js';
-import type { ToolSpec } from '../providers/types.js';
-import { fence } from '../../core/memory/spotlight.js';
-import { SEARCH_PROVIDERS } from '../../core/config/providers.js';
-import type { RegisteredTool } from '../loop.js';
 import type { Config } from '../../core/config/config.js';
-import { hostAllowed, type EgressPolicy } from '../../core/net/egress.js';
+import { SEARCH_PROVIDERS } from '../../core/config/providers.js';
+import { fence } from '../../core/memory/spotlight.js';
+import { type EgressPolicy, hostAllowed } from '../../core/net/egress.js';
+import type { CapabilityDecl } from '../../core/policy/types.js';
+import type { RegisteredTool } from '../loop.js';
+import type { ToolSpec } from '../providers/types.js';
 import type { CapabilityGap } from './capability-status.js';
 
 /**
@@ -157,12 +157,16 @@ export function tavilyBackend(options: TavilyOptions): SearchBackend {
       });
 
       if (!response.ok) {
-        throw new Error(`tavily ${response.status}${response.status === 401 ? ' — chiave non valida' : ''}`);
+        throw new Error(
+          `tavily ${response.status}${response.status === 401 ? ' — chiave non valida' : ''}`,
+        );
       }
 
       const parsed = TavilyResponse.safeParse(await response.json());
       if (!parsed.success) {
-        throw new Error(`risposta non riconosciuta: ${parsed.error.issues[0]?.message ?? 'schema'}`);
+        throw new Error(
+          `risposta non riconosciuta: ${parsed.error.issues[0]?.message ?? 'schema'}`,
+        );
       }
 
       return parsed.data.results.map((r) => ({
@@ -312,7 +316,12 @@ export function diagnoseSearch(
     const remedy = (error as { remedy?: unknown }).remedy;
     return {
       on: false,
-      gap: { capability: 'web_search', kind: 'disabled', reason, remedy: typeof remedy === 'string' ? remedy : null },
+      gap: {
+        capability: 'web_search',
+        kind: 'disabled',
+        reason,
+        remedy: typeof remedy === 'string' ? remedy : null,
+      },
     };
   }
 
@@ -345,7 +354,11 @@ export function makeSearchTool(backend: SearchBackend): RegisteredTool {
     handler: async (args) => {
       const parsed = searchArgs.safeParse(args);
       if (!parsed.success) {
-        return { content: 'invalid arguments: query is required (max 400 chars)', isError: true, tier: 0 };
+        return {
+          content: 'invalid arguments: query is required (max 400 chars)',
+          isError: true,
+          tier: 0,
+        };
       }
 
       let hits: SearchHit[];

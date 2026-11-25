@@ -1,8 +1,23 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { discordOwner, loadSealedOwner, OWNER_FILE, sealOwnerBinding, telegramOwner } from './owner.js';
+import {
+  discordOwner,
+  loadSealedOwner,
+  OWNER_FILE,
+  sealOwnerBinding,
+  telegramOwner,
+} from './owner.js';
 import { seal, verify } from './verify.js';
 
 /**
@@ -38,28 +53,42 @@ describe('rot/owner.json — lettura e precedenza', () => {
     const dir = casa();
     const sealed = loadSealedOwner(dir);
     expect(sealed.source).toBe('legacy');
-    expect(telegramOwner(sealed, { ownerUserId: 111, ownerChatId: 111 })).toEqual({ userId: 111, chatId: 111 });
+    expect(telegramOwner(sealed, { ownerUserId: 111, ownerChatId: 111 })).toEqual({
+      userId: 111,
+      chatId: 111,
+    });
     expect(discordOwner(sealed, { ownerUserId: '222' })).toEqual({ userId: '222' });
   });
 
   it('un legame sigillato vince su config.json, che non viene nemmeno letto', () => {
     const dir = casa();
-    expect(sealOwnerBinding(dir, { telegram: { userId: 999, chatId: 999 } }, { out }).ok).toBe(true);
+    expect(sealOwnerBinding(dir, { telegram: { userId: 999, chatId: 999 } }, { out }).ok).toBe(
+      true,
+    );
 
     const sealed = loadSealedOwner(dir);
     expect(sealed.source).toBe('sealed');
     // config.json nomina un altro: resta uno sconosciuto.
-    expect(telegramOwner(sealed, { ownerUserId: 111, ownerChatId: 111 })).toEqual({ userId: 999, chatId: 999 });
+    expect(telegramOwner(sealed, { ownerUserId: 111, ownerChatId: 111 })).toEqual({
+      userId: 999,
+      chatId: 999,
+    });
   });
 
   it('un owner.json valido vince su config.json anche dopo un edit a mano (ADR-0108, niente sigillo)', () => {
     const dir = casa();
     sealOwnerBinding(dir, { telegram: { userId: 999, chatId: 999 } }, { out });
-    writeFileSync(join(dir, 'rot', OWNER_FILE), JSON.stringify({ schemaVersion: 1, telegram: { userId: 111, chatId: 111 } }));
+    writeFileSync(
+      join(dir, 'rot', OWNER_FILE),
+      JSON.stringify({ schemaVersion: 1, telegram: { userId: 111, chatId: 111 } }),
+    );
 
     const sealed = loadSealedOwner(dir);
     expect(sealed.source).toBe('sealed');
-    expect(telegramOwner(sealed, { ownerUserId: 999, ownerChatId: 999 })).toEqual({ userId: 111, chatId: 111 });
+    expect(telegramOwner(sealed, { ownerUserId: 999, ownerChatId: 999 })).toEqual({
+      userId: 111,
+      chatId: 111,
+    });
     expect(discordOwner(sealed, { ownerUserId: '111' })).toEqual({ userId: '111' });
   });
 
@@ -70,17 +99,25 @@ describe('rot/owner.json — lettura e precedenza', () => {
 
     const sealed = loadSealedOwner(dir);
     expect(sealed.source).toBe('legacy');
-    expect(telegramOwner(sealed, { ownerUserId: 111, ownerChatId: 111 })).toEqual({ userId: 111, chatId: 111 });
+    expect(telegramOwner(sealed, { ownerUserId: 111, ownerChatId: 111 })).toEqual({
+      userId: 111,
+      chatId: 111,
+    });
   });
 
   it('un manifest o un anchor divergenti non nascondono un owner.json valido (ADR-0108)', () => {
     const dir = casa();
     sealOwnerBinding(dir, { telegram: { userId: 999, chatId: 999 } }, { out });
-    writeFileSync(join(dir, 'rot', OWNER_FILE), JSON.stringify({ schemaVersion: 1, telegram: { userId: 111, chatId: 111 } }));
+    writeFileSync(
+      join(dir, 'rot', OWNER_FILE),
+      JSON.stringify({ schemaVersion: 1, telegram: { userId: 111, chatId: 111 } }),
+    );
     const manifest = JSON.parse(readFileSync(join(dir, 'rot', 'manifest.json'), 'utf8')) as {
       files: { path: string; sha256: string }[];
     };
-    manifest.files = manifest.files.map((f) => (f.path === OWNER_FILE ? { ...f, sha256: 'deadbeef' } : f));
+    manifest.files = manifest.files.map((f) =>
+      f.path === OWNER_FILE ? { ...f, sha256: 'deadbeef' } : f,
+    );
     writeFileSync(join(dir, 'rot', 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 
     const sealed = loadSealedOwner(dir);
@@ -90,17 +127,26 @@ describe('rot/owner.json — lettura e precedenza', () => {
 
   it('un owner.json scritto a mano è vincolante senza reseal (ADR-0108)', () => {
     const dir = casa();
-    writeFileSync(join(dir, 'rot', OWNER_FILE), JSON.stringify({ schemaVersion: 1, telegram: { userId: 111, chatId: 111 } }));
+    writeFileSync(
+      join(dir, 'rot', OWNER_FILE),
+      JSON.stringify({ schemaVersion: 1, telegram: { userId: 111, chatId: 111 } }),
+    );
     const sealed = loadSealedOwner(dir);
     expect(sealed.source).toBe('sealed');
-    expect(telegramOwner(sealed, { ownerUserId: 999, ownerChatId: 999 })).toEqual({ userId: 111, chatId: 111 });
+    expect(telegramOwner(sealed, { ownerUserId: 999, ownerChatId: 999 })).toEqual({
+      userId: 111,
+      chatId: 111,
+    });
   });
 
   it('un legame sigillato ma con la forma sbagliata è rifiutato, non ignorato', () => {
     const dir = casa();
     // `userId` come stringa su Telegram: passerebbe un `JSON.parse` e non
     // farebbe mai match con l'id numerico che riporta la piattaforma.
-    writeFileSync(join(dir, 'rot', OWNER_FILE), JSON.stringify({ schemaVersion: 1, telegram: { userId: '999', chatId: 999 } }));
+    writeFileSync(
+      join(dir, 'rot', OWNER_FILE),
+      JSON.stringify({ schemaVersion: 1, telegram: { userId: '999', chatId: 999 } }),
+    );
     seal(dir, '0.0.0', NOW);
 
     const sealed = loadSealedOwner(dir);
@@ -110,7 +156,10 @@ describe('rot/owner.json — lettura e precedenza', () => {
 
   it('una schemaVersion che questa build non conosce è rifiutata', () => {
     const dir = casa();
-    writeFileSync(join(dir, 'rot', OWNER_FILE), JSON.stringify({ schemaVersion: 2, telegram: { userId: 999, chatId: 999 } }));
+    writeFileSync(
+      join(dir, 'rot', OWNER_FILE),
+      JSON.stringify({ schemaVersion: 2, telegram: { userId: 999, chatId: 999 } }),
+    );
     seal(dir, '0.0.0', NOW);
     expect(loadSealedOwner(dir).source).toBe('refused');
   });
@@ -121,7 +170,10 @@ describe('rot/owner.json — lettura e precedenza', () => {
     const sealed = loadSealedOwner(dir);
     expect(sealed.source).toBe('sealed');
     expect(discordOwner(sealed, undefined)).toEqual({ userId: '222' });
-    expect(telegramOwner(sealed, { ownerUserId: 111, ownerChatId: 111 })).toEqual({ userId: 111, chatId: 111 });
+    expect(telegramOwner(sealed, { ownerUserId: 111, ownerChatId: 111 })).toEqual({
+      userId: 111,
+      chatId: 111,
+    });
   });
 });
 

@@ -1084,7 +1084,9 @@ describe('acceptance · A4 · config: hand-edit binds, reseal is retired', () =>
         // --- (d) `muffin rot reseal` is retired (exit 78) -------------------
         const reseal = await inst.muffin(['rot', 'reseal']);
         if (reseal.code !== 78)
-          throw new Error(`muffin rot reseal: atteso exit 78 (ritirato), ricevuto ${reseal.code}\n${reseal.out}${reseal.err}`);
+          throw new Error(
+            `muffin rot reseal: atteso exit 78 (ritirato), ricevuto ${reseal.code}\n${reseal.out}${reseal.err}`,
+          );
         if (!/ADR-0108|nothing to reseal|retired/i.test(`${reseal.out}${reseal.err}`)) {
           throw new Error(
             `muffin rot reseal non spiega il ritiro: ${JSON.stringify(reseal.out + reseal.err)}`,

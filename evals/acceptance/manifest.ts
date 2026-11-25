@@ -85,7 +85,10 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'A3',
     'persona: the sealed identity register rule reaches the real system prompt, the voce skill is catalogued but its body is not in the prefix, and `muffin prompt show` on the same home is byte-identical to what the provider actually received',
   ),
-  verde('A5', 'doctor: an owner edit to rot/policy.json stays ok on root of trust, names the file informatively, and does not recommend a reseal (ADR-0108)'),
+  verde(
+    'A5',
+    'doctor: an owner edit to rot/policy.json stays ok on root of trust, names the file informatively, and does not recommend a reseal (ADR-0108)',
+  ),
   // New (slice/journey-lifecycle): the row was BLOCKER only for a missing
   // scenario — `muffin config` is read-only by design (ADR-0036,
   // `cli/config.ts:7,22-37`) and the mechanism (`listConfigKnobs`, `muffin

@@ -279,7 +279,7 @@ describe('doctor distinguishes seal checking from OS write protection', () => {
     const dir = home();
     const c = await check(dir, 'root of trust mode');
     expect(c?.level).toBe('ok');
-    expect(c?.detail).toContain("rot/");
+    expect(c?.detail).toContain('rot/');
     expect(c?.detail).toMatch(/ADR-0108|nessun sigillo/i);
     expect(c?.remedy).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });

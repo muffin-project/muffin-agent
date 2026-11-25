@@ -2,15 +2,20 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { runInit } from './init.js';
-import { cmdSearch } from './search-setup.js';
 import { loadConfig, paths, saveConfig } from '../core/config/config.js';
 import { SEARCH_PROVIDERS } from '../core/config/providers.js';
 import { verify } from '../core/rot/verify.js';
+import { runInit } from './init.js';
+import { cmdSearch } from './search-setup.js';
 
 function home(): string {
   const h = mkdtempSync(join(tmpdir(), 'muffin-search-'));
-  runInit({ home: h, provider: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'sk-or-fake' });
+  runInit({
+    home: h,
+    provider: 'openai-compat',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    apiKey: 'sk-or-fake',
+  });
   return h;
 }
 
@@ -104,7 +109,10 @@ describe('muffin search', () => {
   it('con la chiave in pipe scrive il segreto e la config, e non stampa la chiave', async () => {
     const h = home();
     const { out, sink } = raccogli();
-    const code = await cmdSearch(h, ['tavily'], { out: sink, readKey: () => 'tvly-segretissima\n' });
+    const code = await cmdSearch(h, ['tavily'], {
+      out: sink,
+      readKey: () => 'tvly-segretissima\n',
+    });
     // Nessun `chiediConferma`: la chiave e la config si scrivono comunque, ma
     // senza un terminale l'egress non si allarga — e da qui in poi l'exit
     // code lo dice (1), non più 0 sempre: la stessa convenzione di `mcp add`.
@@ -237,7 +245,11 @@ describe('muffin search', () => {
     const egressPath = join(paths(h).rot, 'egress.json');
     writeFileSync(
       egressPath,
-      JSON.stringify({ schemaVersion: 1, allow: [], nota_owner: 'non toccare, serve al progetto Y' }, null, 2),
+      JSON.stringify(
+        { schemaVersion: 1, allow: [], nota_owner: 'non toccare, serve al progetto Y' },
+        null,
+        2,
+      ),
     );
     const code = await cmdSearch(h, ['tavily'], {
       out: () => {},

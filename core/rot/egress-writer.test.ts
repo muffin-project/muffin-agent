@@ -1,12 +1,12 @@
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir, platform } from 'node:os';
+import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runInit } from '../../cli/init.js';
-import { isValidEgressHost, widenEgressForCapability } from './egress-writer.js';
-import { verify } from './verify.js';
 import { paths } from '../config/config.js';
 import { hostAllowed, isForbiddenAddress } from '../net/egress.js';
+import { isValidEgressHost, widenEgressForCapability } from './egress-writer.js';
+import { verify } from './verify.js';
 
 /**
  * `writeFileSync` reale per ogni chiamata, tranne quando `guasto.armato` è
@@ -30,7 +30,9 @@ vi.mock('node:fs', async (importOriginal) => {
       if (guasto.armato) {
         guasto.chiamate += 1;
         if (guasto.chiamate > 1) {
-          throw Object.assign(new Error('EACCES: permission denied, open (mock)'), { code: 'EACCES' });
+          throw Object.assign(new Error('EACCES: permission denied, open (mock)'), {
+            code: 'EACCES',
+          });
         }
       }
       return vero.writeFileSync(...args);
@@ -40,7 +42,12 @@ vi.mock('node:fs', async (importOriginal) => {
 
 function home(): string {
   const h = mkdtempSync(join(tmpdir(), 'muffin-egress-writer-'));
-  runInit({ home: h, provider: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'sk-or-fake' });
+  runInit({
+    home: h,
+    provider: 'openai-compat',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    apiKey: 'sk-or-fake',
+  });
   return h;
 }
 
@@ -58,7 +65,10 @@ describe('widenEgressForCapability', () => {
     const h = home();
     const egressPath = join(paths(h).rot, 'egress.json');
     const prima = readFileSync(egressPath, 'utf8');
-    writeFileSync(egressPath, JSON.stringify({ schemaVersion: 1, allow: ['gia-dentro.example'] }, null, 2));
+    writeFileSync(
+      egressPath,
+      JSON.stringify({ schemaVersion: 1, allow: ['gia-dentro.example'] }, null, 2),
+    );
     let chiesto = 0;
     const out = widenEgressForCapability(h, ['gia-dentro.example'], 'test', {
       out: () => {},
@@ -82,7 +92,9 @@ describe('widenEgressForCapability', () => {
   it('senza terminale (chiediConferma assente): rifiuta, non scrive, stampa il rimedio a mano', async () => {
     const h = home();
     const { out, sink } = raccogli();
-    const esito = await widenEgressForCapability(h, ['api.tavily.com'], 'la ricerca web (Tavily)', { out: sink });
+    const esito = await widenEgressForCapability(h, ['api.tavily.com'], 'la ricerca web (Tavily)', {
+      out: sink,
+    });
     expect(esito.ok).toBe(false);
     expect(egressAllow(h)).toEqual([]);
     const testo = out.join('\n');
@@ -140,7 +152,11 @@ describe('widenEgressForCapability', () => {
     const egressPath = join(paths(h).rot, 'egress.json');
     writeFileSync(
       egressPath,
-      JSON.stringify({ _comment: 'nota owner', schemaVersion: 1, allow: ['altro.example'] }, null, 2),
+      JSON.stringify(
+        { _comment: 'nota owner', schemaVersion: 1, allow: ['altro.example'] },
+        null,
+        2,
+      ),
     );
     await widenEgressForCapability(h, ['nuovo.example'], 'test', {
       out: () => {},
@@ -291,10 +307,15 @@ describe('widenEgressForCapability — host non valido: rifiuta prima di chieder
 
   it('un host valido insieme a uno non valido: rifiuta tutto, non ne scrive nemmeno uno', async () => {
     const h = home();
-    const esito = await widenEgressForCapability(h, ['api.tavily.com', 'https://evil.example/'], 'test', {
-      out: () => {},
-      chiediConferma: () => Promise.resolve('s'),
-    });
+    const esito = await widenEgressForCapability(
+      h,
+      ['api.tavily.com', 'https://evil.example/'],
+      'test',
+      {
+        out: () => {},
+        chiediConferma: () => Promise.resolve('s'),
+      },
+    );
     expect(esito.ok).toBe(false);
     expect(egressAllow(h)).toEqual([]);
   });
@@ -350,10 +371,15 @@ describe('widenEgressForCapability — permesso negato al risigillo', () => {
       chmodSync(egressPath, 0o400);
       try {
         const { out, sink } = raccogli();
-        const esito = await widenEgressForCapability(h, ['api.tavily.com'], 'la ricerca web (Tavily)', {
-          out: sink,
-          chiediConferma: () => Promise.resolve('s'),
-        });
+        const esito = await widenEgressForCapability(
+          h,
+          ['api.tavily.com'],
+          'la ricerca web (Tavily)',
+          {
+            out: sink,
+            chiediConferma: () => Promise.resolve('s'),
+          },
+        );
         expect(esito.ok).toBe(false);
         expect(out.join('\n')).toMatch(/permesso negato/);
       } finally {
@@ -389,10 +415,15 @@ describe('widenEgressForCapability — permesso negato al risigillo', () => {
       chmodSync(anchorPath, 0o400);
       try {
         const { out, sink } = raccogli();
-        const esito = await widenEgressForCapability(h, ['api.tavily.com'], 'la ricerca web (Tavily)', {
-          out: sink,
-          chiediConferma: () => Promise.resolve('s'),
-        });
+        const esito = await widenEgressForCapability(
+          h,
+          ['api.tavily.com'],
+          'la ricerca web (Tavily)',
+          {
+            out: sink,
+            chiediConferma: () => Promise.resolve('s'),
+          },
+        );
         expect(esito.ok).toBe(false);
       } finally {
         chmodSync(anchorPath, 0o600);
@@ -433,10 +464,15 @@ describe('widenEgressForCapability — permesso negato al risigillo', () => {
     guasto.chiamate = 0;
     guasto.armato = true;
     try {
-      const esito = await widenEgressForCapability(h, ['api.tavily.com'], 'la ricerca web (Tavily)', {
-        out: sink,
-        chiediConferma: () => Promise.resolve('s'),
-      });
+      const esito = await widenEgressForCapability(
+        h,
+        ['api.tavily.com'],
+        'la ricerca web (Tavily)',
+        {
+          out: sink,
+          chiediConferma: () => Promise.resolve('s'),
+        },
+      );
       expect(esito.ok).toBe(false);
     } finally {
       guasto.armato = false;
@@ -547,7 +583,11 @@ describe('widenEgressForCapability — una chiave sconosciuta scritta dall owner
     writeFileSync(
       egressPath,
       JSON.stringify(
-        { schemaVersion: 1, allow: ['gia-dentro.example'], nota_owner: 'aggiunto per il progetto X, non toccare' },
+        {
+          schemaVersion: 1,
+          allow: ['gia-dentro.example'],
+          nota_owner: 'aggiunto per il progetto X, non toccare',
+        },
         null,
         2,
       ),
