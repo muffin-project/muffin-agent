@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { capability, withReason } from '../../test-support/requires.js';
 import { DRAIN_BUDGET_MS, EXIT_STOPPED } from './service.js';
 import {
   EXIT_PERMANENT,
@@ -291,6 +292,9 @@ describe('a permanent failure stays down and says so', () => {
   });
 });
 
+/** Il parser vero, misurato una volta per run dal globalSetup. */
+const systemdAnalyze = capability('systemd-analyze');
+
 describe('la unit systemd passa il parser di systemd', () => {
   /**
    * La controparte Linux di `plutil -lint`, e per due anni non c'è stata.
@@ -312,42 +316,31 @@ describe('la unit systemd passa il parser di systemd', () => {
    * assente, e una lamentela legittima su un finto path renderebbe il test
    * rumoroso invece che informativo.
    */
-  it('produces a systemd unit the system itself accepts', () => {
-    const required = process.env['MUFFIN_REQUIRE_SYSTEMD'] === '1';
-    if (process.platform !== 'linux' && !required) return;
+  // Prima qui c'era un `return` fuori da Linux: il test risultava *passato*
+  // senza aver chiesto niente a systemd. Ora salta, e il nome dice perché.
+  // Dove il parser è preteso (`MUFFIN_REQUIRE_CAPABILITIES=systemd-analyze`, o
+  // l'alias `MUFFIN_REQUIRE_SYSTEMD=1` in CI) la sua assenza ferma la run nel
+  // globalSetup: `test-support/capabilities.ts`.
+  it.skipIf(!systemdAnalyze.ok)(
+    withReason('produces a systemd unit the system itself accepts', systemdAnalyze),
+    () => {
+      const dir = mkdtempSync(join(tmpdir(), 'muffin-unit-'));
+      const launcher = join(dir, 'muffin');
+      writeFileSync(launcher, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      const file = join(dir, 'muffin-gateway.service');
+      writeFileSync(file, plan({ home: dir, exec: [launcher, 'gateway', 'run'] }).text);
 
-    const probe = spawnSync('systemd-analyze', ['--version'], { encoding: 'utf8' });
-    const haveParser = probe.error === undefined && probe.status === 0;
-    if (!haveParser) {
-      // Su Linux con MUFFIN_REQUIRE_SYSTEMD=1 (la CI, che sta al posto della
-      // VPS) un parser assente è un difetto della macchina di prova, non una
-      // proprietà da assecondare in silenzio — stessa disciplina di
-      // MUFFIN_REQUIRE_SANDBOX in `core/sandbox/executor.test.ts`.
-      if (required) {
-        throw new Error(
-          `MUFFIN_REQUIRE_SYSTEMD=1 ma systemd-analyze non è eseguibile qui ` +
-            `(${probe.error?.message ?? `exit ${String(probe.status)}`}): la unit di produzione resterebbe non verificata`,
-        );
-      }
-      return;
-    }
-
-    const dir = mkdtempSync(join(tmpdir(), 'muffin-unit-'));
-    const launcher = join(dir, 'muffin');
-    writeFileSync(launcher, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-    const file = join(dir, 'muffin-gateway.service');
-    writeFileSync(file, plan({ home: dir, exec: [launcher, 'gateway', 'run'] }).text);
-
-    const verify = spawnSync('systemd-analyze', ['verify', file], { encoding: 'utf8' });
-    // Host units that systemd walks are not this file. Ubuntu 26.04's image
-    // warns that CPUAccounting= was removed from xfs_scrub and the guest
-    // agent; those lines do not say the muffin unit was rejected.
-    const relevant = systemdDiagnosticsForUnit(
-      file,
-      `${verify.stdout ?? ''}${verify.stderr ?? ''}`,
-    );
-    expect(relevant).toBe('');
-  });
+      const verify = spawnSync('systemd-analyze', ['verify', file], { encoding: 'utf8' });
+      // Host units that systemd walks are not this file. Ubuntu 26.04's image
+      // warns that CPUAccounting= was removed from xfs_scrub and the guest
+      // agent; those lines do not say the muffin unit was rejected.
+      const relevant = systemdDiagnosticsForUnit(
+        file,
+        `${verify.stdout ?? ''}${verify.stderr ?? ''}`,
+      );
+      expect(relevant).toBe('');
+    },
+  );
 });
 
 describe('systemd-analyze diagnostics', () => {
