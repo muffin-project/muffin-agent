@@ -542,6 +542,27 @@ describe('ChatGPT plan OAuth credentials', () => {
     expect(connection.session()).toMatchObject({ usable: true, accessExpired: false });
   });
 
+  it('keeps a plan usage-limit refusal until a reply succeeds, without touching tokens', async () => {
+    const path = home();
+    seedExpiredGrant(path);
+    const service = fakeFetch();
+    const connection = new ChatGPTConnection(path, { fetch: service.fetchImpl });
+    await connection.accessToken();
+    const before = connection.session();
+    expect(before).toMatchObject({ usable: true, planLimited: false });
+
+    await connection.recordPlanUsage(true);
+    const limited = connection.session();
+    expect(limited).toMatchObject({ usable: false, renewable: true, planLimited: true });
+    expect(limited?.planLimitedAt).toEqual(expect.any(Number));
+    expect(limited?.expiresAt).toBe(before?.expiresAt);
+    await expect(connection.accessToken()).resolves.toBe('access-rotated-secret');
+
+    await connection.recordPlanUsage(false);
+    expect(connection.session()).toMatchObject({ usable: true, planLimited: false });
+    expect(connection.session()).not.toHaveProperty('planLimitedAt');
+  });
+
   it('checkpoints rotation with an empty access token as failed and retries with the rotated grant', async () => {
     const path = home();
     seedExpiredGrant(path);
