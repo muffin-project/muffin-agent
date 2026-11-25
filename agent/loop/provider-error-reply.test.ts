@@ -1,8 +1,24 @@
 import { describe, expect, it } from 'vitest';
+import { ReasoningConfigurationError } from '../providers/reasoning.js';
 import { ProviderError } from '../providers/types.js';
 import { providerErrorReply } from './provider-error-reply.js';
 
 describe('safe provider error replies', () => {
+  it.each(['unknown', 'account-catalog'] as const)(
+    'renders actionable reasoning failures from %s without including upstream details',
+    (capabilitySource) => {
+      const reply = providerErrorReply(
+        new ReasoningConfigurationError({
+          status: 'unsupported',
+          capabilitySource,
+          reason: 'private provider details',
+        }),
+      );
+      expect(reply).toContain('/think');
+      expect(reply).not.toContain('private provider details');
+    },
+  );
+
   it('points an exhausted ChatGPT plan to its usage settings', () => {
     const reply = providerErrorReply(
       new ProviderError('private quota detail', false, 429, 'transport', undefined, false, {
