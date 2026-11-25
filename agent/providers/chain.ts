@@ -177,6 +177,24 @@ function isRefusal(error: unknown): boolean {
   return error instanceof ProviderError && !error.retryable && error.source !== 'output';
 }
 
+/**
+ * What the caller sees once every link failed over. Normally the first error:
+ * it is the one the owner configured as primary, and the one existing messages
+ * (plan exhausted, sign in again) already know how to explain. But when the
+ * last link tried failed for a passing reason (a 5xx, a 429, a dropped
+ * connection) and said it can be retried, that error goes out instead: the
+ * loop's and the light lane's backoff retry it, while the primary's
+ * non-retryable "plan exhausted" would end a turn a moment's wait can save.
+ */
+function exhausted(
+  firstError: unknown,
+  last: { error: ProviderError; reason: FailoverReason } | undefined,
+): unknown {
+  if (last === undefined || last.error === firstError) return firstError;
+  const passing = last.reason === 'outage' || last.reason === 'rate_limit';
+  return passing && last.error.retryable ? last.error : firstError;
+}
+
 /** A call without a reasoning request: the link's own default applies. */
 function withoutReasoning(call: ChatCall): ChatCall {
   const { reasoning: _r, thinking: _t, ...rest } = call;
@@ -368,6 +386,7 @@ class ProviderChain implements Provider {
     this.refresh();
     const order = this.order();
     let firstError: unknown;
+    let last: { error: ProviderError; reason: FailoverReason } | undefined;
     for (const [i, link] of order.entries()) {
       try {
         const provider = this.provider(link);
@@ -383,19 +402,19 @@ class ProviderChain implements Provider {
           throw error;
         }
         firstError ??= error;
-        this.failed(link, order[i + 1], error as ProviderError, reason);
+        last = { error: error as ProviderError, reason };
+        this.failed(link, order[i + 1], last.error, reason);
       }
     }
-    // Every link refused for an account or service reason. The first error is
-    // the one the owner configured as primary, and the one existing messages
-    // (plan exhausted, sign in again) already know how to explain.
-    throw firstError;
+    // Every link refused for an account or service reason.
+    throw exhausted(firstError, last);
   }
 
   async *chatStream(call: ChatCall): AsyncIterable<StreamEvent> {
     this.refresh();
     const order = this.order();
     let firstError: unknown;
+    let last: { error: ProviderError; reason: FailoverReason } | undefined;
     for (const [i, link] of order.entries()) {
       let yielded = false;
       try {
@@ -429,10 +448,11 @@ class ProviderChain implements Provider {
           throw error;
         }
         firstError ??= error;
-        this.failed(link, order[i + 1], error as ProviderError, reason);
+        last = { error: error as ProviderError, reason };
+        this.failed(link, order[i + 1], last.error, reason);
       }
     }
-    throw firstError;
+    throw exhausted(firstError, last);
   }
 }
 
