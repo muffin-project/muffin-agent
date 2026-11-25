@@ -9,7 +9,8 @@ import { appendFileSync } from 'node:fs';
  * falsify the claim and the job materializes a truthful no-op success
  * instead of paying the suite.
  *
- * Fail-safe: unknown files, unknown ranges, non-PR events and any error
+ * Fail-safe: unknown files, unknown ranges, events other than a PR or a
+ * merge queue group (both carry a base/head range) and any error
  * resolve to `run=true` (run too much, never too little).
  *
  * Evidence for the SKIP set:
@@ -98,7 +99,7 @@ if (isMain) {
   const head = get('head') || process.env.HEAD_SHA || '';
   const filesArg = get('files');
 
-  if (event && event !== 'pull_request') {
+  if (event && event !== 'pull_request' && event !== 'merge_group') {
     emit(true, 'non-PR event always runs acceptance');
   } else if (filesArg !== undefined) {
     const files = filesArg.split('\n').map((s) => s.trim()).filter(Boolean);
