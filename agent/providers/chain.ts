@@ -5,7 +5,7 @@ import type {
   LinkCooldown,
 } from '../../core/config/provider-chain.js';
 import { ActivityAllowanceError } from './activity-allowance.js';
-import type { ReasoningResolution } from './reasoning.js';
+import { ReasoningConfigurationError, type ReasoningResolution } from './reasoning.js';
 import {
   type ChatCall,
   type ChatResult,
@@ -168,6 +168,15 @@ function stamp(result: ChatResult, link: ChainLink, index: number, model: string
   };
 }
 
+/**
+ * The fallback said no to the request itself (a 404 model, a 400, a reasoning
+ * setting it cannot honour): nothing the caller could retry would change it.
+ */
+function isRefusal(error: unknown): boolean {
+  if (error instanceof ReasoningConfigurationError) return true;
+  return error instanceof ProviderError && !error.retryable && error.source !== 'output';
+}
+
 /** A call without a reasoning request: the link's own default applies. */
 function withoutReasoning(call: ChatCall): ChatCall {
   const { reasoning: _r, thinking: _t, ...rest } = call;
@@ -324,6 +333,13 @@ class ProviderChain implements Provider {
    * outage, a fallback's 404 would hide it.
    */
   private fallbackRefused(link: ChainLink, error: unknown, firstError: unknown): never {
+    // Only a refusal is masked. An error the caller has its own door for —
+    // a retryable transport failure (the loop's and light lane's backoff),
+    // malformed output (the profile's recovery cascade), a stream that broke
+    // before its first event (the loop's non-stream retry), an allowance or
+    // an unknown local error — goes out as itself: hiding it behind the
+    // primary's "plan exhausted" would end a turn the fallback can still serve.
+    if (!isRefusal(error)) throw error;
     this.state.lastFallbackError = {
       link: link.id,
       at: this.now(),

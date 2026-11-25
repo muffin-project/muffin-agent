@@ -4,13 +4,16 @@ import { extractFacts } from '../../core/memory/extract.js';
 import { judgeContradiction } from '../../core/memory/judge.js';
 import { LlmReranker, RERANK_MIN_CANDIDATES } from '../../core/memory/rerank.js';
 import type { Fact } from '../../core/memory/store.js';
-import { ActivityAllowanceError } from './activity-allowance.js';
+import { CONSERVATIVE } from '../profiles/profile.js';
+import { ActivityAllowanceError, activityProvider } from './activity-allowance.js';
 import { type ChainLink, DEFAULT_COOLDOWN_MS, failoverReason, providerChain } from './chain.js';
+import { type LightSpend, lightLane } from './light-lane.js';
 import {
   type ChatCall,
   type ChatResult,
   type Provider,
   ProviderError,
+  ProviderStreamError,
   type StreamEvent,
 } from './types.js';
 
@@ -548,5 +551,92 @@ describe('memory lanes on a chain shape the request for the serving link (S2)', 
       expect(sent).not.toHaveProperty('thinking');
       expect(sent.model).toBe('m');
     }
+  });
+});
+
+describe('provider chain: second review (masking only refusals)', () => {
+  const cases: Array<[string, () => Error]> = [
+    [
+      'malformed output (profile recovery cascade)',
+      () => new ProviderError('malformed tool arguments', true, undefined, 'output'),
+    ],
+    [
+      'a retryable transport failure without a failover status',
+      () => new ProviderError('in-band error', true),
+    ],
+  ];
+  for (const [name, make] of cases) {
+    it(`a fallback's ${name} reaches the caller as itself, not as the primary's refusal`, async () => {
+      const quota = planLimit();
+      const own = make();
+      const primary = scripted('openai-chatgpt', [quota]);
+      const second = scripted('openai-compat', [own]);
+      const states: LaneChainState[] = [];
+      const chain = providerChain([link('a', primary.provider), link('b', second.provider, 'm')], {
+        lane: 'main',
+        now: () => NOW,
+        onState: (s) => states.push(s),
+      });
+      await expect(chain.chat(call())).rejects.toBe(own);
+      expect(states.at(-1)?.lastFallbackError).toBeUndefined();
+      expect(states.at(-1)?.cooldowns.a).toBeDefined();
+    });
+  }
+
+  it("a fallback's stream that broke before its first event goes to the loop's non-stream retry", async () => {
+    const quota = planLimit();
+    const broken = new ProviderStreamError('stream ended before any event', false);
+    const primary: Provider = {
+      kind: 'openai-chatgpt',
+      chat: fail,
+      // biome-ignore lint/correctness/useYield: throws before the first event
+      async *chatStream() {
+        throw quota;
+      },
+    };
+    const second: Provider = {
+      kind: 'openai-compat',
+      chat: fail,
+      // biome-ignore lint/correctness/useYield: throws before the first event
+      async *chatStream() {
+        throw broken;
+      },
+    };
+    const chain = providerChain([link('a', primary), link('b', second, 'm')], {
+      lane: 'main',
+      now: () => NOW,
+    });
+    const drain = async () => {
+      for await (const _ of (chain.chatStream?.bind(chain) ?? fail)(call({ stream: true }))) {
+        // nothing arrives
+      }
+    };
+    await expect(drain()).rejects.toBe(broken);
+  });
+
+  it('the light lane and the allowance wrapper report the serving link kind (S2)', async () => {
+    const compat = scripted('openai-compat', [new ProviderError('down', true, 503)]);
+    const chatgpt = scripted('openai-chatgpt', [answer('x')]);
+    const chain = providerChain([link('a', compat.provider), link('b', chatgpt.provider, 'm')], {
+      lane: 'light',
+      now: () => NOW,
+    });
+    const light = lightLane(chain, { profile: CONSERVATIVE });
+    const main = activityProvider(chain);
+    expect([light.kind, main.kind]).toEqual(['openai-compat', 'openai-compat']);
+    await chain.chat(call());
+    expect([light.kind, main.kind]).toEqual(['openai-chatgpt', 'openai-chatgpt']);
+  });
+
+  it('the light lane bills the model the fallback route served when the reply names none', async () => {
+    const compat = scripted('openai-compat', [new ProviderError('down', true, 503)]);
+    const second = scripted('openai-compat', [answer('')]);
+    const chain = providerChain(
+      [link('a', compat.provider), link('b', second.provider, 'fallback-model')],
+      { lane: 'light', now: () => NOW },
+    );
+    const spent: LightSpend[] = [];
+    await lightLane(chain, { profile: CONSERVATIVE, record: (e) => spent.push(e) }).chat(call());
+    expect(spent[0]?.model).toBe('fallback-model');
   });
 });
