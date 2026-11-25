@@ -169,20 +169,19 @@ async function tettoPerJob(): Promise<void> {
 }
 
 /**
- * E1, la metà che il judge indipendente ha trovato mancante: la spesa del
- * reranker dentro il turno di un job deve finire sul contatore di quel job.
+ * E1, la metà che il judge indipendente ha trovato mancante: la spesa della
+ * corsia light dentro il turno di un job deve finire sul contatore di quel job.
  *
- * Il giro è quello vero — gateway, job schedulato, un turno che fa recall con
- * abbastanza candidati da pagare il reranker — e l'asserzione è una riga di
- * `spend` con `job_id` valorizzato e la capability della corsia light. Prima di
- * questa slice quella riga aveva `job_id = NULL` (`LightSpend` non portava il
- * job), quindi `jobMonthUsd` non la vedeva e il tetto per-job era cieco a ciò
- * che il job aveva pagato. La riga del turno (`llm.chat`) c'era già: è la light
- * quella che il judge chiedeva, ed è quella che si asserisce.
+ * Il giro è quello vero — gateway, job schedulato, un turno il cui modello
+ * chiama `memory_search` con abbastanza candidati da pagare il reranker — e
+ * l'asserzione è una riga di `spend` con `job_id` valorizzato e la capability
+ * della corsia light. La recall automatica prima del turno non chiama più il
+ * reranker (#942): il chiamante in-turno è la ricerca deliberata, ed è quella
+ * che qui si fa pagare al job.
  */
 async function rerankerSulJob(): Promise<void> {
   const inst = await install({
-    main: [{ text: 'fatto' }],
+    main: [{ tool: { name: 'memory_search', args: { query: 'giornata' } } }, { text: 'fatto' }],
     // La corsia light serve tre chiamanti; qui conta il reranker.
     // L'estrazione risponde vuota (il neutro onesto), il reranker ordina.
     light: (request) =>
@@ -302,8 +301,8 @@ describe('acceptance · E · economia e osservabilità', () => {
       // --- (b) il tetto PER-JOB: un job che ha già speso il suo non parte.
       await tettoPerJob();
 
-      // --- (c) e la spesa che il job *ha* fatto conta: il reranker che il suo
-      //     turno paga finisce sul contatore del job, non su nessuno.
+      // --- (c) e la spesa che il job *ha* fatto conta: il reranker che la sua
+      //     memory_search paga finisce sul contatore del job, non su nessuno.
       await rerankerSulJob();
     },
     240_000,

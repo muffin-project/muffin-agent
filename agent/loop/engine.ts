@@ -603,15 +603,20 @@ async function runClaimedTurn(
         turn,
       );
       try {
-        const result = await recall(deps.memory.recall, input.tenant, input.text, {
+        // Automatic recall is text and vector retrieval only. The model
+        // reranker stays on the deliberate `memory_search` path: in front of
+        // every owner turn it was most of the time before the first answer on
+        // the installed gateway (#942) — a light-lane model call per message,
+        // greetings included — and the paired replay showed no ranking gain
+        // worth that wait. Read at call time, so a hot-swapped reranker is
+        // still excluded here.
+        const { reranker: _deliberateOnly, ...automaticRecall } = deps.memory.recall;
+        const result = await recall(automaticRecall, input.tenant, input.text, {
           excludeTurnIds: turniInContesto,
           // Tenuto accanto al lineage e non sostituito da lui: e la garanzia
           // che non dipende dalla colonna nuova, quindi vale anche su una
           // riga che il lineage non ce l ha.
           ...(currentEpisodeId !== undefined ? { excludeEpisodeId: currentEpisodeId } : {}),
-          // Il job di questo turno, quando c'e': il reranker che questa recall
-          // paga deve finire sul contatore di quel job, non su nessuno.
-          ...(input.jobId === undefined ? {} : { jobId: input.jobId }),
         });
         const inherited = recallTaint(result);
         // Il nome accanto al numero (ADR-0075 punto 4): un fatto che uno
@@ -623,18 +628,6 @@ async function runClaimedTurn(
           'muffin.memory.items': result.items.length,
           'muffin.memory.strategies': result.strategies.join(','),
           [ATTR.taint]: inherited,
-          // Il reranker chiama il modello dentro questo span, e fino a qui non
-          // compariva da nessuna parte: un recall lento si leggeva come un
-          // recall lento, mai come «dentro c'è un giro di modello». Sale col
-          // risultato invece che da un tracer perché `recall()` non ne ha uno,
-          // e darglielo sarebbe plumbing attraverso quattro file per un numero.
-          ...(result.rerankUsage === undefined
-            ? {}
-            : {
-                [ATTR.usageInputTokens]: result.rerankUsage.inputTokens,
-                [ATTR.usageOutputTokens]: result.rerankUsage.outputTokens,
-                [ATTR.cacheReadTokens]: result.rerankUsage.cacheReadTokens,
-              }),
         });
         const rendered = renderForPrompt(result);
         if (rendered !== '') recalled.push({ type: 'text', text: rendered });
