@@ -56,8 +56,8 @@ const NETWORK_TIMEOUT_MS = 10_000;
 const SIGN_IN_TIMEOUT_MS = 10 * 60_000;
 
 export class ChatGPTReauthenticationRequired extends Error {
-  constructor() {
-    super('ChatGPT authorization expired or was revoked. Run `muffin chatgpt login` to reconnect.');
+  constructor(reason = 'ChatGPT authorization expired or was revoked.') {
+    super(`${reason} Run \`muffin chatgpt login\` to reconnect.`);
     this.name = 'ChatGPTReauthenticationRequired';
   }
 }
@@ -74,6 +74,8 @@ type TokenSet = {
   pendingIdentity: boolean;
 };
 
+type RefreshOutcome = 'ok' | 'reauth' | 'failed';
+
 type Profile = {
   id: string;
   clientId: string;
@@ -82,6 +84,8 @@ type Profile = {
   pendingSignIn?: { nonce: string; tokens: TokenSet };
   email?: string;
   tokens: TokenSet | null;
+  /** Non-secret result of the last refresh. Tokens themselves stay in `tokens`. */
+  lastRefresh?: { at: number; outcome: RefreshOutcome };
 };
 
 type Store = {
@@ -94,7 +98,15 @@ type Store = {
 export type ChatGPTSession = {
   profileId: string;
   email?: string;
+  /** A saved grant with the required scopes. This is not proof the access token still works. */
   connected: boolean;
+  /** The saved access token meets the local requirements for immediate use. */
+  usable: boolean;
+  /** The saved grant is eligible for a refresh attempt. */
+  renewable: boolean;
+  accessExpired: boolean;
+  needsLogin: boolean;
+  refreshOutcome?: RefreshOutcome;
   scopes: string[];
   expiresAt?: number;
 };
@@ -275,19 +287,29 @@ function isStore(value: unknown): value is Store {
   );
 }
 
-function safeSession(profile: Profile, active = false): ChatGPTProfile {
-  const scopes = profile.tokens?.scopes ?? [];
+function safeSession(profile: Profile, active = false, now = Date.now()): ChatGPTProfile {
+  const tokens = profile.tokens;
+  const scopes = tokens?.scopes ?? [];
+  const connected =
+    tokens !== null &&
+    !tokens.pendingIdentity &&
+    profile.subject.length > 0 &&
+    tokens.tokenType === 'Bearer' &&
+    hasRequiredScopes(scopes);
+  const expiresAt = tokens?.expiresAt ?? 0;
+  const accessExpired = !Number.isFinite(expiresAt) || expiresAt <= now + ACCESS_REFRESH_SKEW_MS;
+  const needsLogin = profile.lastRefresh?.outcome === 'reauth';
   return {
     profileId: profile.id,
     ...(profile.email ? { email: profile.email } : {}),
-    connected:
-      profile.tokens !== null &&
-      !profile.tokens.pendingIdentity &&
-      profile.subject.length > 0 &&
-      profile.tokens.tokenType === 'Bearer' &&
-      hasRequiredScopes(scopes),
+    connected,
+    usable: connected && safeString(tokens.accessToken) && !accessExpired && !needsLogin,
+    renewable: connected && safeString(tokens.refreshToken) && !needsLogin,
+    accessExpired,
+    needsLogin,
+    ...(profile.lastRefresh ? { refreshOutcome: profile.lastRefresh.outcome } : {}),
     scopes: [...scopes],
-    ...(profile.tokens ? { expiresAt: profile.tokens.expiresAt } : {}),
+    ...(tokens ? { expiresAt: tokens.expiresAt } : {}),
     active,
   };
 }
@@ -500,6 +522,7 @@ export class ChatGPTConnection {
         current.tokens = candidate;
         current.tokens.pendingIdentity = false;
         delete current.pendingSignIn;
+        delete current.lastRefresh;
         if (latest.activeProfileId === activeAtStart) latest.activeProfileId = current.id;
         this.writeStore(latest);
       }, options.signal);
@@ -526,7 +549,8 @@ export class ChatGPTConnection {
       abortIfNeeded(signal);
       const store = this.readStore();
       const profile = store.profiles.find((item) => item.id === store.activeProfileId);
-      if (!profile) throw new Error('ChatGPT plan access is not authorized');
+      if (!profile)
+        throw new ChatGPTReauthenticationRequired('ChatGPT plan access is not authorized.');
       if (profile.pendingSignIn) {
         const candidate = profile.pendingSignIn;
         const identity = await this.validateIdentity(
@@ -546,14 +570,11 @@ export class ChatGPTConnection {
         candidate.tokens.pendingIdentity = false;
         profile.tokens = candidate.tokens;
         delete profile.pendingSignIn;
+        delete profile.lastRefresh;
         this.writeStore(store);
       }
-      if (
-        !profile.tokens ||
-        profile.tokens.tokenType !== 'Bearer' ||
-        !hasRequiredScopes(profile.tokens.scopes)
-      ) {
-        throw new Error('ChatGPT plan access is not authorized');
+      if (profile.tokens?.tokenType !== 'Bearer' || !hasRequiredScopes(profile.tokens.scopes)) {
+        throw new ChatGPTReauthenticationRequired('ChatGPT plan access is not authorized.');
       }
       if (
         profile.tokens.pendingIdentity &&
@@ -575,21 +596,42 @@ export class ChatGPTConnection {
         this.writeStore(store);
       }
       if (
+        safeString(profile.tokens.accessToken) &&
         Number.isFinite(profile.tokens.expiresAt) &&
         profile.tokens.expiresAt > Date.now() + ACCESS_REFRESH_SKEW_MS
       ) {
         return profile.tokens.accessToken;
       }
-      const token = await this.exchange(
-        {
-          grant_type: 'refresh_token',
-          client_id: profile.clientId,
-          refresh_token: profile.tokens.refreshToken,
-          resource: RESOURCE,
-        },
-        signal,
-      );
+      if (!safeString(profile.tokens.refreshToken))
+        throw new ChatGPTReauthenticationRequired('ChatGPT has no saved refresh token.');
+      let token: Record<string, unknown>;
+      try {
+        token = await this.exchange(
+          {
+            grant_type: 'refresh_token',
+            client_id: profile.clientId,
+            refresh_token: profile.tokens.refreshToken,
+            resource: RESOURCE,
+          },
+          signal,
+        );
+      } catch (error) {
+        profile.lastRefresh = {
+          at: Date.now(),
+          outcome: error instanceof ChatGPTReauthenticationRequired ? 'reauth' : 'failed',
+        };
+        try {
+          this.writeStore(store);
+        } catch {
+          // Failure to record diagnostics must not replace the refresh error.
+        }
+        if (error instanceof ChatGPTReauthenticationRequired) {
+          process.stderr.write('ChatGPT refresh refused; run `muffin chatgpt login`\n');
+        }
+        throw error;
+      }
       const receivedAt = Date.now();
+      const scopes = parseScopes(token.scope);
       const rotated = {
         receivedAt,
         idTokenReceivedAt: safeString(token.id_token)
@@ -602,28 +644,26 @@ export class ChatGPTConnection {
         idToken: safeString(token.id_token) ? token.id_token : profile.tokens.idToken,
         tokenType:
           typeof token.token_type === 'string' ? token.token_type : profile.tokens.tokenType,
-        scopes: parseScopes(token.scope).length ? parseScopes(token.scope) : profile.tokens.scopes,
+        scopes: scopes.length ? scopes : profile.tokens.scopes,
         expiresAt:
           typeof token.expires_in === 'number' && Number.isFinite(token.expires_in)
-            ? Date.now() + token.expires_in * 1000
+            ? receivedAt + token.expires_in * 1000
             : 0,
         pendingIdentity: safeString(token.id_token) || profile.tokens.pendingIdentity,
       } satisfies TokenSet;
+      const validRotation =
+        safeString(rotated.accessToken) &&
+        rotated.tokenType === 'Bearer' &&
+        hasRequiredScopes(rotated.scopes) &&
+        Number.isFinite(rotated.expiresAt) &&
+        rotated.expiresAt > receivedAt;
       // A refresh token may be single-use: checkpoint every rotated field before
-      // any identity/JWKS validation that can fail, and never retry the old token.
+      // rejecting an unusable response or validating its identity.
       profile.tokens = rotated;
+      profile.lastRefresh = { at: receivedAt, outcome: validRotation ? 'ok' : 'failed' };
       if (safeString(token.id_token)) delete profile.pendingNonce;
       this.writeStore(store);
-      if (
-        !rotated.accessToken ||
-        !rotated.refreshToken ||
-        rotated.tokenType !== 'Bearer' ||
-        !hasRequiredScopes(rotated.scopes) ||
-        !Number.isFinite(rotated.expiresAt) ||
-        rotated.expiresAt <= Date.now()
-      ) {
-        throw new Error('ChatGPT plan access is not authorized');
-      }
+      if (!validRotation || rotated.expiresAt <= Date.now()) throw new Error(SAFE_ERROR);
       if (rotated.pendingIdentity) {
         const identity = await this.validateIdentity(
           rotated.idToken,
@@ -656,6 +696,8 @@ export class ChatGPTConnection {
     } catch {
       throw new Error(SAFE_ERROR);
     }
+    if (response.status === 401)
+      throw new ChatGPTReauthenticationRequired('ChatGPT rejected the saved authorization.');
     if (!response.ok) throw new Error(SAFE_ERROR);
     let body: { models?: unknown };
     try {
