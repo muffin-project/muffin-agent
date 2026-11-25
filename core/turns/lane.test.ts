@@ -1,13 +1,13 @@
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import type { Principal } from '../policy/types.js';
-import { Scheduler } from '../scheduler/scheduler.js';
 import { JobStore } from '../scheduler/jobs.js';
-import { ModelLane } from './model-lane.js';
-import { TurnLane, type LaneEvent } from './lane.js';
-import { TurnStore, type NewTurn } from './store.js';
-import { encodeWaitFor } from './wait.js';
+import { Scheduler } from '../scheduler/scheduler.js';
 import { DELIVERED } from '../surface/types.js';
+import { type LaneEvent, TurnLane } from './lane.js';
+import { ModelLane } from './model-lane.js';
+import { type NewTurn, TurnStore } from './store.js';
+import { encodeWaitFor } from './wait.js';
 
 /**
  * The lane, over the real store.
@@ -47,7 +47,12 @@ const spec = (id: string): NewTurn => ({
   counters: counters(),
 });
 
-function world(over: { alive?: (pid: number) => boolean; approvals?: { answered: (id: string) => boolean } } = {}) {
+function world(
+  over: {
+    alive?: (pid: number) => boolean;
+    approvals?: { answered: (id: string) => boolean };
+  } = {},
+) {
   const store = new TurnStore(new DatabaseCtor(':memory:'));
   const events: LaneEvent[] = [];
   const ran: string[] = [];
@@ -62,7 +67,11 @@ function world(over: { alive?: (pid: number) => boolean; approvals?: { answered:
       // The runner owns claiming — `resumeTurn` does it. Here the row simply
       // leaves the due set, the way a real run leaves it.
       const claimed = store.claim(turnId);
-      store.finish(turnId, { outcome: 'answered', messages: [], taint: 0, counters: counters() }, claimed?.claimToken ?? null);
+      store.finish(
+        turnId,
+        { outcome: 'answered', messages: [], taint: 0, counters: counters() },
+        claimed?.claimToken ?? null,
+      );
       return { stopped: 'answered' as const };
     },
     onEvent: (e) => events.push(e),
@@ -119,7 +128,13 @@ describe('la corsia prende le tre code in una', () => {
     const created = w.store.create(spec('t-waiting'));
     w.store.suspend(
       't-waiting',
-      { messages: [], taint: 0, counters: counters(), wakeAt: '2026-08-16T11:00:00.000Z', waitFor: null },
+      {
+        messages: [],
+        taint: 0,
+        counters: counters(),
+        wakeAt: '2026-08-16T11:00:00.000Z',
+        waitFor: null,
+      },
       created.claimToken,
     );
 
@@ -245,13 +260,66 @@ describe('le barriere a evento', () => {
     // it: one bad row would stop every suspended turn on the machine.
     w.store.suspend(
       't-junk',
-      { messages: [], taint: 0, counters: counters(), wakeAt: '2026-08-23T10:00:00.000Z', waitFor: 'file_changed:/tmp/x' },
+      {
+        messages: [],
+        taint: 0,
+        counters: counters(),
+        wakeAt: '2026-08-23T10:00:00.000Z',
+        waitFor: 'file_changed:/tmp/x',
+      },
       created.claimToken,
     );
     expect(() => w.lane.tick(new Date('2026-08-16T10:00:00.000Z'))).not.toThrow();
     await settle();
     expect(w.ran).toEqual([]);
     expect(w.store.get('t-junk')?.status).toBe('waiting');
+  });
+
+  it('leaves owner questions parked even with an approval answer, then claims at the deadline', async () => {
+    let now = new Date('2026-11-23T10:00:00.000Z');
+    const deadline = new Date('2026-11-24T10:00:00.000Z');
+    const turns = new TurnStore(new DatabaseCtor(':memory:'), () => now);
+    const { id, claimToken } = turns.create(spec('t-question'));
+    const waitFor = encodeWaitFor({
+      kind: 'owner_reply',
+      id: 'b'.repeat(64),
+      question: 'Which file?',
+    });
+    expect(
+      turns.suspend(
+        id,
+        {
+          messages: [],
+          taint: 0,
+          counters: counters(),
+          wakeAt: deadline.toISOString(),
+          waitFor,
+        },
+        claimToken,
+      ),
+    ).toBe(true);
+    const beforeClaim: (string | null | undefined)[] = [];
+    const lane = new TurnLane({
+      turns,
+      approvals: { answered: () => true },
+      modelLane: new ModelLane(),
+      run: async (turnId) => {
+        beforeClaim.push(turns.get(turnId)?.waitFor);
+        expect(turns.claim(turnId)).toMatchObject({ status: 'running', waitFor: null });
+        return { stopped: 'answered' };
+      },
+    });
+
+    lane.tick(now);
+    await settle();
+    expect(beforeClaim).toEqual([]);
+    expect(turns.get(id)?.status).toBe('waiting');
+
+    now = deadline;
+    lane.tick(now);
+    await settle();
+    expect(beforeClaim).toEqual([waitFor]);
+    expect(turns.get(id)?.status).toBe('running');
   });
 });
 
@@ -425,7 +493,11 @@ describe('una corsia del modello sola, per davvero', () => {
       run: async (turnId) => {
         await hold();
         const claimed = store.claim(turnId);
-        store.finish(turnId, { outcome: 'answered', messages: [], taint: 0, counters: counters() }, claimed?.claimToken ?? null);
+        store.finish(
+          turnId,
+          { outcome: 'answered', messages: [], taint: 0, counters: counters() },
+          claimed?.claimToken ?? null,
+        );
         return { stopped: 'answered' as const };
       },
       modelLane,
@@ -464,7 +536,11 @@ describe('una corsia del modello sola, per davvero', () => {
       run: async (turnId) => {
         ran.push(turnId);
         const claimed = store.claim(turnId);
-        store.finish(turnId, { outcome: 'answered', messages: [], taint: 0, counters: counters() }, claimed?.claimToken ?? null);
+        store.finish(
+          turnId,
+          { outcome: 'answered', messages: [], taint: 0, counters: counters() },
+          claimed?.claimToken ?? null,
+        );
         return { stopped: 'answered' as const };
       },
       modelLane,

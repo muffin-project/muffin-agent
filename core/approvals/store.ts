@@ -82,7 +82,9 @@ CREATE TABLE IF NOT EXISTS approvals (
   -- riusa la riga ma manda un messaggio nuovo, e la bolla vecchia resta
   -- dov'era. Solo scritture in aggiunta, mai sovrascritture: alla chiusura
   -- terminale si toglie la tastiera a tutte quelle registrate.
-  question_message_ids TEXT
+  question_message_ids TEXT,
+  -- A keyboard write began, but its outcome is not known yet.
+  telegram_question_pending INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_turn ON approvals(turn_id, consumed_at);
 `;
@@ -108,6 +110,7 @@ export type ApprovalRow = {
    * registrato: righe di prima della colonna, o domande mai arrivate sul filo.
    */
   questionMessageIds: number[];
+  telegramQuestionPending: boolean;
 };
 
 type Raw = {
@@ -124,6 +127,7 @@ type Raw = {
   decided_by: string | null;
   withdrawn_at: string | null;
   question_message_ids: string | null;
+  telegram_question_pending: number;
 };
 
 /**
@@ -163,6 +167,7 @@ const read = (r: Raw): ApprovalRow => ({
   decidedBy: r.decision === null ? null : r.decided_by === 'delegation' ? 'delegation' : 'owner',
   withdrawnAt: r.withdrawn_at,
   questionMessageIds: leggiDomande(r.question_message_ids),
+  telegramQuestionPending: r.telegram_question_pending === 1,
 });
 
 export class ApprovalStore {
@@ -176,6 +181,8 @@ export class ApprovalStore {
   private readonly decidedUnconsumedStmt: DatabaseCtor.Statement;
   private readonly withdrawStmt: DatabaseCtor.Statement;
   private readonly noteQuestionStmt: DatabaseCtor.Statement;
+  private readonly beginTelegramQuestionStmt: DatabaseCtor.Statement;
+  private readonly rejectTelegramQuestionStmt: DatabaseCtor.Statement;
   private readonly withdrawnQuestionsStmt: DatabaseCtor.Statement;
   private readonly openForStmt: DatabaseCtor.Statement;
 
@@ -200,6 +207,12 @@ export class ApprovalStore {
     // Stesso meccanismo, stessa ragione: l'id del messaggio della domanda
     // (#784) su un database installato prima di questa colonna.
     ensureColumn(db, 'approvals', 'question_message_ids', 'question_message_ids TEXT');
+    ensureColumn(
+      db,
+      'approvals',
+      'telegram_question_pending',
+      'telegram_question_pending INTEGER NOT NULL DEFAULT 0',
+    );
     this.askStmt = db.prepare(
       `INSERT INTO approvals (id, turn_id, capability, resource, prompt, taint, asked_at)
        VALUES (@id, @turnId, @capability, @resource, @prompt, @taint, @askedAt)`,
@@ -254,7 +267,14 @@ export class ApprovalStore {
         WHERE turn_id = @turnId AND decision IS NULL AND withdrawn_at IS NULL`,
     );
     this.noteQuestionStmt = db.prepare(
-      `UPDATE approvals SET question_message_ids = @ids WHERE id = @id`,
+      `UPDATE approvals SET question_message_ids = @ids, telegram_question_pending = 0 WHERE id = @id`,
+    );
+    this.beginTelegramQuestionStmt = db.prepare(
+      `UPDATE approvals SET telegram_question_pending = 1
+       WHERE id = ? AND turn_id = ? AND telegram_question_pending = 0`,
+    );
+    this.rejectTelegramQuestionStmt = db.prepare(
+      `UPDATE approvals SET telegram_question_pending = 0 WHERE id = ?`,
     );
     this.withdrawnQuestionsStmt = db.prepare(
       `SELECT id, question_message_ids FROM approvals
@@ -356,6 +376,16 @@ export class ApprovalStore {
     return this.withdrawStmt.run({ turnId, at: now.toISOString() }).changes;
   }
 
+  /** Claim the keyboard write before invoking Telegram, including across restarts. */
+  beginTelegramQuestion(id: string, turnId: string): boolean {
+    return this.beginTelegramQuestionStmt.run(id, turnId).changes > 0;
+  }
+
+  /** Only call when the attempted write is known not to have shown a keyboard. */
+  rejectTelegramQuestion(id: string): void {
+    this.rejectTelegramQuestionStmt.run(id);
+  }
+
   /**
    * Questa domanda si è mostrata su questo messaggio (#784).
    *
@@ -369,8 +399,10 @@ export class ApprovalStore {
    */
   noteQuestionMessage(id: string, messageId: number): void {
     const row = this.get(id);
-    if (row === null || row.questionMessageIds.includes(messageId)) return;
-    this.noteQuestionStmt.run({ id, ids: JSON.stringify([...row.questionMessageIds, messageId]) });
+    if (row === null) return;
+    const ids = row.questionMessageIds;
+    if (!ids.includes(messageId)) ids.push(messageId);
+    this.noteQuestionStmt.run({ id, ids: JSON.stringify(ids) });
   }
 
   /**

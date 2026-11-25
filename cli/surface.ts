@@ -21,7 +21,12 @@ import type { IngressPort } from '../connectors/shared/ingress/types.js';
 import { TelegramApi } from '../connectors/telegram/api.js';
 import { type ConnectorDeps, TelegramConnector } from '../connectors/telegram/connector.js';
 import { TelegramDeliveryStore } from '../connectors/telegram/delivery.js';
-import { TELEGRAM_ID, telegramSurface } from '../connectors/telegram/surface.js';
+import {
+  TELEGRAM_ID,
+  telegramAddress,
+  telegramDeliveryResult,
+  telegramSurface,
+} from '../connectors/telegram/surface.js';
 import { UpdateInbox } from '../connectors/telegram/updates.js';
 import { decidiVoce, type Voce } from '../core/audio/voce.js';
 import {
@@ -49,11 +54,17 @@ import {
   telegramOwner,
 } from '../core/rot/owner.js';
 import { Pausa } from '../core/runtime/pausa.js';
+import type { Deliver } from '../core/scheduler/scheduler.js';
 import { adoptOwnerState } from '../core/surface/adopt-owner.js';
 import { type CliWriter, cliSurface } from '../core/surface/cli.js';
 import { SurfaceRegistry } from '../core/surface/registry.js';
 import { SaluteSuperfici } from '../core/surface/salute.js';
-import type { DeliveryOutcome, FileSpec, Surface } from '../core/surface/types.js';
+import {
+  type DeliveryOutcome,
+  type FileSpec,
+  notDelivered,
+  type Surface,
+} from '../core/surface/types.js';
 import type { ModelLane } from '../core/turns/model-lane.js';
 import { decidiVista, type Vista } from '../core/vista/vista.js';
 import { cmdModel } from './model.js';
@@ -135,6 +146,7 @@ type PortConnectContext = {
   readonly lines: string[];
   /** La ModelLane dell'execution owner — da `connectSurfaces`, mai ricostruita qui dentro. */
   readonly lane: ModelLane;
+  readonly telegramDelivery: () => TelegramDeliveryStore;
 };
 
 type PortConnection = {
@@ -888,6 +900,7 @@ export function connectSurfaces(
    */
   stop: (budgetMs?: number) => Promise<void>;
   registry: SurfaceRegistry;
+  deliverToChannel: Deliver;
   deliver: LaneDeliver;
   attachStream: AttachStream;
   salute: SaluteSuperfici;
@@ -940,6 +953,9 @@ export function connectSurfaces(
   const adesso = (): Date => new Date();
   const stops: ((budgetMs: number) => Promise<void>)[] = [];
   const surfaces: Surface[] = [cliSurface(cliWrite)];
+  let telegramJournal: TelegramDeliveryStore | undefined;
+  const telegramDelivery = (): TelegramDeliveryStore =>
+    (telegramJournal ??= new TelegramDeliveryStore(runtime.db));
   /**
    * How a turn the **lane** finished gets back to whoever asked for it.
    *
@@ -993,6 +1009,7 @@ export function connectSurfaces(
         onWork,
         lines,
         lane,
+        telegramDelivery,
       });
       // La porta è abilitata ma non può partire, e l'ha già detto con la sua
       // frase e la sua caduta: niente da registrare.
@@ -1080,6 +1097,26 @@ export function connectSurfaces(
     }
   });
 
+  const isTelegramChannel = (channel: string): boolean =>
+    channel === TELEGRAM_ID || telegramAddress(channel, undefined) !== null;
+  const deliverToChannel: Deliver = async (channel, text, turn) => {
+    if (turn?.recovered && isTelegramChannel(channel)) {
+      try {
+        const record = runtime.deps.turns.get(turn.id);
+        if (record !== null && record.jobId !== null && record.replyTo?.channel === channel) {
+          // A prior receipt can be reconciled even if Telegram lost its binding
+          // or credentials before startup. Reading it authorizes no new send.
+          const receipt = telegramDelivery().recordedOutcome(record.id, record.leaseIndex);
+          if (receipt !== undefined) return telegramDeliveryResult(receipt);
+        }
+      } catch {
+        // An unreadable receipt does not tell us that it is safe to send again.
+        return notDelivered('Telegram delivery receipt is unreadable');
+      }
+    }
+    return registry.deliver(channel, text, turn);
+  };
+
   return {
     lines,
     salute,
@@ -1090,6 +1127,7 @@ export function connectSurfaces(
     stop: (budgetMs = DRAIN_BUDGET_MS) =>
       Promise.all(stops.map((s) => s(budgetMs))).then(() => undefined),
     registry,
+    deliverToChannel,
     /**
      * The lane's delivery, over whichever surfaces are up.
      *
@@ -1104,9 +1142,9 @@ export function connectSurfaces(
       if (
         typeof turn.jobId === 'string' &&
         typeof channel === 'string' &&
-        registry.find(channel)?.id === TELEGRAM_ID
+        isTelegramChannel(channel)
       ) {
-        const result = await registry.deliver(channel, text, {
+        const result = await deliverToChannel(channel, text, {
           id: turn.id,
           ...(recovered ? { recovered } : {}),
         });
@@ -1119,7 +1157,15 @@ export function connectSurfaces(
         return;
       }
       const door = doors.get(turn.surface);
-      if (!door) throw new Error(`superficie "${turn.surface}" non connessa in questo processo`);
+      if (!door) {
+        // A revoked binding can keep the connector offline altogether. The
+        // journal can still settle a known result without a Telegram client.
+        if (recovered && turn.surface === TELEGRAM_ID && turn.ownerQuestionFinal) {
+          const receipt = telegramDelivery().recordedOutcome(turn.id, turn.leaseIndex);
+          if (receipt !== undefined) return receipt === 'sent' ? undefined : receipt;
+        }
+        throw new Error(`superficie "${turn.surface}" non connessa in questo processo`);
+      }
       if (turn.replyTo === null)
         throw new Error(`turno ${turn.id.slice(0, 12)} senza indirizzo di risposta`);
       return door(turn.id, turn.replyTo, text);
@@ -1278,10 +1324,15 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
     return null;
   }
   const base = tg?.apiBase;
-  const api = base === undefined ? new TelegramApi(token) : new TelegramApi(token, base);
-  const telegramDb = openDb(paths(home).db);
-  const inbox = new UpdateInbox(telegramDb);
-  const delivery = new TelegramDeliveryStore(telegramDb);
+  const pairedPrivateChat = (): number | undefined => {
+    const owner = runtime.deps.workMessageOwner?.();
+    const userId = owner?.userId;
+    return userId !== undefined && (owner?.chatId ?? userId) === userId ? userId : undefined;
+  };
+  const api = new TelegramApi(token, base, (chatId) => pairedPrivateChat() === chatId);
+  // Question answers and their inbox consumption commit together.
+  const inbox = new UpdateInbox(runtime.db);
+  const delivery = ctx.telegramDelivery();
   const vaultRoot = paths(home).vault;
   if (!ensurePrivateDir(join(vaultRoot, 'inbox'))) {
     salute.caduta(
@@ -1373,6 +1424,9 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
     },
     log,
   });
+  if (gatewayAtBoot === null && onWork !== undefined) {
+    runtime.deps.sendWorkMessage = connector.sendWorkMessage;
+  }
 
   // Same process, background. A crash of the surface is reported and does not
   // take the REPL down: the terminal is the surface of last resort, and it
@@ -1409,6 +1463,55 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
         delivery.parts(turn.id, record.leaseIndex).length === 0
       )
         return 'possibly_sent';
+      const target = address.chatId;
+      const jobId = record.jobId;
+      const channel = record.replyTo?.channel;
+      const declaredAddress =
+        typeof channel === 'string' ? telegramAddress(channel, undefined) : null;
+      const hasExplicitRoute = (): boolean => {
+        if (jobId === null) return false;
+        const job = runtime.jobs.get(jobId);
+        return (
+          job !== null &&
+          job.channel === channel &&
+          job.origin.surface === 'cli' &&
+          job.origin.tenant === 'host' &&
+          job.origin.principal === 'owner' &&
+          job.origin.turnId === null
+        );
+      };
+      if (
+        !record.ownerQuestionFinal &&
+        record.replyTo?.scheduledDeliveryVersion === SCHEDULED_DELIVERY_VERSION &&
+        declaredAddress !== null &&
+        declaredAddress.chatId === target &&
+        declaredAddress.threadId === address.threadId &&
+        Number.isSafeInteger(target) &&
+        target > 0 &&
+        hasExplicitRoute()
+      ) {
+        const ownerAtStart = pairedPrivateChat();
+        if (ownerAtStart !== undefined && target !== ownerAtStart) {
+          const parts = delivery.parts(turn.id, record.leaseIndex);
+          if (
+            parts.some(
+              (part) =>
+                part.chatId !== target || part.threadId !== (declaredAddress.threadId ?? null),
+            )
+          ) {
+            throw new Error('Scheduled delivery plan does not match the registered address');
+          }
+          // The registered CLI job supplies the destination. The live binding
+          // and persisted route still have to agree at every Bot API attempt.
+          const scheduledApi = new TelegramApi(
+            token,
+            base,
+            (chatId) =>
+              chatId === target && pairedPrivateChat() === ownerAtStart && hasExplicitRoute(),
+          );
+          return connector.deliverTo(turn.id, address, text, scheduledApi);
+        }
+      }
       return connector.deliverTo(turn.id, address, text);
     }),
     start: avvia,

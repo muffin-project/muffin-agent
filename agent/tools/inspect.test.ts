@@ -165,6 +165,21 @@ describe('sys_inspect dice cosa sta usando adesso', () => {
     expect(testo).toContain('alpha, beta');
   });
 
+  it('reports the actual turn menu even when capability discovery is inactive', async () => {
+    const result = await makeInspectTool(finto()).handler(
+      {},
+      toolContext({
+        capabilityExposure: () => ({
+          visible: ['bound_tool'],
+          pressured: false,
+          hiddenCount: 0,
+          eligibleCount: 1,
+        }),
+      }),
+    );
+    expect(result.content).toContain('capability esposte: bound_tool\n');
+  });
+
   it('mostra da dove viene il profilo quando il runtime lo sa (#764)', async () => {
     const testo = await chiedi();
     const conOrigine = await makeInspectTool(finto()).handler(
