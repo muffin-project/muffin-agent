@@ -12,10 +12,14 @@ itConSandbox(
     const owner = { id: 424242, name: 'Synthetic owner' };
     const file = 'shell-calculation.txt';
     const command = 'printf "%s\\n" "$((19 + 23))" | tee shell-calculation.txt';
-    const call = { tool: { name: 'shell_run_write', args: { command, cwd: '.' } } };
+    const call = { tool: { name: 'shell', args: { effect: 'write_project', command, cwd: '.' } } };
     const reply = 'The calculation is complete.';
     const inst = await install({
-      main: [call, call, { text: reply }],
+      main: [
+        { tool: { name: 'capability_search', args: { query: 'shell', max_results: 2 } } },
+        call,
+        { text: reply },
+      ],
       env: { MUFFIN_GATEWAY_TICK_MS: '200' },
     });
     const telegram = await startFakeTelegram();
