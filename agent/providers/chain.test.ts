@@ -242,7 +242,7 @@ describe('provider chain', () => {
   it('when every link refuses, the primary error is the one the caller sees', async () => {
     const first = planLimit();
     const primary = scripted('openai-chatgpt', [first]);
-    const second = scripted('openai-compat', [new ProviderError('down', true, 503)]);
+    const second = scripted('openai-compat', [new ProviderError('bad key', false, 401)]);
     const chain = providerChain([link('a', primary.provider), link('b', second.provider, 'm')], {
       lane: 'main',
       now: () => NOW,
@@ -667,5 +667,119 @@ describe('provider chain: second review (masking only refusals)', () => {
       at: NOW,
       kind: 'ReasoningConfigurationError',
     });
+  });
+});
+
+describe('provider chain: a passing failure on the last link stays retryable (N5)', () => {
+  const passing: Array<[string, () => ProviderError]> = [
+    ['a retryable 503', () => new ProviderError('down', true, 503)],
+    ['a retryable 429', () => new ProviderError('slow down', true, 429, 'transport', 2_000)],
+    [
+      'a dropped connection',
+      () =>
+        new ProviderError('socket hang up', true, undefined, 'transport', undefined, false, {
+          connection: true,
+        }),
+    ],
+  ];
+  for (const [name, make] of passing) {
+    it(`chat: ${name} on the last link reaches the caller, every pause recorded`, async () => {
+      const quota = planLimit();
+      const own = make();
+      const primary = scripted('openai-chatgpt', [quota]);
+      const second = scripted('openai-compat', [own]);
+      const states: LaneChainState[] = [];
+      const chain = providerChain([link('a', primary.provider), link('b', second.provider, 'm')], {
+        lane: 'main',
+        now: () => NOW,
+        onState: (s) => states.push(s),
+      });
+      await expect(chain.chat(call())).rejects.toBe(own);
+      expect(states.at(-1)?.cooldowns.a?.reason).toBe('quota');
+      expect(states.at(-1)?.cooldowns.b).toBeDefined();
+    });
+
+    it(`stream: ${name} on the last link reaches the caller`, async () => {
+      const quota = planLimit();
+      const own = make();
+      const throwing = (kind: Provider['kind'], error: Error): Provider => ({
+        kind,
+        chat: fail,
+        // biome-ignore lint/correctness/useYield: throws before the first event
+        async *chatStream() {
+          throw error;
+        },
+      });
+      const chain = providerChain(
+        [
+          link('a', throwing('openai-chatgpt', quota)),
+          link('b', throwing('openai-compat', own), 'm'),
+        ],
+        { lane: 'main', now: () => NOW },
+      );
+      const drain = async () => {
+        for await (const _ of (chain.chatStream?.bind(chain) ?? fail)(call({ stream: true }))) {
+          // nothing arrives
+        }
+      };
+      await expect(drain()).rejects.toBe(own);
+    });
+  }
+
+  it('a 5xx the adapter marked non-retryable still shows the primary error', async () => {
+    const quota = planLimit();
+    const primary = scripted('openai-chatgpt', [quota]);
+    const second = scripted('openai-compat', [new ProviderError('gone', false, 503)]);
+    const chain = providerChain([link('a', primary.provider), link('b', second.provider, 'm')], {
+      lane: 'main',
+      now: () => NOW,
+    });
+    await expect(chain.chat(call())).rejects.toBe(quota);
+  });
+
+  it('only the last link counts: a passing middle failure before a final auth failure shows the primary', async () => {
+    const quota = planLimit();
+    const primary = scripted('openai-chatgpt', [quota]);
+    const middle = scripted('openai-compat', [new ProviderError('down', true, 503)]);
+    const last = scripted('openai-compat', [new ProviderError('bad key', false, 401)]);
+    const chain = providerChain(
+      [link('a', primary.provider), link('b', middle.provider, 'm'), link('c', last.provider, 'n')],
+      { lane: 'main', now: () => NOW },
+    );
+    await expect(chain.chat(call())).rejects.toBe(quota);
+  });
+
+  it('an account failure on the last link shows the primary even if marked retryable', async () => {
+    const quota = planLimit();
+    const primary = scripted('openai-chatgpt', [quota]);
+    const second = scripted('openai-compat', [new ProviderError('credits', true, 402)]);
+    const chain = providerChain([link('a', primary.provider), link('b', second.provider, 'm')], {
+      lane: 'main',
+      now: () => NOW,
+    });
+    await expect(chain.chat(call())).rejects.toBe(quota);
+  });
+
+  it('a refusal on the last link stays hidden behind the primary', async () => {
+    const quota = planLimit();
+    const primary = scripted('openai-chatgpt', [quota]);
+    const middle = scripted('openai-compat', [new ProviderError('down', true, 503)]);
+    const last = scripted('openai-compat', [new ProviderError('no such model', false, 404)]);
+    const chain = providerChain(
+      [link('a', primary.provider), link('b', middle.provider, 'm'), link('c', last.provider, 'n')],
+      { lane: 'main', now: () => NOW },
+    );
+    await expect(chain.chat(call())).rejects.toBe(quota);
+  });
+
+  it("the primary's own outage stays the error when the fallback then fails for an account reason", async () => {
+    const down = new ProviderError('down', true, 503);
+    const primary = scripted('openai-chatgpt', [down]);
+    const second = scripted('openai-compat', [new ProviderError('down too', false, 401)]);
+    const chain = providerChain([link('a', primary.provider), link('b', second.provider, 'm')], {
+      lane: 'main',
+      now: () => NOW,
+    });
+    await expect(chain.chat(call())).rejects.toBe(down);
   });
 });
