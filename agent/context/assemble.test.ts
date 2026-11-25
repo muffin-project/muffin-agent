@@ -266,7 +266,10 @@ describe('the owner-class prompt does not move', () => {
     // Ri-fissato 2026-11-14 (ADR-0107): un solo patto sigillato, gli esempi di
     // voce escono dal prefisso. Cold-start deliberato della cache.
     // Pin precedente: `00a316f7449594155d281b599d27c7d6ae0002e285f2a9355e095014408d0d0b`.
-    '5c40b6dc2f86e441f38b7b61720b0ec0e49f7feeb3c9528b3ee092fb3b18a992';
+    // Ri-fissato 2026-11-20: la riga tool-poi-shell non manda più a `sys_inspect`
+    // per «che modello ti esegue» — la risposta è già in «Questo turno».
+    // Pin precedente: `5c40b6dc2f86e441f38b7b61720b0ec0e49f7feeb3c9528b3ee092fb3b18a992`.
+    'd8fe9c32d83762c8e6936fd912ffc091670bc70970be7dcf2555a8d95c6d454f';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
@@ -383,7 +386,10 @@ describe('the owner-class prompt does not move', () => {
   // Ri-fissato 2026-11-14 (ADR-0107): l'etichetta di gruppo sta in GROUP_PERSONA,
   // non in voice.md. Pin precedente:
   // `86f2fc7b1879c3113ad9e031af9d8a341872bcedd6803073f7b39e10aa9c5293`.
-  const GROUP_PROMPT_SHA_V1 = '1784c4f457d158fd0aedcfa173c811cc1bee4edd7caf43dbcd36d4dbe0076235';
+  // Ri-fissato 2026-11-20 insieme al pin owner, per la stessa riga di
+  // `WORK_RULES` (il modello sta in «Questo turno», non in `sys_inspect`).
+  // Pin precedente: `1784c4f457d158fd0aedcfa173c811cc1bee4edd7caf43dbcd36d4dbe0076235`.
+  const GROUP_PROMPT_SHA_V1 = '3cc53182dde58fdf05d4ed3953da2015991159c43147d546c3b8c6dfbb52ae17';
 
   /**
    * Ri-fissato 2026-10-10: la regola sull'esposizione progressiva chiarisce
@@ -402,6 +408,22 @@ describe('the owner-class prompt does not move', () => {
         .update(runtime.deps.systemPrompts.group, 'utf8')
         .digest('hex');
       expect(sha).toBe(GROUP_PROMPT_SHA_V1);
+    } finally {
+      runtime.close();
+    }
+  });
+
+  it('né v1 né v2 mandano a sys_inspect per il nome del modello', () => {
+    const home = bootHome();
+    const runtime = boot(home);
+    try {
+      const skills = runtime.promptBlocks.owner.find((b) => b.name === 'skills')?.text ?? '';
+      const v1 = renderSystemPrompts(buildSystemPromptBlocks(home, false, skills, 'v1')).owner;
+      const v2 = renderSystemPrompts(buildSystemPromptBlocks(home, false, skills, 'v2')).owner;
+      expect(v1).not.toContain('concateni `sys_inspect`');
+      expect(v2).not.toContain('concateno `sys_inspect`');
+      expect(v1).toContain('è già in «Questo turno»');
+      expect(v2).toContain('è già in «Questo turno»');
     } finally {
       runtime.close();
     }

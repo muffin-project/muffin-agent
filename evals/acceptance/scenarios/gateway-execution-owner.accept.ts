@@ -158,43 +158,30 @@ describe('acceptance · #533 · il gateway è l unico execution owner', () => {
   );
 
   it(
-    'loads a hidden write tool on the gateway and commits the requested file',
+    'discovers a deferred editor on the gateway and commits the requested edit',
     async () => {
-      const filename = 'shared-decisions.md';
-      const decision = 'Ship after both checks pass.';
+      const filename = 'bersaglio.txt';
+      const original = 'alfa\nBETA\nomega\n';
       const inst = await install({
         env: { MUFFIN_EXEC_LOCAL: '' },
         main: [
-          { tool: { name: 'fs_read', args: { path: 'alpha.md' } } },
-          { tool: { name: 'fs_read', args: { path: 'beta.md' } } },
           {
             tool: {
               name: 'capability_search',
-              args: { query: 'write file content', max_results: 1 },
+              args: { query: 'edit one exact block of text inside a file', max_results: 1 },
             },
           },
-          { tool: { name: 'fs_write', args: { path: filename, content: decision } } },
-          { text: 'Written.' },
+          {
+            tool: {
+              name: 'fs_edit',
+              args: { path: filename, oldText: 'BETA', newText: 'beta' },
+            },
+          },
+          { text: 'Aggiornato.' },
         ],
       });
       try {
-        writeFileSync(join(inst.workspace, 'alpha.md'), `${decision}\nShip date: Monday.`);
-        writeFileSync(join(inst.workspace, 'beta.md'), `${decision}\nShip date: Tuesday.`);
-        const profiles = join(inst.home, 'profiles');
-        mkdirSync(profiles, { recursive: true });
-        writeFileSync(
-          join(profiles, 'discovery.json'),
-          JSON.stringify({
-            schemaVersion: 1,
-            name: 'gateway discovery acceptance',
-            match: ['*'],
-            maxToolsExposed: 6,
-            maxToolCallsPerTurn: 8,
-            thinking: 'unset',
-            recovery: [],
-            notes: 'Require a discovery round before the file write.',
-          }),
-        );
+        writeFileSync(join(inst.workspace, filename), original);
         const gateway = await inst.gateway();
         try {
           await gateway.waitFor(/muffin gateway/, 20_000);
@@ -202,23 +189,21 @@ describe('acceptance · #533 · il gateway è l unico execution owner', () => {
             'run',
             '--timeout',
             String(HEADLESS_TURN_TIMEOUT_SECONDS),
-            `Read alpha.md and beta.md. Create ${filename} with only the shared decision, without either shipment date.`,
+            `sistema la riga in maiuscolo in ${filename}`,
           ]);
           expect(run.code, run.err).toBe(0);
           expect(run.err).toContain('esecuzione sul gateway');
           const requests = inst.provider.main();
           expect(requests[0]?.tools).toContain('capability_search');
-          expect(requests.slice(0, 3).flatMap((request) => request.tools)).not.toContain(
-            'fs_write',
-          );
-          expect(requests[3]?.tools).toContain('fs_write');
-          expect(readFileSync(join(inst.workspace, filename), 'utf8')).toBe(decision);
+          expect(requests[0]?.tools).not.toContain('fs_edit');
+          expect(requests[1]?.tools).toContain('fs_edit');
+          expect(readFileSync(join(inst.workspace, filename), 'utf8')).toBe('alfa\nbeta\nomega\n');
           const effect = inst.db((db) =>
             db
               .prepare(`
             SELECT calls.decision, calls.is_error, calls.ended_at, turns.status
             FROM turn_tool_calls AS calls JOIN turns ON turns.id = calls.turn_id
-            WHERE calls.tool = 'fs_write' AND turns.surface = 'cli'
+            WHERE calls.tool = 'fs_edit' AND turns.surface = 'cli'
           `)
               .get(),
           );

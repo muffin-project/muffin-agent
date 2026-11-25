@@ -333,7 +333,10 @@ export function ambienteSection(a: {
    */
   istanza?: IstanzaFacts;
 }): string {
-  const zona = a.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  // Solo il prompt di classe owner usa il fuso dell'installazione: in un
+  // gruppo o con un ospite il fuso locale direbbe dove vive l'owner.
+  const timeZone =
+    a.classe === 'owner' ? (a.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone) : 'UTC';
   // Locale esplicito: quello di sistema qui è `en-US` (misurato), e un agente
   // che parla italiano non deve leggere «Friday» per sapere che giorno è.
   const quando = new Intl.DateTimeFormat('it-IT', {
@@ -343,7 +346,7 @@ export function ambienteSection(a: {
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-    timeZone: zona,
+    timeZone,
   }).format(a.adesso);
   const dove = SUPERFICI[a.surface] ?? a.surface;
   const conChi =
@@ -359,7 +362,7 @@ export function ambienteSection(a: {
     // per chi legge e per il modello. Trovato facendole collidere.
     '## Questo turno',
     '',
-    `- Adesso: ${quando} — ${zona}, ${offsetUtc(a.adesso, zona)}.`,
+    `- Adesso: ${quando} — ${timeZone}, ${offsetUtc(a.adesso, timeZone)}.`,
     `- Superficie: ${dove}, ${conChi}.`,
     `- Ti sta eseguendo: ${a.model} (profilo ${a.profilo}).`,
   ];
@@ -639,7 +642,13 @@ function concat(parts: string[]): string {
  * 04/09 found four `agentic` fails whose turn stalled on "serve la tua
  * approvazione per sys.shell" where a dedicated tool already covered the
  * question ("che modello ti sta eseguendo" is `sys_inspect`, not a shell
- * command). Every tool's own description now says when to use it and when
+ * command). Since Parte 0 the same answer is already in the turn block
+ * («Ti sta eseguendo: …», `ambienteSection`), and the old wording — "per «che
+ * modello» concateni `sys_inspect`" — made a greeting that mentioned the model
+ * pay a second pass: measured 04/11/2026, the model called `sys_inspect` to
+ * read back the line it had just been given, and got ~1.2k tokens of doctor
+ * report for it (19.5k input instead of ~9k for «Ciao»). The line now points
+ * at the turn block first and keeps `sys_inspect` for what only it has. Every tool's own description now says when to use it and when
  * not to (Anthropic, *Define tools* — "when it should be used (and when it
  * shouldn't)"), but a model choosing between fourteen tool descriptions and
  * one instruction line reads the line first. The rule below is that line: it
@@ -671,7 +680,7 @@ const WORK_RULES = [
   '- Se il lavoro richiede più passaggi, dì in una riga cosa stai per fare prima di partire. Non a metà, e non a cose fatte.',
   '- Segui la richiesta del turno e le correzioni dell’owner. Il piano della conversazione è contesto: parlarne non significa concedere di eseguirlo.',
   '- Quando hai finito, rispondi e basta: non chiamare altri tool per abitudine.',
-  '- Il tool dedicato viene prima della shell: leggi con `fs_read`/`fs_search`, ispeziona con `sys_inspect` o `process_list`, e se il compito nomina un servizio esterno (Linear, GitHub, …) cerca un tool caricato con quel nome prima di guardare nell\'ambiente o in un file di config. `shell_run` (sola lettura) resta l\'ultima risorsa per quello che nessun tool copre, e chiede sempre il sì, come `shell_run_write` — per "che modello ti sta eseguendo" concateni `sys_inspect`, non un comando: `fs_read("config.json")` poi, se serve, `shell_run` sul risultato, non il contrario. «Dimentica X»: `memory_forget` con le parole esatte in `instruction`, poi gli id — mai shell, sqlite o file.',
+  '- Il tool dedicato viene prima della shell: leggi con `fs_read`/`fs_search`, ispeziona con `sys_inspect` o `process_list`, e se il compito nomina un servizio esterno (Linear, GitHub, …) cerca un tool caricato con quel nome prima di guardare nell\'ambiente o in un file di config. `shell_run` (sola lettura) resta l\'ultima risorsa per quello che nessun tool copre, e chiede sempre il sì, come `shell_run_write` — il modello che ti esegue è già in «Questo turno»: rispondi da lì, senza `sys_inspect`; per la shell, `fs_read("config.json")` poi `shell_run` sul risultato, non il contrario. «Dimentica X»: `memory_forget` con le parole esatte in `instruction`, poi gli id — mai shell, sqlite o file.',
   // La riga sul recinto. Sta qui e non in `persona.md` perché è una regola
   // operativa su cosa fare di un risultato, non un tratto di carattere; e sta
   // in **tutte e due** le versioni perché `promptVersion` di default è `v1`
@@ -741,7 +750,7 @@ const WORK_RULES_V2 = [
   '- Chiedo a parole solo quando la decisione è davvero sua: un tradeoff irreversibile, o due strade che portano a due lavori diversi. In quel caso porto le opzioni e la mia opinione, non una domanda aperta.',
   "- Prima di rifare una chiamata che ho già fatto, mi chiedo cosa è cambiato. Se non è cambiato niente, la risposta ce l'ho già.",
   '- I tool visibili sono quelli che posso chiamare adesso. Se vedo capability_search, lo uso per trovare una capability autorizzata che manca alla richiesta prima di dire che non esiste, anche quando i tool visibili coprono altre parti. Non invento tool, e non invento una policy o un permesso per nascondere un tool mancante.',
-  '- Il tool dedicato viene prima della shell: leggo con `fs_read`/`fs_search`, ispeziono con `sys_inspect` o `process_list`, e se il compito nomina un servizio esterno cerco un tool caricato con quel nome prima di guardare nell\'ambiente o in un file di config. `shell_run` (sola lettura) resta l\'ultima risorsa per quello che nessun tool copre, e chiede sempre il sì, come `shell_run_write` — per "che modello mi sta eseguendo" concateno `sys_inspect`, non un comando: prima `fs_read` sul file che mi serve, poi `shell_run` sul risultato se serve davvero, non il contrario. «Dimentica X»: `memory_forget` con le parole esatte in `instruction`, poi gli id — mai shell, sqlite o file.',
+  "- Il tool dedicato viene prima della shell: leggo con `fs_read`/`fs_search`, ispeziono con `sys_inspect` o `process_list`, e se il compito nomina un servizio esterno cerco un tool caricato con quel nome prima di guardare nell'ambiente o in un file di config. `shell_run` (sola lettura) resta l'ultima risorsa per quello che nessun tool copre, e chiede sempre il sì, come `shell_run_write` — il modello che mi esegue è già in «Questo turno»: rispondo da lì, senza `sys_inspect`; per la shell, prima `fs_read` sul file che mi serve, poi `shell_run` sul risultato se serve davvero, non il contrario. «Dimentica X»: `memory_forget` con le parole esatte in `instruction`, poi gli id — mai shell, sqlite o file.",
   '',
   '## Quello che leggo',
   '',
