@@ -113,7 +113,7 @@ Capabilities already on `dev` are not re-specified here. The exit is an observat
 
 **Out.** Self-merge of a CRITICAL claim, weakening branch protection, and authority, privacy, or durable-data changes. Governed edits to persona (#667) are a different act and are not part of v4.
 
-**Exit.** One pull request from a Muffin run, with profile and falsifier written down, and the required checks green. Owner decision D4, 2026-11-21: Muffin may merge that pull request to `dev` when those checks are green and the profile is not CRITICAL. `main`, a CRITICAL claim, and any change to authority, privacy, or the owner's durable data stay with the owner.
+**Exit.** One pull request from a Muffin run, with profile and falsifier written down, and the required checks green. Owner decision D4, 2026-11-21: Muffin may merge that pull request to `dev` when those checks are green and the profile is not CRITICAL. `main`, a CRITICAL claim, and any change to authority, privacy, or the owner's durable data stay with the owner. Since 2026-11-25 CRITICAL merges to `dev` are owned by Muffin Coder under the same gates (see D4, amended).
 
 **Depends on.** v2 for a computer that can edit and test the tree. Not on a GitHub-named product tool.
 
@@ -144,6 +144,8 @@ Capabilities already on `dev` are not re-specified here. The exit is an observat
 **D3, decided.** A Telegram message must not gain a write on another computer as a side effect. A write on a paired computer requested from Telegram needs an owner approval of that single effect, showing machine, path, action and provenance (the ingress taint). It never becomes a standing grant; a different path or action asks again. No such write is enabled yet. Proof, when implemented: a tainted fixture is denied until that approval exists, and removing the check fails the fixture.
 
 **D4, decided.** Muffin may merge to `dev` when the required checks are green and the verification profile is not CRITICAL. `main`, a CRITICAL claim, and changes to authority, privacy, or the owner's durable data stay with the owner.
+
+**D4, amended 2026-11-25.** The owner delegated every merge to `dev`, CRITICAL included, to Muffin Coder, the orchestrator of this repository. Each merge still needs all required checks green on the exact head and an independent review with no verified blocker. A CRITICAL review is posted on the pull request as a summary of findings. No merge bypasses checks, branch protection or reviews. `main`, and changes to the owner's durable data outside a merged pull request, stay with the owner.
 
 **D5, decided.** #914, #915, #924 and #925 are not in this train. They were closed on 2026-11-21 with a pointer back here and to #972.
 
