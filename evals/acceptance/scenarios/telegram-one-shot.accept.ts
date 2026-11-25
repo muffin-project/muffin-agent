@@ -109,7 +109,8 @@ describe('acceptance · #598 · deferred work delivery', () => {
     const evidence = 'written once by the scheduler\n';
     const request =
       'Avvia in background una sola volta un lavoro per creare e verificare il file one-shot-evidence.txt. Avvisami quando è finito.';
-    const goal = 'Create and verify the synthetic file one-shot-evidence.txt.';
+    const goal =
+      'Once in the background, create and verify the synthetic file one-shot-evidence.txt. Tell me here when it is done.';
     const armed = 'One-shot work armed.';
     const final = 'One-shot file verified and complete.';
     const inst = await install({
@@ -246,6 +247,10 @@ describe('acceptance · #598 · deferred work delivery', () => {
         { tool: 'fs_read', is_error: 0 },
       ]);
       const requests = inst.provider.main();
+      // Requests 0-2 are the owner's turn; the scheduled job starts at 3.
+      expect(requests[0]?.system).not.toContain('already scheduled job');
+      expect(requests[3]?.system).toContain('already scheduled job');
+      expect(requests[3]?.transcript).toContain(goal);
       expect(requests.slice(3).every((request) => !request.tools.includes('schedule_once'))).toBe(
         true,
       );
