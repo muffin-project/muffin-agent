@@ -1,14 +1,22 @@
-import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
+import { providerMessages } from '../../agent/loop/provider-checkpoint.js';
 import type { Message } from '../../agent/providers/types.js';
+import { migrate } from '../db/migrate.js';
 import { HARD_STALE_MULTIPLIER } from '../lock/durable.js';
 import type { Principal } from '../policy/types.js';
-import { TURN_STALE_AFTER_MS, TurnStore, describeInterrupted, readTurnHealth, type NewTurn, type TurnCounters } from './store.js';
-import { providerMessages } from '../../agent/loop/provider-checkpoint.js';
-import { migrate } from '../db/migrate.js';
+import {
+  describeInterrupted,
+  type NewTurn,
+  readTurnHealth,
+  TURN_STALE_AFTER_MS,
+  type TurnCounters,
+  TurnStore,
+} from './store.js';
+import { encodeWaitFor } from './wait.js';
 
 /**
  * The row, and the four things it exists to hold that nothing else can.
@@ -46,8 +54,10 @@ const spec = (over: Partial<NewTurn> = {}): NewTurn => ({
   ...over,
 });
 
-const store = (alive: (pid: number) => boolean = () => true, clock: () => Date = () => new Date()) =>
-  new TurnStore(new DatabaseCtor(':memory:'), clock, alive);
+const store = (
+  alive: (pid: number) => boolean = () => true,
+  clock: () => Date = () => new Date(),
+) => new TurnStore(new DatabaseCtor(':memory:'), clock, alive);
 
 function migrateLegacyTurns(db: DatabaseCtor.Database): void {
   const dir = mkdtempSync(join(tmpdir(), 'muffin-turn-migrate-'));
@@ -57,6 +67,192 @@ function migrateLegacyTurns(db: DatabaseCtor.Database): void {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+describe('owner questions', () => {
+  const now = new Date('2026-11-23T10:00:00.000Z');
+  const deadline = new Date('2026-11-24T10:00:00.000Z');
+  const barrier = encodeWaitFor({
+    kind: 'owner_reply',
+    id: 'a'.repeat(64),
+    question: 'Which file?',
+  });
+  const approval = encodeWaitFor({ kind: 'approval', id: 'abc' });
+  const staged = [{ role: 'assistant', content: 'Which file?' }];
+  const answered = [...staged, { role: 'user', content: 'The report' }];
+
+  function park(s: TurnStore, id: string, waitFor = barrier) {
+    const created = s.create(
+      spec({
+        id,
+        surface: 'telegram',
+        taint: 2,
+        counters: { ...spec().counters, iterations: 3, contextBuilt: true },
+        replyTo: { chatId: 123 },
+      }),
+    );
+    expect(
+      s.suspend(
+        id,
+        {
+          messages: staged,
+          taint: created.taint,
+          counters: created.counters,
+          wakeAt: deadline.toISOString(),
+          waitFor,
+        },
+        created.claimToken,
+      ),
+    ).toBe(true);
+    return s.get(id)!;
+  }
+
+  it('filters the waiting prefix before applying the limit and keeps questions out of the sweep', () => {
+    const s = store(undefined, () => now);
+    park(s, 'approval', approval);
+    park(s, 'question');
+    park(s, 'other-question');
+    s.enqueue(spec({ id: 'queued' }));
+
+    expect(s.ownerQuestions(1).map((row) => row.id)).toEqual(['question']);
+    expect(s.ownerQuestions().map((row) => row.id)).toEqual(['question', 'other-question']);
+    expect(s.armed(1).map((row) => row.id)).toEqual(['approval']);
+    expect(s.answerOwnerQuestion('question', barrier, answered, () => {})).toBe(true);
+    expect(s.ownerQuestions().map((row) => row.id)).toEqual(['other-question']);
+  });
+
+  it('checks the full barrier and row status before consuming ingress and preserves the rest of the turn', () => {
+    const s = store(undefined, () => now);
+    const waiting = park(s, 'question');
+    park(s, 'approval', approval);
+    const differentQuestion = encodeWaitFor({
+      kind: 'owner_reply',
+      id: 'a'.repeat(64),
+      question: 'A different question?',
+    });
+    let consumed = 0;
+    const consume = () => {
+      consumed++;
+    };
+
+    expect(s.answerOwnerQuestion('question', differentQuestion, answered, consume)).toBe(false);
+    expect(s.answerOwnerQuestion('missing', barrier, answered, consume)).toBe(false);
+    expect(s.answerOwnerQuestion('approval', approval, answered, consume)).toBe(false);
+    expect(s.get('question')).toEqual(waiting);
+    expect(consumed).toBe(0);
+
+    expect(s.answerOwnerQuestion('question', barrier, answered, consume)).toBe(true);
+    expect(s.get('question')).toEqual({
+      ...waiting,
+      status: 'runnable',
+      wakeAt: null,
+      providerLease: { model: waiting.providerLease.model, checkpoint: answered },
+    });
+    expect(s.answerOwnerQuestion('question', barrier, [], consume)).toBe(false);
+    expect(consumed).toBe(1);
+    expect(s.claim('question')).toMatchObject({ status: 'running', wakeAt: null, waitFor: null });
+  });
+
+  it('blocks an early generic wake and claim, and accepts no answer at or after the deadline', () => {
+    const s = store(undefined, () => now);
+    const waiting = park(s, 'question');
+    const unexpected = () => {
+      throw new Error('unexpected ingress consumption');
+    };
+    expect(s.due(now)).toEqual([]);
+    expect(s.wake('question', now)).toBe(false);
+    expect(s.claim('question', process.pid, now)).toBeNull();
+    expect(s.get('question')).toEqual(waiting);
+
+    expect(s.answerOwnerQuestion('question', barrier, answered, unexpected, deadline)).toBe(false);
+    expect(s.due(deadline)).toEqual([waiting]);
+    expect(s.claim('question', process.pid, deadline)).toMatchObject({
+      status: 'running',
+      waitFor: null,
+      wakeAt: null,
+      providerLease: { checkpoint: staged },
+    });
+    expect(
+      s.answerOwnerQuestion(
+        'question',
+        barrier,
+        answered,
+        unexpected,
+        new Date(deadline.getTime() + 1),
+      ),
+    ).toBe(false);
+  });
+
+  it('rolls back both the checkpoint and the real ingress write if consumption throws', () => {
+    const db = new DatabaseCtor(':memory:');
+    try {
+      const s = new TurnStore(db, () => now);
+      const waiting = park(s, 'question');
+      db.exec('CREATE TABLE ingress (id INTEGER PRIMARY KEY); INSERT INTO ingress VALUES (1)');
+      const consume = () => {
+        db.prepare('DELETE FROM ingress WHERE id = 1').run();
+      };
+      const pending = db.prepare('SELECT id FROM ingress');
+
+      expect(() =>
+        s.answerOwnerQuestion('question', barrier, answered, () => {
+          expect(db.inTransaction).toBe(true);
+          consume();
+          throw new Error('fault after ingress write');
+        }),
+      ).toThrow('fault after ingress write');
+      expect(s.get('question')).toEqual(waiting);
+      expect(pending.all()).toEqual([{ id: 1 }]);
+
+      expect(s.answerOwnerQuestion('question', barrier, answered, consume)).toBe(true);
+      expect(pending.all()).toEqual([]);
+      expect(s.get('question')?.providerLease.checkpoint).toEqual(answered);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('marks only a committed pause and keeps the final pending on the next lease', () => {
+    const s = store(undefined, () => now);
+    const counters = spec().counters;
+    const uncommitted = s.create(spec({ id: 'uncommitted', replyTo: { chatId: 123 } }));
+    const patch = { messages: [], taint: 0 as const, counters };
+    const pause = { ...patch, waitFor: barrier, wakeAt: deadline.toISOString() };
+    expect(s.suspend(uncommitted.id, pause, 'lost-claim')).toBe(false);
+    expect(
+      s.finish(uncommitted.id, { ...patch, outcome: 'answered' }, uncommitted.claimToken),
+    ).toBe(true);
+    expect(s.pendingOwnerQuestionFinal()).toBeNull();
+
+    const waiting = park(s, 'question');
+    const claimed = s.claim(waiting.id, process.pid, deadline);
+    expect(claimed).toMatchObject({ ownerQuestionFinal: true, waitFor: null });
+    if (!claimed) throw new Error('missing claim');
+    expect(s.checkpoint(claimed.id, patch, claimed.claimToken)).toBe(true);
+    expect(
+      s.releaseContinuable(
+        claimed.id,
+        {
+          ...patch,
+          reason: {
+            class: 'provider_empty',
+            lease: claimed.leaseIndex,
+            at: deadline.toISOString(),
+          },
+        },
+        claimed.claimToken,
+      ),
+    ).toBe(true);
+    s.delivered(claimed.id, 'sent'); // The previous lease's diagnostic, not the final answer.
+    const granted = s.grantContinuation(claimed.id, {
+      ...patch,
+      newLeaseStartedAt: deadline.toISOString(),
+    });
+    expect(granted).toMatchObject({ ownerQuestionFinal: true, leaseIndex: 1, delivery: 'pending' });
+    if (!granted) throw new Error('missing continuation');
+    expect(s.finish(granted.id, { ...patch, outcome: 'answered' }, granted.claimToken)).toBe(true);
+    expect(s.pendingOwnerQuestionFinal()).toMatchObject({ id: granted.id, leaseIndex: 1 });
+  });
+});
 
 describe('the turn record', () => {
   it('reassigns only a never-started runnable row to the newly selected model', () => {
@@ -74,7 +270,12 @@ describe('the turn record', () => {
   it('exists as soon as it is created: running, claimed by this process, model pinned', () => {
     const s = store();
     const created = s.create(spec({ inputText: 'ingress canonico' }), 4242);
-    expect(created).toMatchObject({ status: 'running', claimedBy: 4242, taint: 0, inputText: 'ingress canonico' });
+    expect(created).toMatchObject({
+      status: 'running',
+      claimedBy: 4242,
+      taint: 0,
+      inputText: 'ingress canonico',
+    });
     expect(created.providerLease.model).toBe('claude-opus-5');
     expect(s.get('turn-1')?.outcome).toBeNull();
   });
@@ -103,14 +304,23 @@ describe('the turn record', () => {
         ],
       },
     ];
-    expect(s.checkpoint('turn-1', { messages, taint: 0, counters: spec().counters }, created.claimToken)).toBe(true);
+    expect(
+      s.checkpoint('turn-1', { messages, taint: 0, counters: spec().counters }, created.claimToken),
+    ).toBe(true);
     expect(providerMessages(s.get('turn-1'))).toEqual(messages);
   });
 
   it('raises the taint with the tool result that caused it, in one write', () => {
     const s = store();
     s.create(spec());
-    s.startToolCall('turn-1', { callId: 'c1', tool: 'http_get', capability: 'sys.http', rerunnable: true, args: { url: 'https://x' }, effect: { row: 'egress', reversible: 'yes', resource: null, decision: 'allow' } });
+    s.startToolCall('turn-1', {
+      callId: 'c1',
+      tool: 'http_get',
+      capability: 'sys.http',
+      rerunnable: true,
+      args: { url: 'https://x' },
+      effect: { row: 'egress', reversible: 'yes', resource: null, decision: 'allow' },
+    });
     s.endToolCall('turn-1', 'c1', { content: 'body', isError: false, tier: 3 });
     // Not derivable from the principal — an owner turn starts at 0 and this one
     // is at 3 because of what it read. That is the escalation the design names:
@@ -123,9 +333,23 @@ describe('the turn record', () => {
   it('never lowers the taint, whatever a later result says', () => {
     const s = store();
     s.create(spec());
-    s.startToolCall('turn-1', { callId: 'c1', tool: 'http_get', capability: 'sys.http', rerunnable: true, args: {}, effect: { row: 'egress', reversible: 'yes', resource: null, decision: 'allow' } });
+    s.startToolCall('turn-1', {
+      callId: 'c1',
+      tool: 'http_get',
+      capability: 'sys.http',
+      rerunnable: true,
+      args: {},
+      effect: { row: 'egress', reversible: 'yes', resource: null, decision: 'allow' },
+    });
     s.endToolCall('turn-1', 'c1', { content: 'body', isError: false, tier: 3 });
-    s.startToolCall('turn-1', { callId: 'c2', tool: 'fs_read', capability: 'fs.read', rerunnable: true, args: {}, effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' } });
+    s.startToolCall('turn-1', {
+      callId: 'c2',
+      tool: 'fs_read',
+      capability: 'fs.read',
+      rerunnable: true,
+      args: {},
+      effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' },
+    });
     s.endToolCall('turn-1', 'c2', { content: 'file', isError: false, tier: 0 });
     expect(s.get('turn-1')?.taint).toBe(3);
   });
@@ -134,15 +358,31 @@ describe('the turn record', () => {
     const s = store();
     const created = s.create(spec());
     expect(created.claimToken).not.toBeNull();
-    expect(s.finish('turn-1', { outcome: 'answered', messages: [], taint: 1, counters: spec().counters }, created.claimToken)).toBe(true);
-    expect(s.get('turn-1')).toMatchObject({ status: 'done', outcome: 'answered', claimedBy: null, taint: 1, claimToken: null });
+    expect(
+      s.finish(
+        'turn-1',
+        { outcome: 'answered', messages: [], taint: 1, counters: spec().counters },
+        created.claimToken,
+      ),
+    ).toBe(true);
+    expect(s.get('turn-1')).toMatchObject({
+      status: 'done',
+      outcome: 'answered',
+      claimedBy: null,
+      taint: 1,
+      claimToken: null,
+    });
   });
 
   it('keeps the two outcomes apart: a failed delivery leaves the turn answered', () => {
     const s = store();
     const created = s.create(spec({ replyTo: { chatId: 7, messageId: 9 } }));
     expect(s.get('turn-1')?.delivery).toBe('pending');
-    s.finish('turn-1', { outcome: 'answered', messages: [], taint: 0, counters: spec().counters }, created.claimToken);
+    s.finish(
+      'turn-1',
+      { outcome: 'answered', messages: [], taint: 0, counters: spec().counters },
+      created.claimToken,
+    );
     s.delivered('turn-1', 'failed:429 Too Many Requests');
     const row = s.get('turn-1');
     // The property `core/scheduler/scheduler.ts:166-171` already paid for: the
@@ -156,7 +396,11 @@ describe('the turn record', () => {
   it('keeps an ambiguous remote effect terminal and visible to undelivered readers', () => {
     const s = store();
     const created = s.create(spec({ replyTo: { chatId: 7, messageId: 9 } }));
-    s.finish('turn-1', { outcome: 'answered', messages: [], taint: 0, counters: spec().counters }, created.claimToken);
+    s.finish(
+      'turn-1',
+      { outcome: 'answered', messages: [], taint: 0, counters: spec().counters },
+      created.claimToken,
+    );
     s.delivered('turn-1', 'possibly_sent');
 
     expect(s.get('turn-1')?.delivery).toBe('possibly_sent');
@@ -206,10 +450,17 @@ describe('taintForIds — the batch read agent/context/history-taint.ts needs', 
   });
 });
 
-describe('markUndone / undoneTraceIds — D11, muffin undo\'s other half', () => {
+describe("markUndone / undoneTraceIds — D11, muffin undo's other half", () => {
   const conUnaChiamataFinita = (s: TurnStore, turnId: string, callId = 'w1') => {
     s.create(spec({ id: turnId }));
-    s.startToolCall(turnId, { callId, tool: 'fs_write', capability: 'fs.write', rerunnable: false, args: {}, effect: { row: 'host', reversible: 'undoable', resource: null, decision: 'allow' } });
+    s.startToolCall(turnId, {
+      callId,
+      tool: 'fs_write',
+      capability: 'fs.write',
+      rerunnable: false,
+      args: {},
+      effect: { row: 'host', reversible: 'undoable', resource: null, decision: 'allow' },
+    });
     s.endToolCall(turnId, callId, { content: 'scritto', isError: false, tier: 0 });
   };
 
@@ -253,15 +504,35 @@ describe('reclaiming what a dead process was holding', () => {
   it('marks the row interrupted and names the calls that may have landed', () => {
     const s = store(() => false);
     s.create(spec(), 99999);
-    s.startToolCall('turn-1', { callId: 'c1', tool: 'fs_read', capability: 'fs.read', rerunnable: true, args: {}, effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' } });
+    s.startToolCall('turn-1', {
+      callId: 'c1',
+      tool: 'fs_read',
+      capability: 'fs.read',
+      rerunnable: true,
+      args: {},
+      effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' },
+    });
     s.endToolCall('turn-1', 'c1', { content: 'ok', isError: false, tier: 0 });
     // Intent, no outcome: the process died between the two.
-    s.startToolCall('turn-1', { callId: 'c2', tool: 'shell_run', capability: 'sys.shell', rerunnable: false, args: { command: 'send-mail' }, effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' } });
+    s.startToolCall('turn-1', {
+      callId: 'c2',
+      tool: 'shell_run',
+      capability: 'sys.shell',
+      rerunnable: false,
+      args: { command: 'send-mail' },
+      effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' },
+    });
 
     const [reclaimed] = s.reclaim();
     expect(reclaimed).toMatchObject({ id: 'turn-1', surface: 'cli', model: 'claude-opus-5' });
     expect(reclaimed?.uncertain).toEqual([
-      { callId: 'c2', tool: 'shell_run', capability: 'sys.shell', rerunnable: false, startedAt: expect.any(String) },
+      {
+        callId: 'c2',
+        tool: 'shell_run',
+        capability: 'sys.shell',
+        rerunnable: false,
+        startedAt: expect.any(String),
+      },
     ]);
     expect(s.get('turn-1')?.status).toBe('interrupted');
     // Reclaimed, never resumed: nothing here may claim a turn is runnable while
@@ -283,7 +554,10 @@ describe('reclaiming what a dead process was holding', () => {
     // corpse, and the row it left `interrupted` was immediately claimable by
     // a second process while the first was still executing it.
     const start = new Date('2026-08-15T10:00:00.000Z');
-    const s = store(() => true, () => start);
+    const s = store(
+      () => true,
+      () => start,
+    );
     s.create(spec(), 4242);
     expect(s.reclaim(new Date(start.getTime() + TURN_STALE_AFTER_MS - 1))).toEqual([]);
     // Past the ordinary horizon, still alive: still not reclaimed. This exact
@@ -294,7 +568,10 @@ describe('reclaiming what a dead process was holding', () => {
 
   it('reclaims past the hard horizon whatever the pid says — pids get reused', () => {
     const start = new Date('2026-08-15T10:00:00.000Z');
-    const s = store(() => true, () => start);
+    const s = store(
+      () => true,
+      () => start,
+    );
     s.create(spec(), 4242);
     const pastHard = new Date(start.getTime() + TURN_STALE_AFTER_MS * HARD_STALE_MULTIPLIER + 1);
     expect(s.reclaim(pastHard)).toHaveLength(1);
@@ -304,7 +581,11 @@ describe('reclaiming what a dead process was holding', () => {
   it('a finished turn is never reclaimed, whoever wrote it', () => {
     const s = store(() => false);
     const created = s.create(spec(), 99999);
-    s.finish('turn-1', { outcome: 'answered', messages: [], taint: 0, counters: spec().counters }, created.claimToken);
+    s.finish(
+      'turn-1',
+      { outcome: 'answered', messages: [], taint: 0, counters: spec().counters },
+      created.claimToken,
+    );
     expect(s.reclaim()).toEqual([]);
   });
 
@@ -312,8 +593,16 @@ describe('reclaiming what a dead process was holding', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'muffin-turns-')), 'muffin.db');
     const first = new DatabaseCtor(file);
     const second = new DatabaseCtor(file);
-    const a = new TurnStore(first, () => new Date(), () => false);
-    const b = new TurnStore(second, () => new Date(), () => false);
+    const a = new TurnStore(
+      first,
+      () => new Date(),
+      () => false,
+    );
+    const b = new TurnStore(
+      second,
+      () => new Date(),
+      () => false,
+    );
     a.create(spec(), 99999);
 
     const reported = [...a.reclaim(), ...b.reclaim()];
@@ -336,11 +625,19 @@ describe('fencing: a stolen claim cannot write over its thief (P19)', () => {
     // (store.ts:471-481,579 in the audit's citation).
     const file = join(mkdtempSync(join(tmpdir(), 'muffin-fencing-')), 'muffin.db');
     const start = new Date('2026-08-16T10:00:00.000Z');
-    const original = new TurnStore(new DatabaseCtor(file), () => start, () => true);
+    const original = new TurnStore(
+      new DatabaseCtor(file),
+      () => start,
+      () => true,
+    );
     const created = original.create(spec(), 4242);
     expect(created.claimToken).not.toBeNull();
 
-    const thief = new TurnStore(new DatabaseCtor(file), () => new Date(start.getTime() + TURN_STALE_AFTER_MS * HARD_STALE_MULTIPLIER + 1), () => true);
+    const thief = new TurnStore(
+      new DatabaseCtor(file),
+      () => new Date(start.getTime() + TURN_STALE_AFTER_MS * HARD_STALE_MULTIPLIER + 1),
+      () => true,
+    );
     expect(thief.reclaim()).toHaveLength(1);
     const stolen = thief.claim('turn-1', 777);
     expect(stolen).toMatchObject({ status: 'running', claimedBy: 777 });
@@ -351,24 +648,42 @@ describe('fencing: a stolen claim cannot write over its thief (P19)', () => {
     expect(
       original.checkpoint(
         'turn-1',
-        { messages: [{ role: 'assistant', content: [{ type: 'text', text: 'work of pid 4242' }] }], taint: 0, counters: spec().counters },
+        {
+          messages: [{ role: 'assistant', content: [{ type: 'text', text: 'work of pid 4242' }] }],
+          taint: 0,
+          counters: spec().counters,
+        },
         created.claimToken,
       ),
     ).toBe(false);
     expect(
       original.suspend(
         'turn-1',
-        { messages: [], taint: 0, counters: spec().counters, wakeAt: new Date(start.getTime() + 3_600_000).toISOString(), waitFor: null },
+        {
+          messages: [],
+          taint: 0,
+          counters: spec().counters,
+          wakeAt: new Date(start.getTime() + 3_600_000).toISOString(),
+          waitFor: null,
+        },
         created.claimToken,
       ),
     ).toBe(false);
     expect(
-      original.finish('turn-1', { outcome: 'answered', messages: [], taint: 0, counters: spec().counters }, created.claimToken),
+      original.finish(
+        'turn-1',
+        { outcome: 'answered', messages: [], taint: 0, counters: spec().counters },
+        created.claimToken,
+      ),
     ).toBe(false);
 
     // The row still reads exactly as pid 777 left it — none of the three
     // writes above touched it.
-    expect(thief.get('turn-1')).toMatchObject({ status: 'running', claimedBy: 777, claimToken: stolen?.claimToken });
+    expect(thief.get('turn-1')).toMatchObject({
+      status: 'running',
+      claimedBy: 777,
+      claimToken: stolen?.claimToken,
+    });
   });
 
   it('every claim mints its own token — two turns never share one', () => {
@@ -382,16 +697,34 @@ describe('fencing: a stolen claim cannot write over its thief (P19)', () => {
 });
 
 describe('what an interrupted turn is told to the owner', () => {
-  const base = { id: 'abcdef012345678', surface: 'telegram', tenant: 'host', sessionId: 's', model: 'm', startedAt: '2026-08-15T10:11:12.000Z', delivery: null };
+  const base = {
+    id: 'abcdef012345678',
+    surface: 'telegram',
+    tenant: 'host',
+    sessionId: 's',
+    model: 'm',
+    startedAt: '2026-08-15T10:11:12.000Z',
+    delivery: null,
+  };
 
   it('says plainly that nothing was half-done when nothing was in flight', () => {
-    expect(describeInterrupted({ ...base, uncertain: [] })).toContain('non ha lasciato effetti a metà');
+    expect(describeInterrupted({ ...base, uncertain: [] })).toContain(
+      'non ha lasciato effetti a metà',
+    );
   });
 
   it('does not raise an alarm for calls that can simply be made again', () => {
     const line = describeInterrupted({
       ...base,
-      uncertain: [{ callId: 'c1', tool: 'fs_read', capability: 'fs.read', rerunnable: true, startedAt: base.startedAt }],
+      uncertain: [
+        {
+          callId: 'c1',
+          tool: 'fs_read',
+          capability: 'fs.read',
+          rerunnable: true,
+          startedAt: base.startedAt,
+        },
+      ],
     });
     expect(line).toContain('ri-eseguibili');
     expect(line).not.toContain('non è possibile sapere');
@@ -400,7 +733,15 @@ describe('what an interrupted turn is told to the owner', () => {
   it('says what cannot be known when a call is not declared re-runnable', () => {
     const line = describeInterrupted({
       ...base,
-      uncertain: [{ callId: 'c1', tool: 'shell_run', capability: 'sys.shell', rerunnable: false, startedAt: base.startedAt }],
+      uncertain: [
+        {
+          callId: 'c1',
+          tool: 'shell_run',
+          capability: 'sys.shell',
+          rerunnable: false,
+          startedAt: base.startedAt,
+        },
+      ],
     });
     expect(line).toContain('shell_run');
     expect(line).toContain('non è possibile sapere se ha avuto effetto');
@@ -424,7 +765,11 @@ describe('the reader a surface with only a database can use', () => {
   it('sees a crash nobody has reclaimed yet — the state a diagnosis is run in', () => {
     const db = new DatabaseCtor(':memory:');
     // Dead holder, and nothing has booted since: the row still says `running`.
-    const s = new TurnStore(db, () => new Date(), () => false);
+    const s = new TurnStore(
+      db,
+      () => new Date(),
+      () => false,
+    );
     s.create(spec(), 99999);
     // `doctor` does not build a runtime, so if this needed the mark to exist it
     // would answer "all clear" for exactly as long as nobody restarts — which
@@ -445,7 +790,11 @@ describe('the reader a surface with only a database can use', () => {
   it('bounds the window, so last month`s crash is not today`s news', () => {
     const db = new DatabaseCtor(':memory:');
     const old = new Date('2026-07-01T00:00:00.000Z');
-    const s = new TurnStore(db, () => old, () => false);
+    const s = new TurnStore(
+      db,
+      () => old,
+      () => false,
+    );
     s.create(spec(), 99999);
     const now = new Date('2026-08-15T00:00:00.000Z');
     expect(s.health({ now, windowMs: 24 * 60 * 60 * 1000 }).interrupted).toEqual([]);
@@ -455,9 +804,20 @@ describe('the reader a surface with only a database can use', () => {
 
   it('counts what is there and carries the uncertain calls with it', () => {
     const db = new DatabaseCtor(':memory:');
-    const s = new TurnStore(db, () => new Date(), () => false);
+    const s = new TurnStore(
+      db,
+      () => new Date(),
+      () => false,
+    );
     s.create(spec(), 99999);
-    s.startToolCall('turn-1', { callId: 'c1', tool: 'shell_run', capability: 'sys.shell', rerunnable: false, args: {}, effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' } });
+    s.startToolCall('turn-1', {
+      callId: 'c1',
+      tool: 'shell_run',
+      capability: 'sys.shell',
+      rerunnable: false,
+      args: {},
+      effect: { row: 'host', reversible: 'yes', resource: null, decision: 'allow' },
+    });
     s.reclaim();
     const health = readTurnHealth(db);
     expect(health?.total).toBe(1);
@@ -474,7 +834,11 @@ describe('the reader a surface with only a database can use', () => {
    */
   it('counts turns whose answer has nowhere to go', () => {
     const db = new DatabaseCtor(':memory:');
-    const s = new TurnStore(db, () => new Date(), () => true);
+    const s = new TurnStore(
+      db,
+      () => new Date(),
+      () => true,
+    );
     s.create(spec());
     expect(readTurnHealth(db)?.undeliverable.count).toBe(0);
 
@@ -487,12 +851,21 @@ describe('the reader a surface with only a database can use', () => {
 });
 
 describe('continuable · the lease ends, the work does not (P0-B)', () => {
-  const reason = { class: 'provider_empty' as const, lease: 0, attempts: 4, at: '2026-09-18T17:14:09.000Z' };
+  const reason = {
+    class: 'provider_empty' as const,
+    lease: 0,
+    attempts: 4,
+    at: '2026-09-18T17:14:09.000Z',
+  };
 
   const releaseIt = (s: TurnStore, id = 'turn-1') => {
     const rec = s.get(id);
     if (rec === null) throw new Error('no row');
-    return s.releaseContinuable(id, { messages: providerMessages(rec), taint: rec.taint, counters: rec.counters, reason }, rec.claimToken);
+    return s.releaseContinuable(
+      id,
+      { messages: providerMessages(rec), taint: rec.taint, counters: rec.counters, reason },
+      rec.claimToken,
+    );
   };
 
   const grantIt = (s: TurnStore, id = 'turn-1', fresh?: TurnCounters) => {
@@ -501,7 +874,10 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     return s.grantContinuation(
       id,
       {
-        messages: [...providerMessages(rec), { role: 'user', content: [{ type: 'text', text: 'riprendi' }] }],
+        messages: [
+          ...providerMessages(rec),
+          { role: 'user', content: [{ type: 'text', text: 'riprendi' }] },
+        ],
         taint: rec.taint,
         // Fresh lease-local capacity. iterations and resumes ride along
         // unchanged: iterations stays cumulative, resumes is the crash-loop
@@ -532,7 +908,12 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
 
     expect(releaseIt(s)).toBe(true);
     const rec = s.get('turn-1');
-    expect(rec).toMatchObject({ status: 'continuable', outcome: null, claimedBy: null, claimToken: null });
+    expect(rec).toMatchObject({
+      status: 'continuable',
+      outcome: null,
+      claimedBy: null,
+      claimToken: null,
+    });
     expect(rec?.continuableReason).toMatchObject({ class: 'provider_empty', lease: 0 });
     expect(created.claimToken).not.toBeNull();
   });
@@ -541,12 +922,19 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     // Blocker 1: the finished lease must be in the declared source of truth
     // from the release moment on — not only once somebody grants.
     const s = store();
-    s.create(spec({ counters: { ...spec().counters, toolCallsMade: 16, contextBuilt: true } }), 4242);
+    s.create(
+      spec({ counters: { ...spec().counters, toolCallsMade: 16, contextBuilt: true } }),
+      4242,
+    );
     expect(releaseIt(s)).toBe(true);
 
     const leases = s.leasesFor('turn-1');
     expect(leases).toHaveLength(1);
-    expect(leases[0]).toMatchObject({ leaseIndex: 0, outcome: 'provider_empty', endedAt: expect.any(String) });
+    expect(leases[0]).toMatchObject({
+      leaseIndex: 0,
+      outcome: 'provider_empty',
+      endedAt: expect.any(String),
+    });
     expect(leases[0]?.counters).toMatchObject({ toolCallsMade: 16 });
     expect(leases[0]?.transportAllowance).toBe(2);
     const rec = s.get('turn-1');
@@ -558,10 +946,26 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     const s = store();
     const created = s.create(spec(), 4242);
     expect(
-      s.suspend('turn-1', { messages: [], taint: 0, counters: spec().counters, wakeAt: '2026-09-18T18:00:00.000Z', waitFor: null }, created.claimToken),
+      s.suspend(
+        'turn-1',
+        {
+          messages: [],
+          taint: 0,
+          counters: spec().counters,
+          wakeAt: '2026-09-18T18:00:00.000Z',
+          waitFor: null,
+        },
+        created.claimToken,
+      ),
     ).toBe(true);
     const waiting = s.get('turn-1');
-    expect(s.releaseContinuable('turn-1', { messages: [], taint: 0, counters: spec().counters, reason }, waiting?.claimToken ?? null)).toBe(false);
+    expect(
+      s.releaseContinuable(
+        'turn-1',
+        { messages: [], taint: 0, counters: spec().counters, reason },
+        waiting?.claimToken ?? null,
+      ),
+    ).toBe(false);
     expect(s.get('turn-1')?.status).toBe('waiting');
   });
 
@@ -573,10 +977,19 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
 
     const granted = grantIt(s);
     expect(granted).not.toBeNull();
-    expect(granted).toMatchObject({ status: 'running', claimedBy: 4242, leaseIndex: 1, continuableReason: null });
+    expect(granted).toMatchObject({
+      status: 'running',
+      claimedBy: 4242,
+      leaseIndex: 1,
+      continuableReason: null,
+    });
     expect(granted?.claimToken).not.toBeNull();
     // Fresh lease-local capacity.
-    expect(granted?.counters).toMatchObject({ recoveriesUsed: 0, transportRetriesLeft: 10, toolCallsMade: 0 });
+    expect(granted?.counters).toMatchObject({
+      recoveriesUsed: 0,
+      transportRetriesLeft: 10,
+      toolCallsMade: 0,
+    });
     // Lifetime untouched by the grant: the previous lease was already
     // closed and folded at release. A grant that also folded would count
     // it twice.
@@ -587,7 +1000,11 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     // the release left it.
     const leases = s.leasesFor('turn-1');
     expect(leases).toHaveLength(2);
-    expect(leases[0]).toMatchObject({ leaseIndex: 0, outcome: 'provider_empty', endedAt: expect.any(String) });
+    expect(leases[0]).toMatchObject({
+      leaseIndex: 0,
+      outcome: 'provider_empty',
+      endedAt: expect.any(String),
+    });
     expect(leases[1]).toMatchObject({
       leaseIndex: 1,
       startedAt: '2026-09-18T17:16:35.000Z',
@@ -706,14 +1123,23 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     s.create(spec({ id: 'other-session', sessionId: 'altra' }), 1);
     for (const id of ['a', 'b', 'other-session']) {
       const rec = s.get(id);
-      s.releaseContinuable(id, { messages: [], taint: 0, counters: spec().counters, reason }, rec?.claimToken ?? null);
+      s.releaseContinuable(
+        id,
+        { messages: [], taint: 0, counters: spec().counters, reason },
+        rec?.claimToken ?? null,
+      );
     }
     // Key order in stored JSON must never split one speaker in two.
     const shuffled: Principal = { externalId: 'local', connector: 'cli', kind: 'owner' };
     const found = s.continuableFor('owner', shuffled, '2026-01-01T00:00:00.000Z');
     expect(found.map((r) => r.id).sort()).toEqual(['a', 'b']);
     expect(s.continuableFor('owner', owner, '2999-01-01T00:00:00.000Z')).toEqual([]);
-    const stranger: Principal = { kind: 'member', connector: 'cli', tenantId: 'x', externalId: 'local' };
+    const stranger: Principal = {
+      kind: 'member',
+      connector: 'cli',
+      tenantId: 'x',
+      externalId: 'local',
+    };
     expect(s.continuableFor('owner', stranger, '2026-01-01T00:00:00.000Z')).toEqual([]);
   });
 
@@ -722,15 +1148,35 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     const created = s.create(spec(), 4242);
     // Allowance 2 (spec), one retry spent: derived used is 1, from the
     // persisted open row — no caller-supplied summary anywhere.
-    const counters = { ...spec().counters, toolCallsMade: 16, transportRetriesLeft: 1, contextBuilt: true };
-    expect(s.finish('turn-1', { outcome: 'answered', messages: [], taint: 0, counters }, created.claimToken)).toBe(true);
+    const counters = {
+      ...spec().counters,
+      toolCallsMade: 16,
+      transportRetriesLeft: 1,
+      contextBuilt: true,
+    };
+    expect(
+      s.finish(
+        'turn-1',
+        { outcome: 'answered', messages: [], taint: 0, counters },
+        created.claimToken,
+      ),
+    ).toBe(true);
     const leases = s.leasesFor('turn-1');
     expect(leases).toHaveLength(1);
-    expect(leases[0]).toMatchObject({ leaseIndex: 0, outcome: 'answered', transportUsed: 1, transportAllowance: 2 });
+    expect(leases[0]).toMatchObject({
+      leaseIndex: 0,
+      outcome: 'answered',
+      transportUsed: 1,
+      transportAllowance: 2,
+    });
     expect(leases[0]?.counters).toMatchObject({ toolCallsMade: 16 });
     // And the terminal fold lands in the same write: stored equals recomputed.
     expect(s.get('turn-1')?.lifetime).toEqual(s.recomputeLifetime('turn-1'));
-    expect(s.get('turn-1')?.lifetime).toMatchObject({ leases: 1, toolCallsMade: 16, transportRetriesUsed: 1 });
+    expect(s.get('turn-1')?.lifetime).toMatchObject({
+      leases: 1,
+      toolCallsMade: 16,
+      transportRetriesUsed: 1,
+    });
   });
 
   it('stored lifetime always equals the recomputed fold across grant and finish', () => {
@@ -741,10 +1187,18 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     if (granted === null) throw new Error('grant failed');
     // Lease 2 does work, then finishes terminally. The finish derives its
     // close from these exact counters — there is no second input to disagree.
-    const worked = { ...granted.counters, toolCallsMade: 4, usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 } };
-    expect(s.finish('turn-1', { outcome: 'answered', messages: providerMessages(granted), taint: 0, counters: worked }, granted.claimToken)).toBe(
-      true,
-    );
+    const worked = {
+      ...granted.counters,
+      toolCallsMade: 4,
+      usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    };
+    expect(
+      s.finish(
+        'turn-1',
+        { outcome: 'answered', messages: providerMessages(granted), taint: 0, counters: worked },
+        granted.claimToken,
+      ),
+    ).toBe(true);
     const final = s.get('turn-1');
     expect(final?.lifetime).toEqual(s.recomputeLifetime('turn-1'));
     expect(final?.lifetime).toMatchObject({ leases: 2, toolCallsMade: 4 });
@@ -767,9 +1221,13 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
   it('a finish on a row that never ran folds nothing and closes nothing', () => {
     const s = store();
     const created = s.create(spec(), 4242);
-    expect(s.finish('turn-1', { outcome: 'budget', messages: [], taint: 0, counters: spec().counters }, created.claimToken)).toBe(
-      true,
-    );
+    expect(
+      s.finish(
+        'turn-1',
+        { outcome: 'budget', messages: [], taint: 0, counters: spec().counters },
+        created.claimToken,
+      ),
+    ).toBe(true);
     // The lease-0 open row from creation is still open (never closed), the
     // fold sees no finished lease, lifetime stays zero.
     const leases = s.leasesFor('turn-1');
@@ -797,7 +1255,10 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     };
     const s = store();
     // Allowance 10: the open row records what the lease started with.
-    s.create(spec({ counters: { ...spec().counters, transportRetriesLeft: 10, contextBuilt: true } }), 4242);
+    s.create(
+      spec({ counters: { ...spec().counters, transportRetriesLeft: 10, contextBuilt: true } }),
+      4242,
+    );
     const running = s.get('turn-1');
     expect(
       s.releaseContinuable(
@@ -854,7 +1315,11 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
       activeModelMs: 60000,
     };
     expect(
-      s.finish('turn-1', { outcome: 'answered', messages: [], taint: 3, counters: lease1 }, granted.claimToken),
+      s.finish(
+        'turn-1',
+        { outcome: 'answered', messages: [], taint: 3, counters: lease1 },
+        granted.claimToken,
+      ),
     ).toBe(true);
     const final = s.get('turn-1');
     expect(final?.lifetime).toEqual(s.recomputeLifetime('turn-1'));
@@ -898,7 +1363,11 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'muffin-boundary-'));
     const path = join(dir, 'muffin.db');
     const first = new DatabaseCtor(path);
-    const s1 = new TurnStore(first, () => new Date(), () => true);
+    const s1 = new TurnStore(
+      first,
+      () => new Date(),
+      () => true,
+    );
     const created = s1.create(spec(), 4242);
     expect(
       s1.releaseContinuable(
@@ -910,9 +1379,15 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     first.close();
 
     const second = new DatabaseCtor(path);
-    const s2 = new TurnStore(second, () => new Date(), () => true);
+    const s2 = new TurnStore(
+      second,
+      () => new Date(),
+      () => true,
+    );
     expect(s2.get('turn-1')?.status).toBe('continuable');
-    expect(s2.continuableFor('s1', owner, '2026-01-01T00:00:00.000Z').map((r) => r.id)).toEqual(['turn-1']);
+    expect(s2.continuableFor('s1', owner, '2026-01-01T00:00:00.000Z').map((r) => r.id)).toEqual([
+      'turn-1',
+    ]);
     const before = s2.get('turn-1');
     const granted = s2.grantContinuation(
       'turn-1',
@@ -959,7 +1434,11 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     ).run(JSON.stringify(owner), counters);
 
     migrateLegacyTurns(db);
-    const s = new TurnStore(db, () => new Date(), () => true);
+    const s = new TurnStore(
+      db,
+      () => new Date(),
+      () => true,
+    );
     const rec = s.get('vecchio');
     expect(rec).toMatchObject({ status: 'done', taint: 3, leaseIndex: 0, continuableReason: null });
     expect(rec?.lifetime).toMatchObject({ leases: 0, toolCallsMade: 0 });
@@ -968,7 +1447,11 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     s.create(spec({ id: 'nuovo' }), 7);
     const created = s.get('nuovo');
     expect(
-      s.releaseContinuable('nuovo', { messages: [], taint: 0, counters: spec().counters, reason }, created?.claimToken ?? null),
+      s.releaseContinuable(
+        'nuovo',
+        { messages: [], taint: 0, counters: spec().counters, reason },
+        created?.claimToken ?? null,
+      ),
     ).toBe(true);
     expect(s.get('nuovo')?.status).toBe('continuable');
   });
@@ -1001,7 +1484,10 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
           { type: 'tool_use', id: 'c1', name: 'fs_read', input: { path: 'segreto.txt' } },
         ],
       },
-      { role: 'user', content: [{ type: 'tool_result', toolCallId: 'c1', content: 'contenuto-segreto' }] },
+      {
+        role: 'user',
+        content: [{ type: 'tool_result', toolCallId: 'c1', content: 'contenuto-segreto' }],
+      },
     ]);
     const counters = JSON.stringify({ ...spec().counters, toolCallsMade: 3, activeModelMs: 12345 });
     db.prepare(
@@ -1019,28 +1505,65 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
                '2026-09-18T17:00:11.000Z', 'contenuto-segreto', 0, 2, 'row', 'yes', 'segreto.txt', 'allow')`,
     ).run();
 
-    const before = db.prepare(`SELECT * FROM turns WHERE id = 'pieno'`).get() as Record<string, unknown>;
+    const before = db.prepare(`SELECT * FROM turns WHERE id = 'pieno'`).get() as Record<
+      string,
+      unknown
+    >;
     migrateLegacyTurns(db);
-    const s = new TurnStore(db, () => new Date(), () => true);
-    const after = db.prepare(`SELECT * FROM turns WHERE id = 'pieno'`).get() as Record<string, unknown>;
+    const s = new TurnStore(
+      db,
+      () => new Date(),
+      () => true,
+    );
+    const after = db.prepare(`SELECT * FROM turns WHERE id = 'pieno'`).get() as Record<
+      string,
+      unknown
+    >;
     // Every pre-existing column byte-identical; only migration-owned
     // additive columns differ (defaults), plus the CHECK.
     for (const col of Object.keys(before)) expect(after[col]).toBe(before[col]);
-    expect(after).toMatchObject({ lease_index: 0, continuable_reason: null, lifetime: null, input_text: null });
+    expect(after).toMatchObject({
+      lease_index: 0,
+      continuable_reason: null,
+      lifetime: null,
+      input_text: null,
+    });
     const rec = s.get('pieno');
-    expect(rec).toMatchObject({ status: 'waiting', taint: 3, providerLease: { model: 'qwen/x' }, jobId: 'job-9', delivery: 'pending' });
+    expect(rec).toMatchObject({
+      status: 'waiting',
+      taint: 3,
+      providerLease: { model: 'qwen/x' },
+      jobId: 'job-9',
+      delivery: 'pending',
+    });
     expect(providerMessages(rec)).toHaveLength(3);
     expect(rec?.counters).toMatchObject({ toolCallsMade: 3, activeModelMs: 12345 });
     // Tool WAL untouched.
-    expect(s.recordedOutcomes('pieno').get('c1')).toMatchObject({ content: 'contenuto-segreto', isError: false });
+    expect(s.recordedOutcomes('pieno').get('c1')).toMatchObject({
+      content: 'contenuto-segreto',
+      isError: false,
+    });
     // Indexes rebuilt, no leftover staging table, new status in the CHECK.
-    const objects = db.prepare(`SELECT type, name, sql FROM sqlite_master WHERE name LIKE 'turn%' OR name LIKE 'idx_turn%'`).all() as {
+    const objects = db
+      .prepare(
+        `SELECT type, name, sql FROM sqlite_master WHERE name LIKE 'turn%' OR name LIKE 'idx_turn%'`,
+      )
+      .all() as {
       type: string;
       name: string;
       sql: string;
     }[];
     const names = objects.map((o) => o.name).sort();
-    expect(names).toEqual(['idx_turn_leases_turn', 'idx_turn_tool_calls_open', 'idx_turn_tool_calls_started', 'idx_turns_due', 'idx_turns_status', 'turn_leases', 'turn_tool_calls', 'turns']);
+    expect(names).toEqual([
+      'idx_turn_leases_turn',
+      'idx_turn_tool_calls_open',
+      'idx_turn_tool_calls_started',
+      'idx_turns_due',
+      'idx_turns_status',
+      'turn_leases',
+      'turn_tool_calls',
+      'turns',
+    ]);
     expect(objects.find((o) => o.name === 'turns')?.sql).toContain("'continuable'");
   });
 
@@ -1061,9 +1584,15 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     ).run(JSON.stringify(owner), JSON.stringify(spec().counters));
 
     migrateLegacyTurns(db);
-    const s = new TurnStore(db, () => new Date(), () => true);
+    const s = new TurnStore(
+      db,
+      () => new Date(),
+      () => true,
+    );
     expect(s.get('sopravvissuto')?.status).toBe('done');
-    const leftover = db.prepare(`SELECT name FROM sqlite_master WHERE name = 'turns__rebuild'`).get();
+    const leftover = db
+      .prepare(`SELECT name FROM sqlite_master WHERE name = 'turns__rebuild'`)
+      .get();
     expect(leftover).toBeUndefined();
   });
 
@@ -1079,10 +1608,12 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
       wake_at TEXT, wait_for TEXT, claimed_by INTEGER, claimed_at TEXT, claim_token TEXT,
       turn_outcome TEXT, delivery TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     )`);
-    setup.prepare(
-      `INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint, counters, status, created_at, updated_at)
+    setup
+      .prepare(
+        `INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint, counters, status, created_at, updated_at)
        VALUES ('bloccato', ?, 'host', 'cli', 's1', 'm', '[]', 0, ?, 'done', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`,
-    ).run(JSON.stringify(owner), JSON.stringify(spec().counters));
+      )
+      .run(JSON.stringify(owner), JSON.stringify(spec().counters));
     // EXCLUSIVE held by another connection: the opener cannot migrate.
     setup.exec('BEGIN EXCLUSIVE');
     const locked = new DatabaseCtor(path);
@@ -1092,7 +1623,11 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
     // Nothing half-written: the old table answers, and the retry migrates.
     expect((setup.prepare(`SELECT count(*) AS n FROM turns`).get() as { n: number }).n).toBe(1);
     migrateLegacyTurns(setup);
-    const s = new TurnStore(new DatabaseCtor(path), () => new Date(), () => true);
+    const s = new TurnStore(
+      new DatabaseCtor(path),
+      () => new Date(),
+      () => true,
+    );
     expect(s.get('bloccato')?.status).toBe('done');
     expect(s.get('bloccato')?.leaseIndex).toBe(0);
     setup.close();
@@ -1117,25 +1652,33 @@ describe('continuable · the lease ends, the work does not (P0-B)', () => {
       effect_row TEXT, reversible TEXT, resource TEXT, decision TEXT,
       PRIMARY KEY (turn_id, call_id)
     )`);
-    setup.prepare(
-      `INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint, counters, status, created_at, updated_at)
+    setup
+      .prepare(
+        `INSERT INTO turns (id, principal, tenant, surface, session_id, model, messages, taint, counters, status, created_at, updated_at)
        VALUES ('vecchio', ?, 'host', 'cli', 's1', 'm', '[]', 0, ?, 'done', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`,
-    ).run(JSON.stringify(owner), JSON.stringify(spec().counters));
+      )
+      .run(JSON.stringify(owner), JSON.stringify(spec().counters));
     setup.close();
 
     const ro = new DatabaseCtor(path, { readonly: true });
-    const before = (ro.prepare(`SELECT sql FROM sqlite_master WHERE name = 'turns'`).get() as { sql: string }).sql;
+    const before = (
+      ro.prepare(`SELECT sql FROM sqlite_master WHERE name = 'turns'`).get() as { sql: string }
+    ).sql;
     const health = readTurnHealth(ro);
     expect(health?.total).toBe(1);
     expect(health?.continuable.count).toBe(0);
     // Untouched: same CHECK, no lease table, no additive columns.
     const afterDb = new DatabaseCtor(path);
-    const after = (afterDb.prepare(`SELECT sql FROM sqlite_master WHERE name = 'turns'`).get() as { sql: string }).sql;
+    const after = (
+      afterDb.prepare(`SELECT sql FROM sqlite_master WHERE name = 'turns'`).get() as { sql: string }
+    ).sql;
     expect(after).toBe(before);
-    expect(afterDb.prepare(`SELECT name FROM sqlite_master WHERE name = 'turn_leases'`).get()).toBeUndefined();
-    expect(afterDb.prepare(`PRAGMA table_info(turns)`).all() as { name: string }[]).not.toContainEqual(
-      expect.objectContaining({ name: 'lifetime' }),
-    );
+    expect(
+      afterDb.prepare(`SELECT name FROM sqlite_master WHERE name = 'turn_leases'`).get(),
+    ).toBeUndefined();
+    expect(
+      afterDb.prepare(`PRAGMA table_info(turns)`).all() as { name: string }[],
+    ).not.toContainEqual(expect.objectContaining({ name: 'lifetime' }));
     ro.close();
     afterDb.close();
   });

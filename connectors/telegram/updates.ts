@@ -107,7 +107,9 @@ export class UpdateInbox {
     // in a composition yet / no settlement has happened yet.
     ensureColumn(db, 'telegram_updates', 'composition_id', 'composition_id TEXT');
     ensureColumn(db, 'telegram_updates', 'settled_at', 'settled_at TEXT');
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_telegram_composition ON telegram_updates(composition_id, update_id);`);
+    db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_telegram_composition ON telegram_updates(composition_id, update_id);`,
+    );
 
     this.includeStmt = db.prepare(
       `UPDATE telegram_updates
@@ -155,10 +157,13 @@ export class UpdateInbox {
       | { compositionId: string | null; receivedAt: string }
       | undefined;
     if (!row) throw new Error(`telegram_updates mancante durante include per ${updateId}`);
-    if (row.compositionId === null) throw new Error(`telegram_updates senza composition_id dopo include per ${updateId}`);
+    if (row.compositionId === null)
+      throw new Error(`telegram_updates senza composition_id dopo include per ${updateId}`);
 
     this.db
-      .prepare(`INSERT OR IGNORE INTO telegram_compositions (composition_id, created_at) VALUES (?, ?)`)
+      .prepare(
+        `INSERT OR IGNORE INTO telegram_compositions (composition_id, created_at) VALUES (?, ?)`,
+      )
       .run(row.compositionId, row.receivedAt);
     return row.compositionId;
   }
@@ -322,6 +327,17 @@ export class UpdateInbox {
       .run(at, updateId, updateId);
   }
 
+  /** Called inside the same transaction that attaches the answer to its Work. */
+  consumeWorkAnswer(updateId: number, at: string): void {
+    const result = this.db
+      .prepare(
+        `UPDATE telegram_updates SET processed_at = ?, payload = '{}', failure = NULL
+       WHERE update_id = ? AND processed_at IS NULL AND composition_id IS NULL`,
+      )
+      .run(at, updateId);
+    if (result.changes !== 1) throw new Error('Telegram answer is no longer pending');
+  }
+
   /**
    * Consume a private update that failed the owner's authorization check.
    * Keep the native id and timestamps for offset/idempotency evidence, but do
@@ -399,7 +415,9 @@ export class UpdateInbox {
 
   /** A failure is evidence about this native event; it stays pending for retry. */
   markFailed(updateId: number, reason: string): void {
-    this.db.prepare(`UPDATE telegram_updates SET failure = ? WHERE update_id = ?`).run(reason, updateId);
+    this.db
+      .prepare(`UPDATE telegram_updates SET failure = ? WHERE update_id = ?`)
+      .run(reason, updateId);
   }
 
   /**
@@ -465,7 +483,9 @@ export class UpdateInbox {
    * current code never reads it afterwards.
    */
   private migrateLegacyDirectTurnBindings(): void {
-    const columns = (this.db.prepare(`PRAGMA table_info(telegram_updates)`).all() as { name: string }[]).map((c) => c.name);
+    const columns = (
+      this.db.prepare(`PRAGMA table_info(telegram_updates)`).all() as { name: string }[]
+    ).map((c) => c.name);
     if (!columns.includes('turn_id')) return;
 
     const legacy = this.db

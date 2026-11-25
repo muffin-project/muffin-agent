@@ -889,7 +889,7 @@ export async function runRepl(
   // brought up is a destination; anything else comes back `{ delivered: false }`
   // with the list of what is connected, which is the sentence that tells the
   // owner whether the fix is `muffin surface enable` or a network problem.
-  const deliver: Deliver = surfaces.registry.deliver;
+  const deliver: Deliver = surfaces.deliverToChannel;
   /**
    * Two schedulers must never run (ADR-0035).
    *

@@ -1,6 +1,6 @@
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
-import { TelegramError, type TelegramApiLike } from './api.js';
+import { type TelegramApiLike, TelegramError } from './api.js';
 import {
   deliverTelegram,
   type TelegramDeliveryPlanPart,
@@ -63,6 +63,31 @@ describe('TelegramDeliveryStore — write ahead and crash recovery', () => {
     expect(store.parts('turn-race')[0]?.attemptId).toBe('winner');
   });
 
+  it('only reconciles a terminal receipt from the current lease', () => {
+    const db = new DatabaseCtor(':memory:');
+    try {
+      const store = new TelegramDeliveryStore(db);
+      const id = 'turn-resumed';
+      store.plan(id, [sendPart('diagnostic', 0)], at(), 0);
+      store.claim(id, 0, 'diagnostic', at());
+      store.sent(id, 0, 'diagnostic', 1, at());
+      expect(store.recordedOutcome(id, 0)).toBe('sent');
+      expect(store.recordedOutcome(id, 1)).toBeUndefined();
+
+      const [first, last] = store.plan(id, [sendPart('first', 0), sendPart('last', 1)], at(), 1);
+      if (!first || !last) throw new Error('Expected two parts on the resumed lease');
+      store.claim(id, first.partIndex, 'first', at());
+      store.sent(id, first.partIndex, 'first', 2, at());
+      expect(store.recordedOutcome(id, 1)).toBeUndefined();
+
+      store.claim(id, last.partIndex, 'last', at());
+      expect(store.recordedOutcome(id, 1)).toBeUndefined();
+      expect(new TelegramDeliveryStore(db).recordedOutcome(id, 1)).toBe('possibly_sent');
+    } finally {
+      db.close();
+    }
+  });
+
   it('recovery keeps the first frozen wire plan byte-for-byte', () => {
     const db = new DatabaseCtor(':memory:');
     const store = new TelegramDeliveryStore(db);
@@ -81,27 +106,46 @@ describe('TelegramDeliveryStore — write ahead and crash recovery', () => {
     // (difetto misurato il 28/09 sulla catena reale «riprendi»).
     const db = new DatabaseCtor(':memory:');
     const store = new TelegramDeliveryStore(db);
-    const sendMessage = vi.fn(async (_chatId: number, _text: string) => ({ message_id: 7 }) as never);
+    const sendMessage = vi.fn(
+      async (_chatId: number, _text: string) => ({ message_id: 7 }) as never,
+    );
 
-    await deliverTelegram(store, apiWith(sendMessage), 'turn-continuato', [sendPart('mi sono fermato qui', 0)], at, 0);
+    await deliverTelegram(
+      store,
+      apiWith(sendMessage),
+      'turn-continuato',
+      [sendPart('mi sono fermato qui', 0)],
+      at,
+      0,
+    );
     await expect(
-      deliverTelegram(store, apiWith(sendMessage), 'turn-continuato', [sendPart('ecco la risposta', 0)], at, 1),
+      deliverTelegram(
+        store,
+        apiWith(sendMessage),
+        'turn-continuato',
+        [sendPart('ecco la risposta', 0)],
+        at,
+        1,
+      ),
     ).resolves.toBe('sent');
 
-    expect(sendMessage.mock.calls.map((call) => call[1])).toEqual(['mi sono fermato qui', 'ecco la risposta']);
+    expect(sendMessage.mock.calls.map((call) => call[1])).toEqual([
+      'mi sono fermato qui',
+      'ecco la risposta',
+    ]);
     expect(store.parts('turn-continuato', 0)).toMatchObject([{ status: 'sent', leaseIndex: 0 }]);
     expect(store.parts('turn-continuato', 1)).toMatchObject([{ status: 'sent', leaseIndex: 1 }]);
   });
 
-  it('recovery replays the lease plan it froze, never the previous lease\'s message', () => {
+  it("recovery replays the lease plan it froze, never the previous lease's message", () => {
     const db = new DatabaseCtor(':memory:');
     const store = new TelegramDeliveryStore(db);
     store.plan('turn-continuato', [sendPart('mi sono fermato qui', 0)], at(), 0);
     store.plan('turn-continuato', [sendPart('ecco la risposta', 0)], at(), 1);
 
-    expect(store.plan('turn-continuato', [sendPart('<i>render nuovo</i>', 0)], at(), 1)).toMatchObject([
-      { html: 'ecco la risposta', leaseIndex: 1, status: 'pending' },
-    ]);
+    expect(
+      store.plan('turn-continuato', [sendPart('<i>render nuovo</i>', 0)], at(), 1),
+    ).toMatchObject([{ html: 'ecco la risposta', leaseIndex: 1, status: 'pending' }]);
   });
 });
 

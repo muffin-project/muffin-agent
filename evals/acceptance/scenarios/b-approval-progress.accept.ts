@@ -119,7 +119,7 @@ itConSandbox(
       expect(finalEdit).toBeDefined();
       const visible = String(finalEdit?.payload.text ?? '');
       expect(visible).toContain('consentito');
-      expect(visible).toMatch(/✓ eseguo un comando/);
+      expect(visible).not.toContain('Processo');
       expect(visible).not.toMatch(/eseguo un comando[^\n]*interrotto/);
       await gateway.stop();
     } finally {
