@@ -6,8 +6,10 @@ import { redactText } from '../../core/tracing/redact.js';
 import type { SpanHandle } from '../../core/tracing/types.js';
 import { ATTR } from '../../core/tracing/types.js';
 import type { EffectDecision, EffectMetadata } from '../../core/turns/effects.js';
+import type { WaitSpec } from '../../core/turns/wait.js';
 import { reserveActivityAttempt } from '../providers/activity-allowance.js';
 import type { ContentBlock } from '../providers/types.js';
+import { WORK_MESSAGE_TOOL_NAME } from '../tools/work-message.js';
 import { denyText, resourceFor } from './permissions.js';
 import {
   type ApprovalRequest,
@@ -20,6 +22,7 @@ import {
   type TurnEvent,
   type TurnInput,
 } from './types.js';
+import { type WorkMessageBatch, workMessagePort } from './work-message.js';
 
 /**
  * `runTool` and the cluster of helpers it alone uses — moved out of
@@ -174,6 +177,7 @@ export async function runTool(
   exposed: RegisteredTool[],
   /** The turn a handler is running in: identity, and the suspension barrier. */
   ctx: ToolContext,
+  workBatch?: WorkMessageBatch,
 ): Promise<ContentBlock> {
   const span = deps.tracer.start(
     'muffin.tool_call',
@@ -217,6 +221,7 @@ export async function runTool(
   }
 
   const args = (call.args ?? {}) as Record<string, unknown>;
+  const isWorkMessage = call.name === WORK_MESSAGE_TOOL_NAME;
   const capability = tool.capability;
   // Reported only from here on — an unknown tool (`!tool` above) never gets a
   // `tool_start`, because it never had a `capability` to report and no call
@@ -226,14 +231,21 @@ export async function runTool(
   // `span`'s clock back to its caller, so `ms` below is measured at the same
   // call site that reports the start it is measuring from, not guessed at.
   const toolCallStartedAt = Date.now();
-  input.onProgress?.({ type: 'tool_start', name: call.name, capability, callId: call.id, args });
+  const progressArgs = isWorkMessage ? {} : { args };
+  input.onProgress?.({
+    type: 'tool_start',
+    name: call.name,
+    capability,
+    callId: call.id,
+    ...progressArgs,
+  });
   const emitToolEnd = (isError: boolean): void => {
     input.onProgress?.({
       type: 'tool_end',
       name: call.name,
       ms: Date.now() - toolCallStartedAt,
       isError,
-      args,
+      ...progressArgs,
     });
   };
   // The kernel decides on a *resource*, so anything it is supposed to gate has
@@ -264,6 +276,19 @@ export async function runTool(
     ...(decision.effect === 'deny' ? { [ATTR.policyDenyCode]: decision.code } : {}),
   });
   decisionSpan.end();
+
+  // Same-origin replies require allow. Do not open an approval prompt as a
+  // side effect of a guessed tool call when the reply door was closed.
+  if (isWorkMessage && (decision.effect === 'ask' || decision.effect === 'draft')) {
+    span.end({ status: 'error', error: 'reply_refused' });
+    emitToolEnd(true);
+    return {
+      type: 'tool_result',
+      toolCallId: call.id,
+      isError: true,
+      content: 'Work message refused by the reply policy.',
+    };
+  }
 
   // A `switch` over `decision.effect` with an explicit `default`, not the
   // `if`-chain this used to be. The chain fell through to execution for
@@ -731,7 +756,7 @@ export async function runTool(
   const effect: EffectMetadata = {
     row: decl?.effect ?? null,
     reversible: decl?.reversible ?? null,
-    resource: effectResource(risolto, resource, call.args),
+    resource: isWorkMessage ? null : effectResource(risolto, resource, call.args),
     decision: decision.effect as EffectDecision,
   };
   const intentError = recordIntent(
@@ -811,10 +836,27 @@ export async function runTool(
     // would have (it is built from exactly those, plus `turnId`, `sessionId`,
     // `taint` and `suspend` — see `toolContext` above), so the handler gets one
     // object with the whole contract rather than two overlapping ones.
+    // The question is an in-memory candidate until the call's outcome is
+    // recorded. A failed result write must not arm a publishable wait.
+    const candidate: { wait?: WaitSpec } = {};
+    const workContext =
+      isWorkMessage && workBatch !== undefined
+        ? {
+            workMessage: workMessagePort(deps, input, call, workBatch),
+            suspend: (spec: WaitSpec) => {
+              candidate.wait = spec;
+            },
+          }
+        : {};
     const outcome = await eseguiConRitentativi(
       tool,
       args,
-      { ...ctx, signal: input.signal, ...(risolto === undefined ? {} : { effectPath: risolto }) },
+      {
+        ...ctx,
+        ...workContext,
+        signal: input.signal,
+        ...(risolto === undefined ? {} : { effectPath: risolto }),
+      },
       decl?.rerunnable === true,
       call.name,
       input.onProgress,
@@ -921,6 +963,9 @@ export async function runTool(
     }
     const durabilityFailure = ctx.durability?.failure() ?? null;
     const resultIsError = outcome.isError === true || !outcomeRecorded || !sessionRecorded;
+    const questionNotArmed =
+      candidate.wait !== undefined && (resultIsError || durabilityFailure !== null);
+    if (candidate.wait !== undefined && !questionNotArmed) ctx.suspend(candidate.wait);
     span.end({ status: resultIsError ? 'error' : 'ok' });
     emitToolEnd(resultIsError);
     if (giaFatte > 0 && outcome.isError !== true) {
@@ -952,18 +997,20 @@ export async function runTool(
        * conta solo righe con `is_error = 0`, `fallimentiIdentici` solo righe
        * con `is_error = 1`, e questa stessa chiamata e o l'uno o l'altro.
        */
-      content: !outcomeRecorded
-        ? `${safeContent}\n\nL'azione potrebbe essere riuscita, ma non ho potuto salvarne l'esito. Non eseguirò altre chiamate agli strumenti in questo turno.`
-        : !sessionRecorded
-          ? `${safeContent}\n\nL'esito è nel record del turno, ma non nella trascrizione. La persistenza è degradata e non eseguirò altre chiamate agli strumenti in questo turno.`
-          : durabilityFailure !== null
-            ? `${safeContent}\n\nLa persistenza è degradata; non eseguirò altre chiamate agli strumenti in questo turno.`
-            : giaFatte > 0 && outcome.isError !== true
-              ? `${safeContent}\n\n${avvisoRipetizione(call.name, giaFatte)}`
-              : fallimentiIdentici > 0
-                ? `${safeContent}\n\n${avvisoFallimentoRipetuto(call.name, fallimentiIdentici)}`
-                : safeContent,
-      ...(resultIsError ? { isError: true } : {}),
+      content: questionNotArmed
+        ? 'The question was not sent: the wait could not be recorded. Continue without waiting.'
+        : !outcomeRecorded
+          ? `${safeContent}\n\nL'azione potrebbe essere riuscita, ma non ho potuto salvarne l'esito. Non eseguirò altre chiamate agli strumenti in questo turno.`
+          : !sessionRecorded
+            ? `${safeContent}\n\nL'esito è nel record del turno, ma non nella trascrizione. La persistenza è degradata e non eseguirò altre chiamate agli strumenti in questo turno.`
+            : durabilityFailure !== null
+              ? `${safeContent}\n\nLa persistenza è degradata; non eseguirò altre chiamate agli strumenti in questo turno.`
+              : giaFatte > 0 && outcome.isError !== true
+                ? `${safeContent}\n\n${avvisoRipetizione(call.name, giaFatte)}`
+                : fallimentiIdentici > 0
+                  ? `${safeContent}\n\n${avvisoFallimentoRipetuto(call.name, fallimentiIdentici)}`
+                  : safeContent,
+      ...(resultIsError || questionNotArmed ? { isError: true } : {}),
     };
   } catch (error) {
     // A failing tool is information for the model, not a crash for the turn.

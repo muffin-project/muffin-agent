@@ -302,7 +302,7 @@ describe('a telegram turn records where the answer goes and whether it got there
     h.runtime.close();
   });
 
-  it('a suspended turn sends nothing and is not marked delivered — the placeholder is the truth until the lane resumes it', async () => {
+  it('a turn suspended on a wait leaves delivery pending and sends no durable message', async () => {
     // The model asks to wait: `wait` is registered by `buildRuntime`, so this
     // is the production path — the turn suspends inside `runTurn` and comes
     // back with `stopped: 'suspended'` and an empty text. Before the guard the
@@ -330,21 +330,7 @@ describe('a telegram turn records where the answer goes and whether it got there
     const row = h.row();
     expect(row?.status).toBe('waiting');
     expect(row?.delivery).toBe('pending'); // addressed, not delivered — never 'sent'
-    // The presence placeholder ("sto guardando…") and, since 03/09/2026, the
-    // transcript of the one step the turn took before suspending — a real
-    // message that stays (`transcript.ts`). No answer, no empty send.
-    //
-    // Since the first-paint fix (defect B, 2026-09-18) that message is painted
-    // running the moment the step starts (`send:⏳ … · 0s`) and settled to done
-    // by the final edit (`edit:✓ …`) — before, the whole turn collapsed into a
-    // single `send:✓ …` because the provider resolves through pure microtasks
-    // with no real gap for the old coalescing timer to fire in. The
-    // load-bearing properties are unchanged: no answer text, delivery still
-    // pending, the transcript message is the truth until the lane resumes.
-    // Option B: in a DM the step lives only in the ephemeral draft, so nothing
-    // durable is sent for a suspended turn — the answer message is the only
-    // durable thing, and it has not happened yet.
-    expect(h.outbound.filter((o) => o !== 'send:sto guardando…')).toEqual([]);
+    expect(h.outbound).toEqual([]);
     h.runtime.close();
   });
 });
