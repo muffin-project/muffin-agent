@@ -4,7 +4,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 import { ensurePrivateDir, tightenPrivateFile } from './private-fs.js';
 import { clearChainPauses } from './provider-chain.js';
-import { SEARCH_PROVIDER_IDS } from './providers.js';
+import { CHATGPT_SEARCH_PROVIDER, SEARCH_PROVIDER_IDS } from './providers.js';
 import { REASONING_DIALECTS, THINKING_VALUES } from './thinking.js';
 
 /**
@@ -253,18 +253,18 @@ export const ConfigSchema = z.object({
    * costs the owner money per call does not get switched on by a default.
    */
   search: z
-    .object({
-      /**
-       * Quale motore. `z.enum` costruito dal catalogo
-       * (`core/config/providers.ts`) e non un letterale scritto qui: due
-       * elenchi degli stessi id sono due elenchi che il giorno del secondo
-       * provider si scoprono diversi.
-       */
-      provider: z.enum(SEARCH_PROVIDER_IDS),
-      /** `secret://name`, like the model key. Never the key itself. */
-      apiKeyRef: z.string().min(1),
-      maxResults: z.number().int().min(1).max(20).optional(),
-    })
+    .discriminatedUnion('provider', [
+      z.object({
+        provider: z.enum(SEARCH_PROVIDER_IDS),
+        /** `secret://name`, like the model key. Never the key itself. */
+        apiKeyRef: z.string().min(1),
+        maxResults: z.number().int().min(1).max(20).optional(),
+      }),
+      z.strictObject({
+        provider: z.literal(CHATGPT_SEARCH_PROVIDER.id),
+        maxResults: z.number().int().min(1).max(20).optional(),
+      }),
+    ])
     .optional(),
   /**
    * Quale embedder indicizza la memoria. Assente = Ollama locale coi suoi
