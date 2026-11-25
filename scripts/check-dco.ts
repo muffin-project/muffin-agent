@@ -151,6 +151,87 @@ export function checkPullRequestDco(event: unknown, cwd = process.cwd()): DcoRes
   return { kind: 'check', missing };
 }
 
+/** One commit on the merge group's first-parent chain, newest last. */
+export type GroupCommit = { sha: string; parents: string[] };
+
+/**
+ * Merge queue groups (`merge_group` events) carry no pull request payload, so
+ * the PR author that decides the owner-internal exemption is not available.
+ * The queue only admits a PR whose own required checks passed, `dco`
+ * included, and with the `merge` method it adds exactly one merge commit per
+ * PR whose second parent is that PR's head. This verifies that shape instead
+ * of re-deriving the exemption: every first-parent commit in `base..head`
+ * must be a two-parent merge, and every merged head must carry a successful
+ * `dco` check run. Anything else (a direct commit, an octopus merge, a head
+ * without a green `dco`) fails closed.
+ */
+export async function checkMergeGroupDco(
+  chain: readonly GroupCommit[],
+  dcoPassed: (sha: string) => Promise<boolean>,
+): Promise<string[]> {
+  const problems: string[] = [];
+  if (chain.length === 0) problems.push('merge group introduces no commits');
+  for (const commit of chain) {
+    const [, merged, ...extra] = commit.parents;
+    if (merged === undefined || extra.length > 0) {
+      problems.push(`${commit.sha.slice(0, 12)} is not a two-parent merge from the queue`);
+      continue;
+    }
+    if (!(await dcoPassed(merged)))
+      problems.push(
+        `${merged.slice(0, 12)} (merged by ${commit.sha.slice(0, 12)}) has no successful dco check`,
+      );
+  }
+  return problems;
+}
+
+export function firstParentChain(base: string, head: string, cwd = process.cwd()): GroupCommit[] {
+  const output = execFileSync(
+    'git',
+    ['-C', cwd, 'log', '--first-parent', '--reverse', '--format=%H %P', `${base}..${head}`],
+    { encoding: 'utf8' },
+  );
+  return output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [sha, ...parents] = line.split(' ');
+      if (!sha || !/^[0-9a-f]{40}$/i.test(sha))
+        throw new Error(`could not parse commit in ${base}..${head}`);
+      return { sha, parents };
+    });
+}
+
+/** Asks the GitHub checks API whether `sha` has a successful `dco` check run in this repository. */
+export async function githubDcoPassed(
+  sha: string,
+  token: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<boolean> {
+  const response = await fetchImpl(
+    `https://api.github.com/repos/${REPOSITORY}/commits/${sha}/check-runs?check_name=dco&filter=latest`,
+    { headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json' } },
+  );
+  if (!response.ok)
+    throw new Error(`DCO: checks API answered ${response.status} for ${sha.slice(0, 12)}`);
+  const body = (await response.json()) as {
+    check_runs?: {
+      name?: string;
+      status?: string;
+      conclusion?: string | null;
+      app?: { slug?: string };
+    }[];
+  };
+  return (body.check_runs ?? []).some(
+    (run) =>
+      run.name === 'dco' &&
+      run.status === 'completed' &&
+      run.conclusion === 'success' &&
+      run.app?.slug === 'github-actions',
+  );
+}
+
 const isMain = process.argv[1] === new URL(import.meta.url).pathname;
 if (isMain) {
   const [mode, value] = process.argv.slice(2);
@@ -170,7 +251,26 @@ if (isMain) {
         'DCO: required human sign-offs match; owner-attributed and agent-attributed internal work is exempt. No certification is generated.\n',
       );
     }
-  } else if (mode && value && mode !== '--pull-request-event') {
+  } else if (mode === '--merge-group' && value && process.argv[4]) {
+    const head = process.argv[4];
+    const token = process.env.GITHUB_TOKEN ?? '';
+    if (!token) {
+      process.stderr.write('DCO: --merge-group needs GITHUB_TOKEN to read check runs.\n');
+      process.exitCode = 1;
+    } else {
+      const problems = await checkMergeGroupDco(firstParentChain(value, head), (sha) =>
+        githubDcoPassed(sha, token),
+      );
+      if (problems.length > 0) {
+        process.stderr.write(
+          `DCO: merge group not admissible:\n${problems.map((line) => `  ${line}`).join('\n')}\n`,
+        );
+        process.exitCode = 1;
+      } else {
+        process.stdout.write('DCO: every PR merged by this group passed its own dco check.\n');
+      }
+    }
+  } else if (mode && value && mode !== '--pull-request-event' && mode !== '--merge-group') {
     const missing = checkDco(mode, value);
     if (missing.length > 0) {
       process.stderr.write(
@@ -183,7 +283,7 @@ if (isMain) {
     }
   } else {
     process.stderr.write(
-      'usage: check-dco.ts --pull-request-event <event.json> | <base-sha> <head-sha>\n',
+      'usage: check-dco.ts --pull-request-event <event.json> | --merge-group <base-sha> <head-sha> | <base-sha> <head-sha>\n',
     );
     process.exitCode = 64;
   }
