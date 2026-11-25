@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -35,6 +35,78 @@ const working = (): VerificationResult => ({
 });
 
 describe('ChatGPT account and fixed model command', () => {
+  it.each([
+    {
+      label: 'usable',
+      expiresAt: () => Date.now() + 3600_000,
+      refreshToken: 'refresh',
+      refused: false,
+      code: 0,
+      detail: 'usable saved authorization',
+    },
+    {
+      label: 'expired and renewable',
+      expiresAt: () => 1,
+      refreshToken: 'refresh',
+      refused: false,
+      code: 0,
+      detail: 'will attempt to refresh',
+    },
+    {
+      label: 'expired without a refresh token',
+      expiresAt: () => 1,
+      refreshToken: '',
+      refused: false,
+      code: 1,
+      detail: 'expired',
+    },
+    {
+      label: 'refused by the refresh endpoint',
+      expiresAt: () => 1,
+      refreshToken: 'refresh',
+      refused: true,
+      code: 1,
+      detail: 'refused to refresh',
+    },
+  ])(
+    'status explains a saved session that is $label',
+    async ({ expiresAt, refreshToken, refused, code, detail }) => {
+      const f = fixture();
+      try {
+        writeFileSync(
+          join(f.home, 'secrets', 'chatgpt'),
+          JSON.stringify({
+            version: 1,
+            hostId: 'synthetic-host',
+            activeProfileId: 'p',
+            profiles: [
+              {
+                id: 'p',
+                clientId: 'synthetic-client',
+                subject: 'synthetic-subject',
+                tokens: {
+                  accessToken: 'access',
+                  refreshToken,
+                  tokenType: 'Bearer',
+                  scopes: ['chatgpt.tokens.use.direct', 'offline_access', 'resource.invoke'],
+                  expiresAt: expiresAt(),
+                  pendingIdentity: false,
+                },
+                ...(refused ? { lastRefresh: { at: 1, outcome: 'reauth' } } : {}),
+              },
+            ],
+          }),
+          { mode: 0o600 },
+        );
+        expect(await cmdChatGPT(f.home, ['status'], { out: f.sink })).toBe(code);
+        const text = f.out.join('\n');
+        expect(text).toContain(detail);
+        expect(text.includes('muffin chatgpt login')).toBe(code === 1);
+      } finally {
+        rmSync(f.home, { recursive: true, force: true });
+      }
+    },
+  );
   it('requires the public route and dedicated connection reference, rejects router settings', () => {
     const f = fixture();
     const config = loadConfig(f.home);
@@ -128,6 +200,10 @@ describe('ChatGPT account and fixed model command', () => {
     vi.spyOn(f.connection, 'signIn').mockResolvedValue({
       profileId: 'test',
       connected: true,
+      usable: true,
+      renewable: true,
+      accessExpired: false,
+      needsLogin: false,
       scopes: ['chatgpt.tokens.use.direct'],
     });
     expect(
@@ -144,6 +220,10 @@ describe('ChatGPT account and fixed model command', () => {
     const signin = vi.spyOn(f.connection, 'signIn').mockResolvedValue({
       profileId: 'saved',
       connected: true,
+      usable: true,
+      renewable: true,
+      accessExpired: false,
+      needsLogin: false,
       scopes: ['chatgpt.tokens.use.direct'],
     });
     expect(

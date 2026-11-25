@@ -78,9 +78,23 @@ export async function cmdChatGPT(
         out(CHATGPT_USAGE);
         return 2;
       }
-      out(JSON.stringify(await connection.session()));
-      for (const profile of await connection.profiles()) out(JSON.stringify(profile));
-      out('Status shows saved authorization. Run `muffin chatgpt models` to check access.');
+      const session = connection.session();
+      out(JSON.stringify(session));
+      for (const profile of connection.profiles()) out(JSON.stringify(profile));
+      if (!session?.usable && !session?.renewable) {
+        const why = session?.needsLogin
+          ? 'ChatGPT refused to refresh this session.'
+          : session?.accessExpired
+            ? 'ChatGPT access token is expired.'
+            : 'ChatGPT is not connected.';
+        out(`${why} Run \`muffin chatgpt login\`.`);
+        return 1;
+      }
+      out(
+        session.usable
+          ? 'Status shows a usable saved authorization. Run `muffin chatgpt models` to check catalog access.'
+          : 'ChatGPT will attempt to refresh the saved authorization on the next request. Run `muffin chatgpt models` to check catalog access.',
+      );
       out(`Manage usage: ${CHATGPT_USAGE_URL}`);
       return 0;
     }

@@ -750,11 +750,24 @@ export async function runDoctor(
     if (connection.kind === 'openai-chatgpt') {
       try {
         const session = new ChatGPTConnection(home).session();
-        if (session?.connected)
+        if (session?.usable)
           credentialOk(
             'ChatGPT',
             'Account connected; plan quota and credits are managed at https://chatgpt.com/settings/usage',
           );
+        else if (session?.renewable)
+          credentialOk(
+            'ChatGPT',
+            'ChatGPT will attempt to refresh the saved authorization on the next request.',
+          );
+        else if (session?.needsLogin)
+          credentialFail(
+            'ChatGPT',
+            'Refresh was refused (authorization expired or revoked).',
+            'muffin chatgpt login',
+          );
+        else if (session?.accessExpired)
+          credentialFail('ChatGPT', 'Access token is expired.', 'muffin chatgpt login');
         else
           credentialFail(
             'ChatGPT',
