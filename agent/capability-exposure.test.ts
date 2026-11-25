@@ -16,11 +16,10 @@ const discovery = tool(
 );
 
 describe('capability exposure projection', () => {
-  it('preserves the legacy fast path when the authorized catalogue fits the cap', () => {
-    const eligible = [tool('fs_read'), tool('memory_search'), tool('http_get')];
+  it('shows the eligible catalogue when every tool is already in the core', () => {
+    const eligible = [tool('fs_read'), tool('memory_search')];
     const projection = createCapabilityExposure({
       eligible: [...eligible, discovery],
-      maxToolsExposed: 10,
       discoveryTool: discovery,
     });
 
@@ -29,7 +28,15 @@ describe('capability exposure projection', () => {
     expect(projection.discovery).toBeUndefined();
   });
 
-  it('discovers and loads a needed authorized tool beyond the old registration cap', () => {
+  it('does not hide an authorized tool when discovery is unavailable', () => {
+    const eligible = [tool('fs_read'), tool('http_get')];
+    const projection = createCapabilityExposure({ eligible });
+
+    expect(projection.pressured).toBe(false);
+    expect(projection.exposed.map((entry) => entry.spec.name)).toEqual(['fs_read', 'http_get']);
+  });
+
+  it('loads a tool outside the core by search, without a numeric ceiling', () => {
     const eligible = [
       tool('fs_read'),
       tool('fs_list'),
@@ -46,29 +53,28 @@ describe('capability exposure projection', () => {
     ];
     const projection = createCapabilityExposure({
       eligible,
-      maxToolsExposed: 10,
       discoveryTool: discovery,
     });
 
     expect(projection.pressured).toBe(true);
-    expect(projection.exposed.map((entry) => entry.spec.name)).not.toContain(
-      'event_watch_create',
-    );
-    expect(projection.exposed).toHaveLength(6);
+    expect(projection.exposed.map((entry) => entry.spec.name)).toEqual([
+      'fs_read',
+      'fs_list',
+      'fs_search',
+      'memory_search',
+      'skill_read',
+      CAPABILITY_SEARCH_TOOL_NAME,
+    ]);
 
     const result = projection.discovery?.searchAndLoad('external event trigger', 3);
 
     expect(result?.loaded.map((entry) => entry.name)).toContain('event_watch_create');
-    // Search selects for the next round; the current batch cannot immediately
-    // invoke a schema the model was never shown.
-    expect(projection.exposed.map((entry) => entry.spec.name)).not.toContain(
-      'event_watch_create',
-    );
+    expect(projection.exposed.map((entry) => entry.spec.name)).not.toContain('event_watch_create');
     projection.discovery?.activatePending();
+    expect(projection.exposed.map((entry) => entry.spec.name)).toContain('event_watch_create');
     expect(projection.exposed.map((entry) => entry.spec.name)).toContain(
-      'event_watch_create',
+      CAPABILITY_SEARCH_TOOL_NAME,
     );
-    expect(projection.exposed.length).toBeLessThanOrEqual(10);
   });
 
   it('cannot discover a tool that authority filtering removed from the catalogue', () => {
@@ -87,7 +93,6 @@ describe('capability exposure projection', () => {
     ];
     const projection = createCapabilityExposure({
       eligible,
-      maxToolsExposed: 8,
       discoveryTool: discovery,
     });
 
@@ -114,7 +119,6 @@ describe('capability exposure projection', () => {
     ];
     const projection = createCapabilityExposure({
       eligible,
-      maxToolsExposed: 8,
       discoveryTool: discovery,
     });
 
@@ -130,12 +134,12 @@ describe('capability exposure projection', () => {
     expect(names).toContain('http_get');
     expect(names).not.toContain('event_watch_create');
     expect(names).not.toContain('event_watch_list');
+    expect(names).toContain('fs_read');
   });
 
-  it('a one-slot profile does not report capability_search itself as a discovered match', () => {
+  it('a search miss leaves the core and the search door in place', () => {
     const projection = createCapabilityExposure({
       eligible: [tool('fs_read'), tool('event_watch_create', 'event.watch'), discovery],
-      maxToolsExposed: 1,
       discoveryTool: discovery,
     });
 
@@ -144,12 +148,12 @@ describe('capability exposure projection', () => {
     expect(result?.matched).toBe(0);
     projection.discovery?.activatePending();
     expect(projection.exposed.map((entry) => entry.spec.name)).toEqual([
+      'fs_read',
       CAPABILITY_SEARCH_TOOL_NAME,
     ]);
   });
 
-
-  it('preloads an obvious authorized hidden capability from task text without widening the cap', () => {
+  it('preloads an obvious authorized tool from the task text', () => {
     const eligible = [
       tool('fs_read'),
       tool('fs_list'),
@@ -161,21 +165,14 @@ describe('capability exposure projection', () => {
     ];
     const projection = createCapabilityExposure({
       eligible,
-      maxToolsExposed: 4,
       discoveryTool: discovery,
     });
 
-    const loaded = preloadCapabilitiesForTask(
-      projection,
-      'create external event trigger',
-      2,
-    );
+    const loaded = preloadCapabilitiesForTask(projection, 'create external event trigger', 2);
     expect(loaded?.loaded.map((entry) => entry.name)).toContain('event_watch_create');
     expect(projection.exposed.map((entry) => entry.spec.name)).toContain('event_watch_create');
     expect(projection.exposed.map((entry) => entry.spec.name)).toContain(
       CAPABILITY_SEARCH_TOOL_NAME,
     );
-    expect(projection.exposed.length).toBeLessThanOrEqual(4);
   });
-
 });

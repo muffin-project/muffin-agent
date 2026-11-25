@@ -261,10 +261,8 @@ describe('doctor names which profile the configured model resolves to', () => {
     // The cost, not just the fact (D4 half 2): the fallback's own numbers,
     // named — not merely "something changed".
     expect(c?.detail).toContain('sampling deterministic');
-    expect(c?.detail).toContain('10 tool esposti');
-    // Etichettato come su `sys_inspect`, non "orizzonte N" — i due numeri si
-    // somigliano (qui: 10 e 15) e vanno distinti per quello che sono, quanti
-    // tool si vedono contro quante call si fanno, non con un termine indefinito.
+    expect(c?.detail).toContain('tool caricati per pertinenza');
+    expect(c?.detail).not.toContain('tool esposti');
     expect(c?.detail).toContain('15 call/turno');
     expect(report.exitCode).toBe(2);
 
@@ -2429,7 +2427,7 @@ describe('doctor nomina le capacità spente o tagliate, come sys.inspect', () =>
     config.models.main = 'modello-mai-schedato-xyz';
     writeFileSync(configPath, JSON.stringify(config, null, 2));
 
-    const c = await check(dir, 'capacità: tetto tool');
+    const c = await check(dir, 'capacità: tool');
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('conservative');
     expect(c?.detail).toContain('capability native');
@@ -2441,9 +2439,9 @@ describe('doctor nomina le capacità spente o tagliate, come sys.inspect', () =>
 
   it('tetto tool: ok quando il profilo risolto copre tutto il catalogo nativo', async () => {
     const dir = home();
-    const c = await check(dir, 'capacità: tetto tool');
+    const c = await check(dir, 'capacità: tool');
     expect(c?.level).toBe('ok');
-    expect(c?.detail).toContain('capability native entro la proiezione');
+    expect(c?.detail).toContain('il nucleo resta visibile');
     expect(c?.remedy).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
   });

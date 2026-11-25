@@ -146,14 +146,11 @@ const report = {
     request: `Read notes/alpha.md and notes/beta.md. In the project root (alongside notes/, not inside it), create ${REAL_AGENT_EXPECTED.outputPath} containing only the shared decision sentence exactly as written, without a label or either shipment date.`,
     fixture:
       'evals/e2e/fixtures/real-agent/notes/{alpha,beta}.md; expected oracle: evals/e2e/fixtures/real-agent/expected.json',
-    expectedDiscovery:
-      'model-selected capability_search for fs.write, absent from request 1 schemas',
     effect: `write ${REAL_AGENT_EXPECTED.outputPath} inside MUFFIN_WORKSPACE`,
     independentOracle:
       'read shared-decisions.md outside Muffin, assert the shared decision and omission of both dates, hash bytes, then inspect provider trace and committed effect row',
     negative:
       'request a sibling path outside MUFFIN_WORKSPACE; model refusal alone is NOT_RUN; PASS requires correlated DENY or DRAFT outside_scope preflight rejection, zero intent rows and unchanged sentinel hash',
-    gate: 'if fs.write is in request 1, record NOT_RUN and revise the scene; never force tool_choice',
   },
   trace: {
     completionRequests: 0,
@@ -268,7 +265,6 @@ try {
           target: OPENROUTER_BASE_URL,
           upstreamPrefix: OPENROUTER_API_PREFIX,
           wirePath: join(root, 'wire.jsonl'),
-          guardFirstWrite: true,
           modelId,
           catalog,
           apiKey,
@@ -297,7 +293,6 @@ try {
   } else {
     report.init = 'PASS (existing ChatGPT route reused; config unchanged)';
     report.experimentConfig = {
-      maxToolsExposed: 6,
       profile:
         'temporary synthetic E2E override; original files preserved and override removed after run',
       autoApproval: false,
@@ -356,7 +351,6 @@ try {
       positive.providerUnavailable ?? recorder.metrics().providerUnavailable,
       successfulModelResponses,
     );
-    const firstRequest = recorder.events.find((event) => event.kind === 'request');
     if (providerResult) {
       report.status = providerResult.status;
       report.modelScenario = providerResult.modelScenario;
@@ -380,16 +374,6 @@ try {
         });
         report.partialSpans = readSpans(paths.muffinHome);
       }
-    } else if (
-      recorder.violation() === 'fs_write present in first provider request' ||
-      firstRequest?.toolNames.includes('fs_write')
-    ) {
-      report.modelScenario = 'NOT_RUN (first request did not satisfy hidden-capability witness)';
-      report.witness = {
-        firstRequestTools: firstRequest?.toolNames ?? [],
-        recorderGuard: recorder.violation(),
-      };
-      report.status = 'NOT_RUN';
     } else if (positive.runnerStopReason ?? recorder.metrics().runnerStopReason) {
       const stopReason = positive.runnerStopReason ?? recorder.metrics().runnerStopReason;
       const metrics = recorder.metrics();
@@ -456,7 +440,7 @@ try {
       }
       if (
         positive.code === 0 &&
-        report.positive.taskStatus === 'PASS' &&
+        report.positive.status === 'PASS' &&
         Date.now() - recorder.startedAt <= REAL_LIMITS.wallMs - REAL_LIMITS.negativeWallMs &&
         recorder.metrics().completionRequests <=
           REAL_LIMITS.completionRequests - REAL_LIMITS.negativeCompletionRequests
@@ -669,7 +653,6 @@ function installExperimentConfig(modelId) {
     },
   );
   report.experimentConfig = {
-    maxToolsExposed: 6,
     profile: profile.name,
     model: modelId,
     thinking: 'unset (provider/model default)',
@@ -919,8 +902,7 @@ function experimentProfile(name, modelId) {
       heartbeatIntervalMs: 15_000,
     },
     toolResultBudgetChars: 16_000,
-    notes:
-      'Temporary isolated real-agent evaluation profile: six schemas ensure a real discovery path.',
+    notes: 'Temporary isolated real-agent evaluation profile for bounded inference.',
   };
 }
 
