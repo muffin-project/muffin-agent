@@ -93,6 +93,7 @@ Una corsia aveva una sola connessione; un account fermo fermava Muffin.
 Il profilo del modello (finestra di contesto, strumenti) resta quello
 dell'anello 1 anche quando risponde un ripiego. Un secondo account ChatGPT nella stessa catena non è supportato: il
 file ChatGPT ha un profilo attivo per installazione.
+Due casi noti falliscono in modo sicuro o per difetto: un passaggio Anthropic → Anthropic a metà di un giro di strumenti con il ragionamento esteso riceve un 400 (il blocco `thinking` dell'altro anello viene tolto; il turno resta un rifiuto con l'errore del principale); e un prompt xAI da 200k token in su viene contato alla tariffa sotto i 200k, cioè meno di quanto xAI fattura.
 
 ## Falsificatore
 

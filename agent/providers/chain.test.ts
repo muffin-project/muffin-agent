@@ -8,6 +8,7 @@ import { CONSERVATIVE } from '../profiles/profile.js';
 import { ActivityAllowanceError, activityProvider } from './activity-allowance.js';
 import { type ChainLink, DEFAULT_COOLDOWN_MS, failoverReason, providerChain } from './chain.js';
 import { type LightSpend, lightLane } from './light-lane.js';
+import { ReasoningConfigurationError } from './reasoning.js';
 import {
   type ChatCall,
   type ChatResult,
@@ -564,6 +565,11 @@ describe('provider chain: second review (masking only refusals)', () => {
       'a retryable transport failure without a failover status',
       () => new ProviderError('in-band error', true),
     ],
+    [
+      'non-retryable malformed output (unexpected tool name)',
+      () => new ProviderError('unexpected function name x', false, undefined, 'output'),
+    ],
+    ['activity allowance', () => new ActivityAllowanceError('model')],
   ];
   for (const [name, make] of cases) {
     it(`a fallback's ${name} reaches the caller as itself, not as the primary's refusal`, async () => {
@@ -638,5 +644,28 @@ describe('provider chain: second review (masking only refusals)', () => {
     const spent: LightSpend[] = [];
     await lightLane(chain, { profile: CONSERVATIVE, record: (e) => spent.push(e) }).chat(call());
     expect(spent[0]?.model).toBe('fallback-model');
+  });
+
+  it("a fallback's unsupported reasoning setting is a refusal: masked and recorded", async () => {
+    const quota = planLimit();
+    const refused = new ReasoningConfigurationError({
+      status: 'unsupported',
+      capabilitySource: 'account-catalog',
+      reason: 'no reasoning on this model',
+    });
+    const primary = scripted('openai-chatgpt', [quota]);
+    const second = scripted('openai-compat', [refused]);
+    const states: LaneChainState[] = [];
+    const chain = providerChain([link('a', primary.provider), link('b', second.provider, 'm')], {
+      lane: 'main',
+      now: () => NOW,
+      onState: (s) => states.push(s),
+    });
+    await expect(chain.chat(call())).rejects.toBe(quota);
+    expect(states.at(-1)?.lastFallbackError).toEqual({
+      link: 'b',
+      at: NOW,
+      kind: 'ReasoningConfigurationError',
+    });
   });
 });
