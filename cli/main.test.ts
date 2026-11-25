@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -797,28 +797,14 @@ describe('muffin rot recovery', () => {
     expect(r.err).toContain('MUFFIN_DEBUG=1');
   });
 
-  it('un reseal senza permesso di scrivere il sigillo risponde, invece di vomitare uno stack', () => {
-    // An OS-protected deployment may refuse an ordinary-user reseal (#138).
+  it('reseal is retired with a clear sentence and no stack (ADR-0108)', () => {
     const { dir, xdg } = scratchHome();
     const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
     muffin(env, ['init'], 'sk-ant-fixture');
-
-    // `seal` riscrive `rot/manifest.json` in place, e riscrivere un file che
-    // esiste non chiede il permesso sulla directory: quello serve a creare o
-    // cancellare voci. Quindi il permesso da togliere è quello del file.
-    const manifest = join(dir, 'rot', 'manifest.json');
-    chmodSync(manifest, 0o400);
-    try {
-      const r = muffin(env, ['rot', 'reseal']);
-      expect(r.code).toBe(77); // EX_NOPERM, non un'uscita generica
-      expect(r.err).toContain('permesso negato');
-      expect(r.err).toContain('sudo');
-      // Il punto della slice: una frase, non una traccia di stack.
-      expect(r.err).not.toContain('at ');
-      expect(r.err).not.toContain('EACCES:');
-    } finally {
-      chmodSync(manifest, 0o600); // altrimenti la pulizia del temp non riesce
-    }
+    const r = muffin(env, ['rot', 'reseal']);
+    expect(r.code).toBe(78);
+    expect(r.err + r.out).toMatch(/ADR-0108|nothing to reseal|retired/i);
+    expect(r.err).not.toContain('    at ');
   });
 });
 
