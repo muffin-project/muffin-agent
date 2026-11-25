@@ -115,7 +115,7 @@ export function formatConfigKnobs(knobs: ConfigKnob[], home: string): string {
     row(header.key, header.value, header.sealed, header.source),
     ...rows.map((k) => row(k.key, k.value, k.sealed ? 'sì' : 'no', k.source)),
     '',
-    'sigillato = dentro il Root of Trust: per cambiarlo, modifica il file e poi `muffin rot reseal`.',
+    'sigillato = il valore vive in rot/: modifica il file e riavvia. Non serve un sigillo (ADR-0108).',
   ];
   return lines.join('\n');
 }
