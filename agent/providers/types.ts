@@ -195,6 +195,8 @@ export type Message = {
    * explicitly and ignore this field.
    */
   origin?: MessageOrigin;
+  /** Redacted sender-authored input for permission checks. Kept in the checkpoint and omitted from provider requests. */
+  authoredText?: string;
 };
 
 export type ToolSpec = {

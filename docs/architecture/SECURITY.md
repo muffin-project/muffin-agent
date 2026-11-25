@@ -262,11 +262,12 @@ things until 2026-09-06:
 - **`hardened` no longer skips one.** The `hardened && owner && taint === 0`
   auto-allow is gone. OS hardening and effect approval are separate questions.
 
-Egress is a separate authority and is untouched by this: model-composed bytes
-riding out in a URL's query or fragment still ask the owner and refuse every
-other principal (ADR-0071), and a search's text answers to its own ceiling
-(ADR-0072). Both remain sources of an `ask` that has nothing to do with the
-rule above.
+Egress has its own checks. Above the parameter ceiling, a web-read URL with
+a path, userinfo, query or fragment needs approval unless the whole URL came
+from the sender's own words or an open-web read or search result (ADR-0090).
+The loop applies this rule to the authored portion of the current message,
+including a non-forwarded caption. Forwarded and quoted material stays
+available as context. Search text follows its own ceiling (ADR-0072).
 
 ### What the ceiling does above it (ADR-0075)
 

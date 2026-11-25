@@ -1,3 +1,4 @@
+import { redactText } from '../../core/tracing/redact.js';
 import type { ContentBlock, Message, MessageOrigin, Role } from '../providers/types.js';
 
 /**
@@ -13,7 +14,11 @@ import type { ContentBlock, Message, MessageOrigin, Role } from '../providers/ty
  */
 
 /** Build a message of a given provenance: the only legal way to mark one. */
-export function provenanceMessage(role: Role, origin: MessageOrigin, content: ContentBlock[]): Message {
+export function provenanceMessage(
+  role: Role,
+  origin: MessageOrigin,
+  content: ContentBlock[],
+): Message {
   return { role, content, origin };
 }
 
@@ -23,8 +28,16 @@ export function harnessMessage(role: Role, content: ContentBlock[]): Message {
 }
 
 /** Build the current input message while preserving whether it came from the owner or an external event. */
-export function inputMessage(content: ContentBlock[], origin: 'owner' | 'external' = 'owner'): Message {
-  return provenanceMessage('user', origin, content);
+export function inputMessage(
+  content: ContentBlock[],
+  origin: 'owner' | 'external' = 'owner',
+  authoredText?: string,
+): Message {
+  const message = provenanceMessage('user', origin, content);
+  if (origin === 'owner' && authoredText !== undefined) {
+    message.authoredText = redactText(authoredText);
+  }
+  return message;
 }
 
 /** Build the current turn's owner-input message: only owner bytes may enter. */
@@ -70,7 +83,10 @@ export function isHarnessMessage(message: Message): boolean {
  * The dropped half is not destroyed — the caller archives it in the
  * per-lease audit (`turn_leases`) before replacing the row's messages.
  */
-export function splitWorkEvidence(messages: readonly Message[]): { evidence: Message[]; harness: Message[] } {
+export function splitWorkEvidence(messages: readonly Message[]): {
+  evidence: Message[];
+  harness: Message[];
+} {
   const evidence: Message[] = [];
   const harness: Message[] = [];
   for (const message of messages) {

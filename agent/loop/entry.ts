@@ -81,7 +81,13 @@ export function enqueueTurn(deps: LoopDeps, input: TurnInput): string {
     inputText: input.text,
     providerLease: {
       model: deps.model,
-      checkpoint: [inputMessage(primoMessaggio(input), input.inputOrigin ?? 'owner')],
+      checkpoint: [
+        inputMessage(
+          primoMessaggio(input),
+          input.inputOrigin ?? 'owner',
+          input.authoredText ?? input.text,
+        ),
+      ],
     },
     taint: initialTaint(input),
     counters: freshCounters(deps, input),
@@ -180,7 +186,13 @@ export async function runTurn(deps: LoopDeps, input: TurnInput): Promise<TurnRes
     // fails silently rather than loudly.
     providerLease: {
       model: deps.model,
-      checkpoint: [inputMessage(primoMessaggio(input), input.inputOrigin ?? 'owner')],
+      checkpoint: [
+        inputMessage(
+          primoMessaggio(input),
+          input.inputOrigin ?? 'owner',
+          input.authoredText ?? input.text,
+        ),
+      ],
     },
     taint: initialTaint(input),
     counters: freshCounters(deps, input),

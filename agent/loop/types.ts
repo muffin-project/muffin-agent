@@ -788,6 +788,8 @@ export type TurnInput = {
    * not authority; policy still evaluates the principal, taint, and capability.
    */
   inputOrigin?: 'owner' | 'external';
+  /** The sender's own words when a surface supplies separately attributed context. An empty string means none. */
+  authoredText?: string;
   /**
    * Le immagini che questo turno porta con sé, già caricate (`agent/images.ts`).
    *
