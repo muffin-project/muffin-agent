@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Update } from '@grammyjs/types';
 import DatabaseCtor from 'better-sqlite3';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ApprovalRequest, LoopDeps } from '../../agent/loop.js';
 import { ApprovalStore } from '../../core/approvals/store.js';
 import { SessionStore } from '../../core/session/store.js';
@@ -38,6 +38,57 @@ function latch(): { promise: Promise<void>; resolve: () => void } {
     resolve = done;
   });
   return { promise, resolve };
+}
+
+/**
+ * Pump fake timers until `promise` settles.
+ *
+ * A fixed `advanceTimersByTimeAsync(2_000)` races any backoff scheduled only
+ * after fetch/json (or after `stop()`'s first awaits). On a slow runner the
+ * advance finishes first, the timeout is then sitting on a clock that is no
+ * longer moving, and the 20 s test budget expires. `runAllTimersAsync` is
+ * also wrong here: `TelegramApi` arms `AbortSignal.timeout` (~65 s) on every
+ * call, and `startPresence` arms a 4 s interval, which would reschedule
+ * forever.
+ *
+ * Advances in small steps, capped, so a short `retry_after` is honoured
+ * without jumping to the request timeout.
+ */
+async function flushUntil<T>(promise: Promise<T>, maxMs = 10_000): Promise<T> {
+  let settled = false;
+  const tracked = promise.finally(() => {
+    settled = true;
+  });
+  const deadline = Date.now() + maxMs;
+  await vi.advanceTimersByTimeAsync(0);
+  while (!settled) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      throw new Error(`still pending after ${maxMs}ms of fake time`);
+    }
+    await vi.advanceTimersByTimeAsync(Math.min(25, remaining));
+  }
+  return tracked;
+}
+
+/** Always put the clock and stubs back, even if a hung `stop()` is abandoned. */
+async function restoreClock(): Promise<void> {
+  try {
+    vi.clearAllTimers();
+  } finally {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+}
+
+async function stopStream(stream?: { stop?: () => void | Promise<void> }): Promise<void> {
+  const stopping = stream?.stop?.();
+  if (stopping === undefined) return;
+  try {
+    await flushUntil(Promise.resolve(stopping), 10_000);
+  } catch {
+    // Cleanup must not fail the next case. restoreClock() still runs.
+  }
 }
 
 const premuto = (
@@ -254,6 +305,10 @@ function turnoInAttesa(
   return { turnId, approvalId };
 }
 
+afterEach(async () => {
+  await restoreClock();
+});
+
 describe('standalone approvals after a Work reply', () => {
   it.each([
     { fault: 'rich rejection', status: 400, revoke: true, wire: ['sendRichMessage'] },
@@ -311,9 +366,6 @@ describe('standalone approvals after a Work reply', () => {
       ).toBe(true);
       const resumed = h.turns.claim(turn.id)!;
       expect(resumed).toMatchObject({ status: 'running', ownerQuestionFinal: true });
-      const stream = connector.resumeStream(resumed);
-      expect(stream).toBeDefined();
-      expect(stream?.onProgress).toBeUndefined();
 
       const request = {
         capability: 'sys.shell',
@@ -324,10 +376,16 @@ describe('standalone approvals after a Work reply', () => {
       const approvalId = h.approvals.ask({ ...request, turnId: turn.id }, new Date());
       const where = { surface: 'telegram', turnId: turn.id, replyTo, approvalId } as const;
       const calls: { method: string; keyboard: boolean }[] = [];
+      // Stub before resumeStream: startPresence would otherwise call the real
+      // Bot API (and arm a 65s AbortSignal.timeout) before fetch is faked.
       vi.stubGlobal('fetch', async (url: string, init: { body: string }) => {
+        const method = url.split('/').at(-1)!;
+        if (method === 'sendChatAction') {
+          return Response.json({ ok: true, result: true });
+        }
         const payload = JSON.parse(init.body);
         calls.push({
-          method: url.split('/').at(-1)!,
+          method,
           keyboard: payload.reply_markup !== undefined,
         });
         if (calls.length === 1) {
@@ -345,10 +403,12 @@ describe('standalone approvals after a Work reply', () => {
         }
         return Response.json({ ok: true, result: { message_id: 700 + calls.length } });
       });
+      const stream = connector.resumeStream(resumed);
+      expect(stream).toBeDefined();
+      expect(stream?.onProgress).toBeUndefined();
 
       const pending = connector.approval(request, where).catch((error: unknown) => error);
-      await vi.advanceTimersByTimeAsync(2_000);
-      const outcome = await pending;
+      const outcome = await flushUntil(pending);
       expect(calls).toEqual(wire.map((method) => ({ method, keyboard: status !== 200 })));
       expect(decide).toHaveBeenCalled();
       if (status === 429) expect(outcome).toMatchObject({ status: 429 });
@@ -366,10 +426,9 @@ describe('standalone approvals after a Work reply', () => {
       await expect(connector.approval(request, where)).resolves.toBe('unavailable');
       expect(decide).not.toHaveBeenCalled();
       expect(calls).toHaveLength(wire.length);
-      await stream?.stop?.();
+      await stopStream(stream);
     } finally {
-      vi.useRealTimers();
-      vi.unstubAllGlobals();
+      await restoreClock();
       h.db.close();
       rmSync(h.home, { recursive: true, force: true });
     }
@@ -379,7 +438,18 @@ describe('standalone approvals after a Work reply', () => {
 describe('un pulsante premuto dall owner', () => {
   it.each([
     { status: 502, body: { ok: false, description: 'Bad Gateway' } },
-    { status: 429, body: { ok: false, description: 'Too Many Requests' } },
+    // No error_code: a 429 without it is an unreadable/uncertain receipt, not a
+    // confirmed rate limit, so TelegramApi does not retry. retry_after is still
+    // declared so a regression that started retrying would wait a known window
+    // instead of the implicit 2s default.
+    {
+      status: 429,
+      body: {
+        ok: false,
+        description: 'Too Many Requests',
+        parameters: { retry_after: 1 },
+      },
+    },
     { status: 200, body: { description: 'Malformed response' } },
   ])(
     'keeps the original approval button actionable after an uncertain HTTP $status receipt',
@@ -389,8 +459,6 @@ describe('un pulsante premuto dall owner', () => {
       const connector = new TelegramConnector({ ...deps, api: new TelegramApi('test') });
       const replyTo = { chatId: OWNER, messageId: 5 };
       const { turnId, approvalId } = turnoInAttesa(h, replyTo);
-      const stream = connector.resumeStream(h.turns.get(turnId)!);
-      expect(stream).toBeDefined();
       const messageId = 700;
       const keyboards: InlineButton[][][] = [];
       const fetch = vi.fn(async (url: string, init: { body: string }) => {
@@ -406,16 +474,19 @@ describe('un pulsante premuto dall owner', () => {
       });
       vi.stubGlobal('fetch', fetch);
       vi.useFakeTimers();
+      let stream: ReturnType<TelegramConnector['resumeStream']> | undefined;
       try {
+        // Presence starts a sendChatAction on the real TelegramApi; stub first
+        // so that call cannot hang on the network under a 65s fake timeout.
+        stream = connector.resumeStream(h.turns.get(turnId)!);
+        expect(stream).toBeDefined();
         const request = {
           capability: 'sys.shell',
           prompt: 'Approva questa azione?',
           taint: 0,
         } as const;
         const where = { surface: 'telegram', turnId, replyTo, approvalId } as const;
-        const first = expect(connector.approval(request, where)).resolves.toBe('asked');
-        await vi.advanceTimersByTimeAsync(2_000);
-        await first;
+        await expect(flushUntil(connector.approval(request, where))).resolves.toBe('asked');
         await expect(connector.approval(request, where)).resolves.toBe('asked');
         expect(keyboards).toHaveLength(1);
         expect(h.approvals.get(approvalId)?.questionMessageIds).toEqual([]);
@@ -431,19 +502,15 @@ describe('un pulsante premuto dall owner', () => {
             text: request.prompt,
           }),
         ]);
-        await vi.advanceTimersByTimeAsync(2_000);
-        await callback;
+        await flushUntil(callback);
         expect(h.approvals.get(approvalId)?.decision).toBe('allow');
         expect(h.turns.get(turnId)?.status).toBe('runnable');
         expect(keyboards).toHaveLength(1);
       } finally {
         try {
-          const stopping = stream?.stop?.();
-          await vi.advanceTimersByTimeAsync(2_000);
-          await stopping;
+          await stopStream(stream);
         } finally {
-          vi.useRealTimers();
-          vi.unstubAllGlobals();
+          await restoreClock();
           h.db.close();
           rmSync(h.home, { recursive: true, force: true });
         }
@@ -554,8 +621,7 @@ describe('un pulsante premuto dall owner', () => {
       h.api.editMessageRichText = receipt;
 
       const stopping = stream.stop?.();
-      await vi.advanceTimersByTimeAsync(2_000);
-      await stopping;
+      await flushUntil(Promise.resolve(stopping));
       expect(receipt).toHaveBeenCalledWith(
         OWNER,
         question.messageId,
@@ -576,7 +642,7 @@ describe('un pulsante premuto dall owner', () => {
       });
     } finally {
       late.resolve();
-      vi.useRealTimers();
+      await restoreClock();
     }
   });
 
