@@ -104,7 +104,7 @@ describe('capability exposure projection', () => {
     );
   });
 
-  it('replaces only the dynamic task-local set on a second search', () => {
+  it('keeps a selected attachment tool when the same task discovers a source reader', () => {
     const eligible = [
       tool('fs_read'),
       tool('fs_list'),
@@ -112,8 +112,7 @@ describe('capability exposure projection', () => {
       tool('memory_search'),
       tool('skill_read'),
       tool('http_get', 'net.read', 'Read a public URL.'),
-      tool('event_watch_create', 'event.watch', 'Create an event trigger.'),
-      tool('event_watch_list', 'event.watch', 'List event triggers.'),
+      tool('send_file', 'surface.send_file', 'Attach a file to the current conversation.'),
       tool('todo', 'todo.write', 'Manage the current plan.'),
       discovery,
     ];
@@ -122,19 +121,22 @@ describe('capability exposure projection', () => {
       discoveryTool: discovery,
     });
 
-    projection.discovery?.searchAndLoad('event trigger', 2);
+    projection.discovery?.searchAndLoad('attach a file', 1);
     projection.discovery?.activatePending();
     expect(projection.exposed.map((entry) => entry.spec.name)).toEqual(
-      expect.arrayContaining(['event_watch_create', 'event_watch_list']),
+      expect.arrayContaining(['send_file']),
     );
 
     projection.discovery?.searchAndLoad('public url', 1);
     projection.discovery?.activatePending();
-    const names = projection.exposed.map((entry) => entry.spec.name);
-    expect(names).toContain('http_get');
-    expect(names).not.toContain('event_watch_create');
-    expect(names).not.toContain('event_watch_list');
-    expect(names).toContain('fs_read');
+    const visible = () => projection.exposed.map((entry) => entry.spec.name);
+    expect(visible()).toEqual(expect.arrayContaining(['fs_read', 'http_get', 'send_file']));
+    expect(visible()).not.toContain('todo');
+
+    projection.discovery?.searchAndLoad('zyxwxy', 1);
+    projection.discovery?.activatePending();
+    expect(visible()).toEqual(expect.arrayContaining(['fs_read', 'http_get', 'send_file']));
+    expect(visible()).not.toContain('todo');
   });
 
   it('a search miss leaves the core and the search door in place', () => {
