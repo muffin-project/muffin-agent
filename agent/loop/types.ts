@@ -398,6 +398,12 @@ export type SpendEntry = {
    * this field existed.
    */
   requestedModel?: string | undefined;
+  /**
+   * The provider-chain link that served the call (ADR-0110), when the lane is
+   * a chain. Billing prices the call as this endpoint; the ledger row itself
+   * does not store it.
+   */
+  route?: { kind: 'anthropic' | 'openai-compat' | 'openai-chatgpt'; baseUrl?: string } | undefined;
 };
 
 type ToolHandler = (args: unknown, ctx: ToolContext) => Promise<ToolOutcome> | ToolOutcome;

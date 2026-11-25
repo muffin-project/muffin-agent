@@ -21,6 +21,7 @@ export type SpanName =
   | 'muffin.tool_call'
   | 'muffin.policy_decision'
   | 'muffin.light.attempt'
+  | 'muffin.provider.failover'
   | 'muffin.judgment.shadow';
 
 export type SpanStatus = 'ok' | 'error';

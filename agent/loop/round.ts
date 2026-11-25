@@ -945,7 +945,16 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       model: result.model,
       // The route it was asked with, for the billing contract: the ledger
       // identity stays `result.model`, and the price seam decides (#499).
-      requestedModel: deps.model,
+      requestedModel: result.route?.model ?? deps.model,
+      // Which chain link served it (ADR-0110), so a fallback is priced as itself.
+      ...(result.route === undefined
+        ? {}
+        : {
+            route: {
+              kind: result.route.kind,
+              ...(result.route.baseUrl === undefined ? {} : { baseUrl: result.route.baseUrl }),
+            },
+          }),
       // Attribuzione, non contabilità: la riga di spesa porta il job da cui
       // il turno è nato, così il tetto per-job ha un contatore da leggere.
       ...(input.jobId === undefined ? {} : { jobId: input.jobId }),
