@@ -187,7 +187,7 @@ export const ROT_READERS: RotEntry[] = [
   {
     file: 'evals/',
     unreadByDesign:
-      'the ratchet\'s reference suite. It is sealed so a self-modifying agent cannot grade itself against a test set it rewrote, and it is read by `evals/` — a harness the owner runs, not the runtime. A production reader here would be the bug.',
+      "the ratchet's reference suite. It is sealed so a self-modifying agent cannot grade itself against a test set it rewrote, and it is read by `evals/` — a harness the owner runs, not the runtime. A production reader here would be the bug.",
   },
 ];
 
@@ -256,23 +256,41 @@ function code(source: string): string {
     const c = source[i]!;
     const next = source[i + 1];
     if (mode === 'code') {
-      if (c === '/' && next === '/') { mode = 'line'; i++; continue; }
-      if (c === '/' && next === '*') { mode = 'block'; i++; continue; }
+      if (c === '/' && next === '/') {
+        mode = 'line';
+        i++;
+        continue;
+      }
+      if (c === '/' && next === '*') {
+        mode = 'block';
+        i++;
+        continue;
+      }
       if (c === "'" || c === '"' || c === '`') mode = c;
       out += c;
       continue;
     }
     if (mode === 'line') {
       // The newline survives, so nothing on the next line joins this one.
-      if (c === '\n') { mode = 'code'; out += c; }
+      if (c === '\n') {
+        mode = 'code';
+        out += c;
+      }
       continue;
     }
     if (mode === 'block') {
-      if (c === '*' && next === '/') { mode = 'code'; i++; }
+      if (c === '*' && next === '/') {
+        mode = 'code';
+        i++;
+      }
       continue;
     }
     // Inside a string: an escaped quote does not end it.
-    if (c === '\\') { out += source.slice(i, i + 2); i++; continue; }
+    if (c === '\\') {
+      out += source.slice(i, i + 2);
+      i++;
+      continue;
+    }
     if (c === mode) mode = 'code';
     out += c;
   }
@@ -287,12 +305,17 @@ function matches(entry: RotEntry, path: string): boolean {
   return entry.file.endsWith('/') ? path.startsWith(entry.file) : path === entry.file;
 }
 
-export function checkRotReaders(home: string, allowlist: RotEntry[] = ROT_READERS): RotReadersResult {
+export function checkRotReaders(
+  home: string,
+  allowlist: RotEntry[] = ROT_READERS,
+): RotReadersResult {
   const manifestPath = join(home, 'rot', 'manifest.json');
   if (!existsSync(manifestPath)) {
     return {
       violations: [],
-      skipped: [{ id: 'rot_readers', why: `nessun manifest in ${manifestPath}: il RoT non è sigillato` }],
+      skipped: [
+        { id: 'rot_readers', why: `nessun manifest in ${manifestPath}: il RoT non è sigillato` },
+      ],
       fileCount: 0,
     };
   }
@@ -304,7 +327,10 @@ export function checkRotReaders(home: string, allowlist: RotEntry[] = ROT_READER
     return {
       violations: [],
       skipped: [
-        { id: 'rot_readers', why: `manifest illeggibile: ${error instanceof Error ? error.message : String(error)}` },
+        {
+          id: 'rot_readers',
+          why: `manifest illeggibile: ${error instanceof Error ? error.message : String(error)}`,
+        },
       ],
       fileCount: 0,
     };
@@ -364,7 +390,7 @@ export function checkRotReaders(home: string, allowlist: RotEntry[] = ROT_READER
     violations.push({
       id: 'reader_gone',
       severity: 'error',
-      what: 'l\'allowlist dichiara un lettore che non legge più quel file: la mappa mente',
+      what: "l'allowlist dichiara un lettore che non legge più quel file: la mappa mente",
       count: broken.length,
       sample: broken,
     });
@@ -375,7 +401,7 @@ export function checkRotReaders(home: string, allowlist: RotEntry[] = ROT_READER
       // Warning, not error: an old home legitimately predates a file the
       // allowlist already knows about. It is drift to look at, not damage.
       severity: 'warning',
-      what: 'l\'allowlist elenca un file che questo sigillo non contiene',
+      what: "l'allowlist elenca un file che questo sigillo non contiene",
       count: stale.length,
       sample: stale,
     });
