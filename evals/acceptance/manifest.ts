@@ -232,7 +232,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // would fall into safe mode the moment it paired).
   verde(
     'B15',
-    'owner binding: pairing writes the owner into the sealed root of trust, and the seal still verifies',
+    'owner binding: pairing writes the owner into rot/owner.json, and verify stays a non-incident diagnostic (ADR-0108)',
   ),
   verde(
     'D12',
