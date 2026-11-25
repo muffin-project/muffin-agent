@@ -4,7 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { checkPullRequestDco, parseCommitLog } from './check-dco.js';
+import {
+  checkMergeGroupDco,
+  checkPullRequestDco,
+  firstParentChain,
+  githubDcoPassed,
+  parseCommitLog,
+} from './check-dco.js';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -374,5 +380,85 @@ describe('owner-delegated internal contribution policy', () => {
     });
     writeFileSync(eventPath, JSON.stringify(ownerEvent(base, external)));
     expect(() => run('--pull-request-event', eventPath)).toThrow();
+  });
+});
+
+describe('merge queue groups', () => {
+  /** A queue-shaped group: one `--no-ff` merge per PR branch on top of `base`. */
+  function queueGroup(root: string, prs: number): { base: string; head: string; heads: string[] } {
+    const base = git(root, 'rev-parse', 'HEAD');
+    const heads: string[] = [];
+    for (let i = 0; i < prs; i++) {
+      git(root, 'checkout', '-q', '-b', `pr-${i}`, base);
+      heads.push(
+        addCommit(root, { name: `Agent ${i}`, email: `a${i}@agent.invalid`, signedOff: false }),
+      );
+      git(root, 'checkout', '-q', 'base');
+      git(root, 'merge', '-q', '--no-ff', '-m', `Merge pull request #${i}`, `pr-${i}`);
+    }
+    return { base, head: git(root, 'rev-parse', 'HEAD'), heads };
+  }
+
+  it('admits a group whose merged PR heads all passed dco, without re-deriving the PR exemption', async () => {
+    const root = repository();
+    const { base, head, heads } = queueGroup(root, 2);
+    const chain = firstParentChain(base, head, root);
+    expect(chain.map((c) => c.parents[1])).toEqual(heads);
+    expect(await checkMergeGroupDco(chain, async (sha) => heads.includes(sha))).toEqual([]);
+  });
+
+  it('fails closed on a merged head without a green dco check', async () => {
+    const root = repository();
+    const { base, head, heads } = queueGroup(root, 2);
+    const problems = await checkMergeGroupDco(
+      firstParentChain(base, head, root),
+      async (sha) => sha === heads[0],
+    );
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain(heads[1]?.slice(0, 12));
+  });
+
+  it('fails closed on a direct commit in the group and on an empty group', async () => {
+    const root = repository();
+    const base = git(root, 'rev-parse', 'HEAD');
+    const direct = addCommit(root, {
+      name: 'Someone',
+      email: 'someone@example.test',
+      signedOff: true,
+    });
+    const problems = await checkMergeGroupDco(
+      firstParentChain(base, direct, root),
+      async () => true,
+    );
+    expect(problems).toEqual([`${direct.slice(0, 12)} is not a two-parent merge from the queue`]);
+    expect(await checkMergeGroupDco([], async () => true)).toEqual([
+      'merge group introduces no commits',
+    ]);
+  });
+
+  it('counts only a completed, successful dco run from GitHub Actions', async () => {
+    const answer = (runs: unknown[]) =>
+      (async () =>
+        new Response(JSON.stringify({ check_runs: runs }), {
+          status: 200,
+        })) as unknown as typeof fetch;
+    const ok = {
+      name: 'dco',
+      status: 'completed',
+      conclusion: 'success',
+      app: { slug: 'github-actions' },
+    };
+    expect(await githubDcoPassed('a'.repeat(40), 't', answer([ok]))).toBe(true);
+    expect(
+      await githubDcoPassed('a'.repeat(40), 't', answer([{ ...ok, conclusion: 'failure' }])),
+    ).toBe(false);
+    expect(
+      await githubDcoPassed('a'.repeat(40), 't', answer([{ ...ok, app: { slug: 'other-app' } }])),
+    ).toBe(false);
+    expect(await githubDcoPassed('a'.repeat(40), 't', answer([]))).toBe(false);
+    const denied = (async () => new Response('', { status: 403 })) as unknown as typeof fetch;
+    await expect(githubDcoPassed('a'.repeat(40), 't', denied)).rejects.toThrow(
+      'checks API answered 403',
+    );
   });
 });

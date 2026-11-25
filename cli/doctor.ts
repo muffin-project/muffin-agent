@@ -69,6 +69,7 @@ import { assessShellBoundary } from '../core/sandbox/shell-boundary.js';
 import type { StatoSuperficie } from '../core/surface/salute.js';
 import { describeInterrupted, readTurnHealth, readUndelivered } from '../core/turns/store.js';
 import { Vault, type VaultAudit, type VaultStore } from '../core/vault/vault.js';
+import { credentialRemedy, describeChain } from './fallback.js';
 import { secretStoreHint } from './prompt.js';
 import { PLAIN, type Style } from './ui.js';
 import { type BuildStamp, describeBuild, findCheckoutRoot } from './update.js';
@@ -467,6 +468,29 @@ export async function runDoctor(
     );
   }
 
+  // The provider chains (ADR-0110): which link is serving and why the
+  // others are not. Silent when a lane has no fallbacks — nothing to say.
+  for (const lane of ['main', 'light'] as const) {
+    if (!config.fallbacks?.[lane]?.length) continue;
+    const chain = describeChain(config, lane, home);
+    const detail = chain.lines.join(' | ');
+    if (chain.degraded) {
+      warn(
+        `provider chain ${lane}`,
+        `${detail} — la connessione principale è in pausa: i messaggi vanno ai ripieghi`,
+        'si riprova da sola allo scadere della pausa; se hai già sistemato l’account: `muffin fallback reset`',
+      );
+    } else if (chain.missing.length > 0) {
+      warn(
+        `provider chain ${lane}`,
+        detail,
+        chain.missing.map((link) => credentialRemedy(link)).join(' · '),
+      );
+    } else {
+      ok(`provider chain ${lane}`, detail);
+    }
+  }
+
   // I pin di routing che derivano da un'altra era del modello (issue #501):
   // confronto offline contro il marcatore, senza rete. Quando non lo si può
   // provare si tace — un avviso che piange al lupo insegna a ignorare doctor.
@@ -521,11 +545,14 @@ export async function runDoctor(
   // current mode actually gives.
   const rot = verify(home, config.rot.mode);
   if (rot.ok) {
-    ok('root of trust', `${rot.fileCount} files verified, mode ${rot.mode}`);
-  } else if (rot.action === 'refuse') {
-    fail('root of trust', `${rot.reason}: ${rot.diverged.join(', ')}`, rot.remedy);
+    ok('root of trust', `${rot.fileCount} files in rot/, mode ${rot.mode}`);
   } else {
-    warn('root of trust', `${rot.reason}: ${rot.diverged.join(', ')} — safe mode`, rot.remedy);
+    ok(
+      'root of trust',
+      `rot/ è configurazione dell'owner (mode ${rot.mode}); un manifest rimasto segnala ${rot.reason}` +
+        (rot.diverged.length > 0 ? ` (${rot.diverged.join(', ')})` : '') +
+        ' — gli edit valgono senza sigillo (ADR-0108)',
+    );
   }
   ownerBindingCheck(ok, warn, fail, home, config, options.hardened);
 
@@ -558,7 +585,7 @@ export async function runDoctor(
     warn(
       'policy matrix',
       `fallback ai valori compilati (${matrix.note}) — le modifiche a rot/policy.json non hanno effetto`,
-      'ripristina il file dai default del repo e rifai `muffin rot reseal`',
+      'ripristina rot/policy.json dai default del repo, oppure correggi il file; un riavvio basta, senza sigillo',
     );
   }
 
@@ -591,7 +618,7 @@ export async function runDoctor(
     warn(
       'rot readers',
       readers.skipped.map((s) => `NON verificato — ${s.why}`).join('; '),
-      'run `muffin rot reseal`',
+      'è un avviso di lettura, non un sigillo da rifare',
     );
   } else if (readers.violations.length === 0) {
     ok('rot readers', `${readers.fileCount} file sigillati, ognuno con un lettore dichiarato`);
@@ -601,7 +628,7 @@ export async function runDoctor(
       'rot readers',
       readers.violations.map((v) => `${v.id}: ${v.sample.join(', ')}`).join(' · '),
       'sembra vincolante ma non lo è, perché nessun modulo lo legge davvero: dagli un lettore, oppure toglilo da rot/ ' +
-        '— poi rifai `muffin rot reseal` (è dentro il sigillo: per questo serve la tua conferma)',
+        "(è un file di confini: per toglierlo o dargli un lettore basta l'edit e un riavvio)",
     );
   }
 
@@ -611,10 +638,9 @@ export async function runDoctor(
   // into config.json, created no service user, and made the kernel *more*
   // permissive. The one mode that could be a lie was the one nobody checked.
   if (config.rot.mode === 'single-user') {
-    warn(
+    ok(
       'root of trust mode',
-      'The seal checks for changes; it does not prevent another process running as you ' +
-        'from replacing the rules and their seal (single-user). OS hardening does not change approvals.',
+      "rot/ è configurazione dell'owner: gli edit valgono al prossimo avvio. L'agente non può scriverci (`rot.write` è negato). Nessun sigillo da rinnovare (ADR-0108).",
     );
   } else {
     const hardening = hardeningHolds(home);
@@ -696,14 +722,14 @@ export async function runDoctor(
     warn(
       'tetto di spesa',
       `valori compilati (${budgets.caps.monthlyUsd}/${budgets.caps.perTenantDailyUsd} USD) — ${budgets.notes.join(' · ')}`,
-      'ripristina rot/budgets.json dai default del repo e rifai `muffin rot reseal`',
+      'correggi rot/budgets.json oppure lancia `muffin rot migrate` per i campi additivi; il fuso già impostato resta, e non serve un sigillo',
     );
   }
   if (budgets.quietSource === 'fallback') {
     warn(
       'quiet hours',
       `finestra compilata ${budgets.quietHours.from}-${budgets.quietHours.to} ${budgets.quietHours.timezone} — ${budgets.notes.join(' · ')}`,
-      'ripristina rot/budgets.json dai default del repo e rifai `muffin rot reseal`',
+      'correggi rot/budgets.json oppure lancia `muffin rot migrate` per i campi additivi; il fuso già impostato resta, e non serve un sigillo',
     );
   }
   // Shown only when there is something to say: declarations come from the
@@ -723,7 +749,7 @@ export async function runDoctor(
     warn(
       'endpoint non conteggiati',
       `sezione unmetered non valida (${budgets.notes.join(' · ')}) — tutto resta a consumo`,
-      'correggi rot/budgets.json e rifai `muffin rot reseal`',
+      'correggi rot/budgets.json e riavvia; non serve un sigillo',
     );
   }
 
@@ -1096,7 +1122,7 @@ export async function runDoctor(
             // The cap moved into the seal, so the remedy moved with it: telling the
             // owner to edit config.json would now send them to a field that no
             // longer exists.
-            'alza `monthlyUsd` in rot/budgets.json e fai `muffin rot reseal`, o aspetta il mese nuovo',
+            'alza `monthlyUsd` in rot/budgets.json e riavvia, o aspetta il mese nuovo',
           );
           break;
         case 'error':
@@ -1750,23 +1776,20 @@ export function formatReport(report: DoctorReport, style: Style = PLAIN): string
  * The remedy text for one or more sealed (`rot/`) files that are both
  * safe to adopt: what happens, what to type, only then the word for it.
  *
- * Consequence first, action second, vocabulary last — an owner who does not
- * know what "the seal" is must still know what to do, per the 03/09/2026 UX
- * pass (he called this exact line confusing while reading real `doctor`
- * output). Truthful, not softened: adopting genuinely drops the install into
- * `safe mode` until `muffin rot reseal`, and that word is who decides — never
- * automatic, same posture as `core/rot/harden.ts`'s printed-not-run plan.
+ * ADR-0108: drift against shipped defaults is information, not an incident.
+ * The remedy names `muffin rot migrate` (additive fields, timezone and
+ * identity preserved) and never a reseal or a safe-mode consequence.
  *
  * Takes a list so `sealedDriftGroupCheck` below can reuse it for several
  * files at once: one explanation, one list, one command sequence — not the
  * same paragraph repeated per file.
  */
 function sealedAdoptRemedy(files: { path: string; cmd: string }[]): string {
-  const commands = files.map((f) => f.cmd).join(' — poi ');
+  const names = files.map((f) => f.path).join(', ');
   return (
-    `aggiornarl${files.length === 1 ? 'o' : 'i'} blocca l'installazione in safe mode finché non dici tu che va bene ` +
-    `così — mai in automatico. Per farlo, in ordine: ${commands} — quindi \`muffin rot reseal\` una sola volta, alla ` +
-    `fine (${files.length === 1 ? 'questo file è' : 'sono'} dentro il sigillo, rot/: per questo serve la tua parola esplicita)`
+    `HEAD è andato avanti rispetto a ${names}. Non li sovrascrivo da solo e non serve un sigillo (ADR-0108). ` +
+    `\`muffin rot migrate\` applica solo i campi additivi (per esempio unmetered nei budget) e conserva il fuso e identity.md già presenti. ` +
+    `Per sostituire identity.md serve una tua scelta esplicita, non una copia dai default.`
   );
 }
 
@@ -1776,7 +1799,7 @@ function sealedAdoptRemedy(files: { path: string; cmd: string }[]): string {
  * "questo file è dentro il sigillo" again. Same consequence, same remedy
  * shape every time, so one grouped check replaces the repetition: one
  * explanation, one list of files, one command sequence in the order the
- * owner runs it, `muffin rot reseal` exactly once at the end.
+ * owner can run it, `muffin rot migrate` once, without a reseal.
  *
  * Only called for 2+ files (see the call site in `runDoctor`) — a single
  * diverging sealed file already gets this shape from `defaultsDriftCheck`
@@ -1807,12 +1830,8 @@ function sealedDriftGroupCheck(
  * `'adoptable'` and `'unknown'` carry a remedy — the first a real command,
  * the second an honest "I cannot tell" (ADR-0008: declared, never guessed).
  *
- * `'adoptable'` under `rot/` gets the safe-mode consequence stated BEFORE
- * the command, never silently: copying into a sealed path makes
- * `verify()`'s hash check diverge (`core/rot/verify.ts`), which drops the
- * install into safe mode until `muffin rot reseal` — an act of the owner's
- * own authority, so this only ever names it, never runs it (same posture as
- * `core/rot/harden.ts`'s printed plan). When several such files drift
+ * `'adoptable'` under `rot/` points at `muffin rot migrate`, never at a
+ * blind `cp` plus reseal (ADR-0108). When several such files drift
  * together, the caller in `runDoctor` routes them to `sealedDriftGroupCheck`
  * instead of calling this once per file — see there for why.
  */
@@ -1831,8 +1850,7 @@ function defaultsDriftCheck(
       // Il rimedio nomina il verbo che **registra** (`cli/adopt.ts`), non
       // `muffin init`: init lo ricrea davvero, ma rifa' anche config, database
       // e sigillo per un file che manca. Sotto `rot/` il verbo giusto resta
-      // init, perche' e' l'unico che copia dentro il sigillo e risigilla nello
-      // stesso giro — altrimenti l'installazione resta in safe mode.
+      // init, perche' e' l'unico che copia dentro rot/ in un giro solo.
       //
       // Un default che manca non e' quasi mai una scelta: e' una casa nata
       // prima che quel default esistesse (misurato sull'installazione
@@ -2216,8 +2234,8 @@ function ownerBindingCheck(
   if (sealed.source === 'refused') {
     fail(
       'owner binding',
-      `${sealed.note ?? 'il legame sigillato non si verifica'} — nessuna superficie riconosce più un owner`,
-      'guarda cosa è cambiato in rot/owner.json; se la modifica è tua `muffin rot reseal`, altrimenti rifai `muffin surface enable telegram --owner <id>`',
+      `${sealed.note ?? 'rot/owner.json non è leggibile'} — nessuna superficie riconosce più un owner`,
+      'guarda cosa è cambiato in rot/owner.json; se la modifica è tua, un riavvio basta, altrimenti rifai `muffin surface enable telegram --owner <id>`',
     );
     return;
   }
@@ -2233,23 +2251,23 @@ function ownerBindingCheck(
   // dei due mi riconosce», e la risposta va detta, non dedotta.
   const diverse: string[] = [];
   if (tgSealed !== undefined && tgConfig !== undefined && tgSealed !== tgConfig) {
-    diverse.push(`telegram: sigillo ${tgSealed}, config.json ${tgConfig}`);
+    diverse.push(`telegram: rot/owner.json ${tgSealed}, config.json ${tgConfig}`);
   }
   if (dcSealed !== undefined && dcConfig !== undefined && dcSealed !== dcConfig) {
-    diverse.push(`discord: sigillo ${dcSealed}, config.json ${dcConfig}`);
+    diverse.push(`discord: rot/owner.json ${dcSealed}, config.json ${dcConfig}`);
   }
 
   if (sigillati.length > 0 && diverse.length > 0) {
     warn(
       'owner binding',
-      `${diverse.join(' · ')} — vince il sigillo, e il campo in config.json non viene nemmeno letto`,
-      "se l'owner giusto è quello sigillato non devi fare niente; se non lo è, `muffin surface enable telegram --owner <id>` lo riscrive e risigilla",
+      `${diverse.join(' · ')} — vince rot/owner.json, e il campo in config.json non viene nemmeno letto`,
+      "se l'owner giusto è quello in rot/owner.json non devi fare niente; se non lo è, `muffin surface enable telegram --owner <id>` lo riscrive (backup automatico, nessun sigillo)",
     );
     return;
   }
 
   if (sigillati.length > 0) {
-    ok('owner binding', `rot/owner.json — ${sigillati.join(', ')}, dentro il sigillo`);
+    ok('owner binding', `rot/owner.json — ${sigillati.join(', ')}`);
     // Una superficie legata solo in config.json accanto a una già sigillata
     // resta legacy: va detta lo stesso, o la riga verde qui sopra coprirebbe
     // metà della verità.
@@ -2269,11 +2287,11 @@ function ownerBindingCheck(
   const hardened = hardenedOverride ?? hardeningHolds(home).holds;
   warn(
     'owner binding legacy',
-    `${legacy.join(', ')} — il legame vive solo in config.json, fuori dal sigillo: qualunque processo che gira come te ` +
-      'può riscriverlo e diventare owner, e nessun hash se ne accorgerebbe' +
+    `${legacy.join(', ')} — il legame vive solo in config.json, non in rot/owner.json: qualunque processo che gira come te ` +
+      'può riscriverlo e diventare owner' +
       (sealed.note === undefined ? '' : ` (${sealed.note})`),
     hardened
-      ? 'rot/ non è scrivibile da questo processo (hardened): `muffin surface enable telegram` (o `discord`) da solo non può scrivere rot/owner.json né risigillare — rieseguilo con il privilegio che possiede rot/, e sarà quel giro a scrivere e risigillare'
-      : 'rifai `muffin surface enable telegram` (o `discord`): scrive rot/owner.json e risigilla nello stesso giro',
+      ? 'rot/ non è scrivibile da questo processo (hardened): `muffin surface enable telegram` (o `discord`) da solo non può scrivere rot/owner.json — rieseguilo con il privilegio che possiede rot/, e sarà quel giro a scrivere (backup automatico, nessun sigillo)'
+      : 'rifai `muffin surface enable telegram` (o `discord`): scrive rot/owner.json nello stesso giro (backup automatico, nessun sigillo)',
   );
 }

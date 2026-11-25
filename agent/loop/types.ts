@@ -123,11 +123,19 @@ export type ToolContext = {
    * is the same semantics the prior art landed on independently (Hermes parks
    * the *next* turn, ADR-0035's `steer` injects after the next tool call).
    *
-   * Only `wait` calls it. It is on every context rather than injected into one
-   * tool because a tool is registered once at boot and shared by every turn,
-   * so the barrier has to travel with the turn — not with the tool.
+   * The barrier travels with the turn rather than a tool shared between turns.
    */
   suspend: (spec: WaitSpec) => void;
+  /** Trusted, call-local port; never populated from model arguments. */
+  workMessage?: {
+    available: () => boolean;
+    messageId: string;
+    solo: boolean;
+    withinBudget: boolean;
+    questionWakeAt: () => string | null;
+    sanitize: (text: string) => string;
+    send: (text: string) => ReturnType<NonNullable<LoopDeps['sendWorkMessage']>>;
+  };
   /** The schema menu the turn last sent to the model, including in flat mode. */
   capabilityExposure?: (() => CapabilityExposureSnapshot) | undefined;
   /** Search and stage schemas from the eligible catalogue when discovery is configured. */
@@ -390,6 +398,12 @@ export type SpendEntry = {
    * this field existed.
    */
   requestedModel?: string | undefined;
+  /**
+   * The provider-chain link that served the call (ADR-0110), when the lane is
+   * a chain. Billing prices the call as this endpoint; the ledger row itself
+   * does not store it.
+   */
+  route?: { kind: 'anthropic' | 'openai-compat' | 'openai-chatgpt'; baseUrl?: string } | undefined;
 };
 
 type ToolHandler = (args: unknown, ctx: ToolContext) => Promise<ToolOutcome> | ToolOutcome;
@@ -520,6 +534,16 @@ export type RegisteredTool = {
 };
 
 export type LoopDeps = {
+  /** Telegram gateway's journaled progress delivery, addressed by the canonical turn. */
+  sendWorkMessage?:
+    | ((
+        turnId: string,
+        messageId: string,
+        text: string,
+      ) => Promise<'sent' | 'possibly_sent' | 'deferred'>)
+    | undefined;
+  /** Read the effective owner binding on demand, including a newly paired owner. */
+  workMessageOwner?: (() => { userId?: number; chatId?: number }) | undefined;
   /** Refresh persisted main-model settings immediately before a turn enters execution. */
   prepareTurn?: (() => void) | undefined;
   /** The active runtime facts; entry points snapshot these before running. */

@@ -20,6 +20,7 @@ import {
 } from '../core/config/config.js';
 import { buildEndpointsUrl, parseEndpointTags } from '../core/config/endpoints.js';
 import { type EndpointEvidence, resolveModelSwitch } from '../core/config/model-resolve.js';
+import { clearChainPauses, linkLabel } from '../core/config/provider-chain.js';
 import { PROVIDERS, type ProviderEntry, providerFor } from '../core/config/providers.js';
 import { askGateway } from '../core/gateway/control-socket.js';
 import { makeEmbedder, OllamaEmbedder } from '../core/memory/embed.js';
@@ -404,6 +405,13 @@ function mostra(config: Config, out: (l: string) => void): void {
       : p(lane);
   out(`main       ${config.models.main} · ${label('main')} — ${rate('main')}${route('main')}`);
   out(`light      ${config.models.light} · ${label('light')} — ${rate('light')}${route('light')}`);
+  for (const lane of ['main', 'light'] as const) {
+    const extra = config.fallbacks?.[lane] ?? [];
+    if (extra.length === 0) continue;
+    out(
+      `ripieghi   ${lane}: ${extra.map((link) => linkLabel(link)).join(' → ')} (muffin fallback)`,
+    );
+  }
   const emb = config.embedder;
   if (emb?.enabled === false) {
     out('embed      off · ricerca testuale attiva');
@@ -1099,6 +1107,7 @@ async function guidedModelSelection(
           return 1;
         }
         await connection.signIn({ openBrowser: openChatGPTBrowser });
+        clearChainPauses(home, { apiKeyRef: 'secret://chatgpt' });
       }
     } catch (error) {
       deps.out(error instanceof Error ? error.message : 'ChatGPT connection unavailable.');
