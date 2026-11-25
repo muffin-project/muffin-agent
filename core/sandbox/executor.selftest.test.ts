@@ -1,8 +1,8 @@
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FilesystemPathEntry, SandboxRuntimeConfig } from '@anthropic-ai/sandbox-runtime';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SandboxExecutor } from './executor.js';
 import type { SandboxProbe } from './probe.js';
 import { READ_DENY_ROOT } from './read-scope.js';
@@ -39,21 +39,23 @@ import { READ_DENY_ROOT } from './read-scope.js';
  */
 
 const initialize = vi.fn<(config: SandboxRuntimeConfig) => Promise<void>>();
-const wrapWithSandboxArgv = vi.fn<
-  (
-    command: string,
-    binShell: string | undefined,
-    customConfig: Partial<SandboxRuntimeConfig> | undefined,
-    signal: AbortSignal | undefined,
-    cwd: string,
-  ) => Promise<{ argv: string[]; env: NodeJS.ProcessEnv }>
->();
+const wrapWithSandboxArgv =
+  vi.fn<
+    (
+      command: string,
+      binShell: string | undefined,
+      customConfig: Partial<SandboxRuntimeConfig> | undefined,
+      signal: AbortSignal | undefined,
+      cwd: string,
+    ) => Promise<{ argv: string[]; env: NodeJS.ProcessEnv }>
+  >();
 const reset = vi.fn<() => Promise<void>>();
 
 vi.mock('@anthropic-ai/sandbox-runtime', () => ({
   SandboxManager: {
     initialize: (...args: Parameters<typeof initialize>) => initialize(...args),
-    wrapWithSandboxArgv: (...args: Parameters<typeof wrapWithSandboxArgv>) => wrapWithSandboxArgv(...args),
+    wrapWithSandboxArgv: (...args: Parameters<typeof wrapWithSandboxArgv>) =>
+      wrapWithSandboxArgv(...args),
     reset: (...args: Parameters<typeof reset>) => reset(...args),
     cleanupAfterCommand: vi.fn(),
     annotateStderrWithSandboxFailures: (_command: string, stderr: string) => stderr,
@@ -70,12 +72,20 @@ const available = (): SandboxProbe => ({ available: true, mechanism: 'bubblewrap
  * `FilesystemPathEntry` (`string | { path; literal: true }`), so the root
  * comparison reads the path of either spelling.
  */
-const denyReadOf = (customConfig: Partial<SandboxRuntimeConfig> | undefined): readonly FilesystemPathEntry[] =>
+const denyReadOf = (
+  customConfig: Partial<SandboxRuntimeConfig> | undefined,
+): readonly FilesystemPathEntry[] =>
   (customConfig?.filesystem?.denyRead ?? []).filter(
     (p) => (typeof p === 'string' ? p : p.path) !== READ_DENY_ROOT,
   );
 
-function mockProtectedSandbox(options: { hookWriteAllowed?: boolean; hookHardlinkAllowed?: boolean; unixFilterAbsent?: boolean } = {}): void {
+function mockProtectedSandbox(
+  options: {
+    hookWriteAllowed?: boolean;
+    hookHardlinkAllowed?: boolean;
+    unixFilterAbsent?: boolean;
+  } = {},
+): void {
   wrapWithSandboxArgv.mockImplementation(async (command, _binShell, customConfig) => ({
     argv:
       denyReadOf(customConfig).length > 0
@@ -111,7 +121,7 @@ function mockProtectedSandbox(options: { hookWriteAllowed?: boolean; hookHardlin
 const BROKEN_INVOCATION = [
   '/bin/sh',
   '-c',
-  "echo \"bwrap: Can't mount proc on /newroot/proc: Operation not permitted\" >&2; exit 1",
+  'echo "bwrap: Can\'t mount proc on /newroot/proc: Operation not permitted" >&2; exit 1',
 ];
 
 function mktempWorkspace(): string {
@@ -152,6 +162,32 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     expect(r.code).toBe(0);
     // ensureInit() is memoised: the self-test's own initialize() is the ONLY one.
     expect(initialize).toHaveBeenCalledTimes(1);
+  });
+
+  it('checks the approved scope again after preparing the command and before spawn', async () => {
+    const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
+    toClose = executor;
+    const dir = mktempWorkspace();
+    try {
+      const validateScope = vi
+        .fn()
+        .mockImplementationOnce(() => undefined)
+        .mockImplementationOnce(() => {
+          throw new Error('approved directory changed');
+        });
+      await expect(
+        executor.run({
+          command: 'printf test > scope-proof.txt',
+          cwd: dir,
+          writeScope: [dir],
+          validateScope,
+        }),
+      ).rejects.toThrow('approved directory changed');
+      expect(validateScope).toHaveBeenCalledTimes(2);
+      expect(existsSync(join(dir, 'scope-proof.txt'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   /**
@@ -277,15 +313,18 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
 
     const dir = mktempWorkspace();
     const witness = join(dir, 'it-ran.txt');
-    await expect(executor.run({ command: `echo ran > '${witness}'`, cwd: dir, writeScope: [dir] })).rejects.toThrow(
-      /sandbox unavailable: contain_failed/,
-    );
+    await expect(
+      executor.run({ command: `echo ran > '${witness}'`, cwd: dir, writeScope: [dir] }),
+    ).rejects.toThrow(/sandbox unavailable: contain_failed/);
     // Not just refused in words — the caller's actual command never executed.
     expect(existsSync(witness)).toBe(false);
   });
 
   it('a deny-configured leg that still reads (the real door is not containing anything): contain_failed, the control leg never runs', async () => {
-    wrapWithSandboxArgv.mockImplementation(async (command) => ({ argv: ['/bin/bash', '-c', command], env: {} }));
+    wrapWithSandboxArgv.mockImplementation(async (command) => ({
+      argv: ['/bin/bash', '-c', command],
+      env: {},
+    }));
 
     const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
     toClose = executor;
@@ -301,7 +340,9 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
   });
 
   it('`SandboxManager.initialize()` itself throws with a userns-denied signature: classified userns_denied, not the generic reason', async () => {
-    initialize.mockReset().mockRejectedValue(new Error('bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted'));
+    initialize
+      .mockReset()
+      .mockRejectedValue(new Error('bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted'));
 
     const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
     toClose = executor;
@@ -321,7 +362,9 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     // e fallisce PRIMA di invocare bwrap, quindi non passa mai dal ramo
     // `binary_missing` del probe più stretto — l'owner vedeva `contain_failed`
     // col rimedio generico «guarda il detail», che non nomina il pacchetto.
-    initialize.mockReset().mockRejectedValue(new Error('Sandbox dependencies not available: ripgrep (rg) not found'));
+    initialize
+      .mockReset()
+      .mockRejectedValue(new Error('Sandbox dependencies not available: ripgrep (rg) not found'));
 
     const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, available);
     toClose = executor;
@@ -434,6 +477,8 @@ describe('the real self-test — SandboxManager mocked, spawnCollect real', () =
     expect(errore).toContain('sandbox unavailable:');
     // La riga che conta: senza questa asserzione il messaggio puo' tornare a
     // essere `reason — remedy` e nessuno se ne accorge finche' non serve.
-    expect(errore, `il messaggio non porta la causa: ${errore}`).toContain('il ponte HTTP non esiste');
+    expect(errore, `il messaggio non porta la causa: ${errore}`).toContain(
+      'il ponte HTTP non esiste',
+    );
   });
 });

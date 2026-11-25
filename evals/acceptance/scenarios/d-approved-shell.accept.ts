@@ -14,9 +14,10 @@ itConSandbox(
     const command = 'printf "%s\\n" "$((19 + 23))" | tee shell-calculation.txt';
     const call = { tool: { name: 'shell_run_write', args: { command, cwd: '.' } } };
     const reply = 'The calculation is complete.';
-    // A resumed turn must reissue the exact command to consume its approval.
+    // Consent runs the saved call itself (ADR-0109), so the resumed provider
+    // replies without reissuing it; a reissue would ask a new approval.
     const inst = await install({
-      main: [call, call, { text: reply }],
+      main: [call, { text: reply }],
       env: { MUFFIN_GATEWAY_TICK_MS: '200' },
     });
     const telegram = await startFakeTelegram();
@@ -101,7 +102,7 @@ itConSandbox(
       expect(
         inst.db((db) => db.prepare('SELECT decision, consumed_at FROM approvals').all()),
       ).toEqual([{ decision: 'allow', consumed_at: expect.any(String) }]);
-      expect(inst.provider.main()).toHaveLength(3);
+      expect(inst.provider.main()).toHaveLength(2);
       await gateway.stop();
     } finally {
       await inst.cleanup();
