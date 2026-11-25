@@ -76,6 +76,8 @@ export type LightSpend = {
    * price seam without losing observability (#499).
    */
   requestedModel?: string;
+  /** The chain link that served the call (ADR-0110), so billing prices it as itself. */
+  route?: { kind: 'anthropic' | 'openai-compat' | 'openai-chatgpt'; baseUrl?: string };
 };
 
 export type LightLaneOptions = {
@@ -232,7 +234,10 @@ export function lightLane(inner: Provider, options: LightLaneOptions): Provider 
   const requestDeadlineMs =
     options.profile.execution?.turnWallDeadlineMs ?? DEFAULT_EXECUTION.turnWallDeadlineMs;
   return {
-    kind: inner.kind,
+    // A getter: a provider chain reports the link that will serve next (ADR-0110).
+    get kind() {
+      return inner.kind;
+    },
     async chat(call: ChatCall): Promise<ChatResult> {
       // One id per logical request, shared by every attempt it starts:
       // without it, concurrent requests are ungroupable attempt streams.
@@ -252,8 +257,16 @@ export function lightLane(inner: Provider, options: LightLaneOptions): Provider 
         // route it was asked with, so the price seam can choose the provider
         // billing contract — an explicit free route bills $0 — without losing
         // observability of what served it (#499).
-        model: result.model || call.model,
-        requestedModel: call.model,
+        model: result.model || result.route?.model || call.model,
+        requestedModel: result.route?.model ?? call.model,
+        ...(result.route === undefined
+          ? {}
+          : {
+              route: {
+                kind: result.route.kind,
+                ...(result.route.baseUrl === undefined ? {} : { baseUrl: result.route.baseUrl }),
+              },
+            }),
         inputTokens: result.usage.inputTokens,
         outputTokens: result.usage.outputTokens,
         cacheReadTokens: result.usage.cacheReadTokens,

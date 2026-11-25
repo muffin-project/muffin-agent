@@ -1138,6 +1138,8 @@ function wrap(error: unknown, retryFreeRouterNotFound = false): ProviderError {
       status,
       'transport',
       parseRetryAfterMs(error.headers),
+      false,
+      error instanceof OpenAI.APIConnectionError ? { connection: true } : undefined,
     );
   }
   if (error instanceof Error && error.name === 'AbortError') {
