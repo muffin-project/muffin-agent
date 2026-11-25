@@ -135,6 +135,10 @@ on:
   # Required public check: every PR materializes this workflow. Optimize later
   # with job-level conditions, never trigger-level path filters.
   pull_request:
+  # Native merge queue: the queue runs the same required checks on the group
+  # it is about to merge. Without this trigger they never report there.
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
     paths:
@@ -177,8 +181,8 @@ jobs:
         name: la modifica tocca gli strumenti di sessione?
         env:
           EVENT: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: node scripts/ci/strumenti-scope.mjs
 
       - if: steps.scope.outputs.run == 'false'
@@ -203,7 +207,7 @@ jobs:
       # `.claude/**` e questo workflow è l'unico replay per un push di soli
       # strumenti: senza, un errore di tipo qui tornerebbe invisibile fino
       # alla prossima PR di sorgenti, attribuito a quella.
-      - if: steps.scope.outputs.run != 'false' && github.event_name != 'pull_request'
+      - if: steps.scope.outputs.run != 'false' && github.event_name != 'pull_request' && github.event_name != 'merge_group'
         name: typecheck
         run: npx tsc --noEmit
 
