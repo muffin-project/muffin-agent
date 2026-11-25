@@ -679,7 +679,10 @@ function apiProviderError(error: APIError): ProviderError {
   const status = error.status;
   const requestId =
     error.requestID && /^[a-zA-Z0-9_-]{1,100}$/.test(error.requestID) ? error.requestID : undefined;
-  if (status === 429 && error.code === PLAN_USAGE_LIMIT_CODE)
+  // The plan limit arrives either as HTTP 429 or inside an already open
+  // stream, where the SDK raises an APIError with no status. Both are the
+  // same quota, and neither is helped by retrying soon.
+  if ((status === 429 || status === undefined) && error.code === PLAN_USAGE_LIMIT_CODE)
     return new ProviderError(
       'ChatGPT plan usage limit exceeded',
       false,

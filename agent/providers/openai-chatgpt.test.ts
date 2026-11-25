@@ -200,6 +200,31 @@ describe('OpenAI ChatGPT plan Responses provider', () => {
       });
   });
 
+  it.each([
+    ['an SSE error event', 'error'],
+    ['an error object in a stream event', 'response.created'],
+  ])('reports the plan usage limit carried by %s', async (_label, type) => {
+    // Measured on an installed gateway: the plan limit arrived inside the
+    // stream with no HTTP status, and the owner was told to retry soon.
+    const limited = harness([
+      event(type, {
+        error: {
+          code: 'subscription_sharing_usage_limit_exceeded',
+          type: 'invalid_request_error',
+          message: 'private quota payload',
+        },
+      }),
+    ]);
+    const failure = await limited.provider.chat(CALL).catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      name: 'ProviderError',
+      retryable: false,
+      source: 'transport',
+      details: { quota: 'chatgpt-plan' },
+    });
+    expect(String(failure)).not.toContain('private quota payload');
+  });
+
   it('sends full semantic history to the public streaming endpoint and maps a completed response and usage', async () => {
     const output = [
       {
