@@ -1,11 +1,108 @@
+import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { seal } from '../../../core/rot/verify.js';
-import { install, until } from '../harness.js';
-import { privateMessage, startFakeTelegram } from '../telegram.js';
+import { type Install, install, until } from '../harness.js';
+import { type FakeTelegram, privateMessage, startFakeTelegram } from '../telegram.js';
 
-describe('acceptance · #598 · a Telegram request arms one autonomous job', () => {
+async function pairTelegram(inst: Install, telegram: FakeTelegram, ownerId: number): Promise<void> {
+  // Text-only fixture. Avoid downloading the unrelated speech model at setup.
+  mkdirSync(join(inst.home, 'models'), { recursive: true });
+  writeFileSync(join(inst.home, 'models', 'ggml-base.bin'), 'unused text-only fixture');
+  expect((await inst.muffin(['secret', 'set', 'telegram_token'], '123:fixture-only')).code).toBe(0);
+  const enabled = await inst.muffin([
+    'surface',
+    'enable',
+    'telegram',
+    '--api-base',
+    telegram.url,
+    '--owner',
+    String(ownerId),
+  ]);
+  expect(enabled.code, enabled.err).toBe(0);
+  seal(inst.home, '1', new Date());
+}
+
+describe('acceptance · #598 · deferred work delivery', () => {
+  it('refuses deferred delivery from the terminal when no messaging surface is primary', async () => {
+    const request =
+      'Confronta in background una sola volta 80 più 25 di spedizione con 100 spedizione inclusa. Rimandami il risultato quando è finito.';
+    const result = 'Questa conversazione può ricevere il confronto soltanto ora.';
+    const inst = await install({
+      main: [{ tool: { name: 'schedule_once', args: { goal: request } } }, { text: result }],
+    });
+    try {
+      const gateway = await inst.gateway();
+      await gateway.waitFor(/muffin gateway/, 15_000);
+      const reply = await inst.muffin(['run', '--json', '--timeout', '40', request]);
+      expect(reply.code, reply.err).toBe(0);
+      expect(reply.err).toContain('esecuzione sul gateway');
+      expect(JSON.parse(reply.out).text).toBe(result);
+      expect(inst.db((db) => db.prepare('SELECT * FROM jobs').all())).toHaveLength(0);
+      expect(inst.db((db) => db.prepare('SELECT * FROM job_fires').all())).toHaveLength(0);
+      expect(inst.provider.main()).toHaveLength(2);
+      expect(inst.provider.main()[1]?.transcript).toContain('No job was created.');
+      expect(inst.provider.main()[1]?.transcript).toContain('muffin surface enable');
+      await gateway.stop();
+    } finally {
+      await inst.cleanup();
+    }
+  }, 60_000);
+
+  it('delivers a resumed terminal request to the owner primary surface, only to the owner chat', async () => {
+    // Owner decision 2026-11-25: a terminal request has no channel for later
+    // results, so the owner's primary surface receives them, in the owner's
+    // own chat. The model never names the destination.
+    const ownerId = 424242;
+    const request = 'Wait for my synthetic dependency, then do the comparison in background.';
+    const armed = 'Comparison armed for your primary chat.';
+    const done = 'Comparison done: 100 with shipping included is cheaper.';
+    const barrier = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)']);
+    try {
+      if (barrier.pid === undefined) throw new Error('Could not start the fixture dependency');
+      const inst = await install({
+        env: { MUFFIN_GATEWAY_TICK_MS: '200' },
+        main: [
+          { tool: { name: 'wait', args: { seconds: 60, until_process_exits: barrier.pid } } },
+          { tool: { name: 'schedule_once', args: { goal: 'Compare the shipping quotes' } } },
+          { text: armed },
+          { text: done },
+        ],
+      });
+      const telegram = await startFakeTelegram();
+      try {
+        await pairTelegram(inst, telegram, ownerId);
+        const configured = await inst.muffin(['surface', 'default', 'telegram']);
+        expect(configured.code, configured.err).toBe(0);
+        const gateway = await inst.gateway();
+        await gateway.waitFor(/muffin gateway/, 15_000);
+        const reply = await inst.muffin(['run', '--json', '--timeout', '40', request]);
+        expect(reply.code, reply.err).toBe(6);
+        const initial = JSON.parse(reply.out) as { stopped: string; turnId: string };
+        expect(initial.stopped).toBe('suspended');
+        barrier.kill();
+        await until(() => telegram.messages().some((message) => message.text.includes(done)));
+        const jobs = inst.db((db) => db.prepare('SELECT channel FROM jobs').all()) as {
+          channel: string;
+        }[];
+        expect(jobs).toEqual([{ channel: 'telegram' }]);
+        expect(telegram.messages().map((message) => message.chatId)).toEqual(
+          telegram.messages().map(() => ownerId),
+        );
+        expect(telegram.messages().filter((message) => message.text.includes(done))).toHaveLength(
+          1,
+        );
+        await gateway.stop();
+      } finally {
+        await inst.cleanup();
+        await telegram.close();
+      }
+    } finally {
+      if (barrier.exitCode === null) barrier.kill();
+    }
+  }, 60_000);
+
   it('survives gateway restart before firing and sends one final receipt to the original chat', async () => {
     const owner = { id: 424242, name: 'Synthetic owner' };
     const filename = 'one-shot-evidence.txt';
@@ -41,23 +138,7 @@ describe('acceptance · #598 · a Telegram request arms one autonomous job', () 
     });
     const telegram = await startFakeTelegram();
     try {
-      // Text-only fixture. Avoid downloading the unrelated speech model at setup.
-      mkdirSync(join(inst.home, 'models'), { recursive: true });
-      writeFileSync(join(inst.home, 'models', 'ggml-base.bin'), 'unused text-only fixture');
-      expect(
-        (await inst.muffin(['secret', 'set', 'telegram_token'], '123:fixture-only')).code,
-      ).toBe(0);
-      const enabled = await inst.muffin([
-        'surface',
-        'enable',
-        'telegram',
-        '--api-base',
-        telegram.url,
-        '--owner',
-        String(owner.id),
-      ]);
-      expect(enabled.code, enabled.err).toBe(0);
-      seal(inst.home, '1', new Date());
+      await pairTelegram(inst, telegram, owner.id);
 
       const gateway = await inst.gateway();
       await gateway.waitFor(/muffin gateway/, 15_000);
