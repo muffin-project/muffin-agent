@@ -36,10 +36,12 @@ import { MemoryStore } from '../core/memory/store.js';
 import { VectorIndex } from '../core/memory/vectors.js';
 import { type EgressPolicy, hostAllowed, loadEgress } from '../core/net/egress.js';
 import { createDecide } from '../core/policy/decide.js';
+import { replyCapability } from '../core/policy/doors.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import type { CapabilityDecl } from '../core/policy/types.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { mandatoryGuards } from '../core/rot/guards.js';
+import { loadSealedOwner, telegramOwner } from '../core/rot/owner.js';
 import { type HardeningCheck, hardeningHolds, verify } from '../core/rot/verify.js';
 import { Delega } from '../core/runtime/delega.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
@@ -114,6 +116,7 @@ import { makeSkillTool, skillCapability } from './tools/skill.js';
 import { makeTodoTool, todoCapability } from './tools/todo.js';
 import { makeVaultSaveTool, vaultWriteCapability } from './tools/vault-save.js';
 import { makeWaitTool, waitCapability } from './tools/wait.js';
+import { makeWorkMessageTool } from './tools/work-message.js';
 
 /**
  * Assembly.
@@ -1574,6 +1577,8 @@ export function buildRuntime(
       provider,
       profile,
       model: config.models.main,
+      workMessageOwner: () =>
+        telegramOwner(loadSealedOwner(home), loadConfig(home).surfaces.telegram),
       tools,
       decide,
       // The declarations, so the loop derives the policy resource from
@@ -1650,6 +1655,7 @@ export function buildRuntime(
     },
   };
   loopDeps = runtime.deps;
+  runtime.register(makeWorkMessageTool(), replyCapability);
   return runtime;
 }
 
