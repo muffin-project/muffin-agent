@@ -35,6 +35,10 @@ node --import tsx evals/memory/recall-ablation.mjs /path/to/longmemeval_s_cleane
 
 ## Decision still open
 
+Update 2026-11-25: automatic recall dropped the model reranker; see
+[foreground-memory-latency-2026-11-25.md](foreground-memory-latency-2026-11-25.md).
+The comparison below remains the evidence for bringing a ranker back.
+
 - **Bound the existing remote rerank.** It preserves today's behavior when the provider is fast. The measured 7–43 second prelude makes frequent timeout fallback plausible under an interactive deadline. Verify cancellation, actual cost and quality among completed calls.
 - **Compare a compact local reranker.** It can recover some of the oracle headroom without a remote call. Measure cold and warm tail latency, difficult Italian cases and accuracy with vectors available and unavailable. The 8B result rules out using that tested configuration on every turn.
 - **Keep automatic retrieval and move slower ranking to explicit recall.** This removes the remote wait on the common path. It risks missing temporal facts and preferences when the model does not realize it needs to search again. Score this arm on end answers, including cases where the user never explicitly asks to recall something.

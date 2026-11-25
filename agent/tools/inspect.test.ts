@@ -181,7 +181,7 @@ describe('sys_inspect dice cosa sta usando adesso', () => {
     );
     expect(conOrigine.content).toContain('profilo: owner-lan · owner (owner-lan.json)');
     // Senza runtimeInfo la riga resta quella di sempre, senza suffissi inventati.
-    expect(testo).toContain('profilo: conservative — max');
+    expect(testo).toContain('profilo: conservative — tool caricati per pertinenza');
     expect(testo).not.toContain('profilo: conservative ·');
   });
 

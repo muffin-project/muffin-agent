@@ -37,6 +37,8 @@ const UNKNOWN_REASONING_CAPABILITIES = {
 export type ChatGPTConnection = {
   accessToken(signal?: AbortSignal): Promise<string>;
   listModels(signal?: AbortSignal): Promise<ChatGPTModel[]>;
+  /** Optional: remember a plan usage-limit refusal until a reply succeeds. */
+  recordPlanUsage?(limited: boolean): Promise<void>;
 };
 
 type HostedSearchHit = { title: string; url: string; snippet: string };
@@ -153,8 +155,11 @@ export class OpenAIChatGPTProvider implements Provider {
         refusal,
         new Set((call.tools ?? []).map((tool) => tool.name)),
       );
+      await this.notePlanUsage(false);
       return firstTextMs === undefined ? result : { ...result, firstTextMs };
     } catch (error) {
+      if (error instanceof ProviderError && error.details?.quota === 'chatgpt-plan')
+        await this.notePlanUsage(true);
       // Incomplete SSE must not expose partial text or local tool calls.
       if (error instanceof ProviderStreamError)
         throw new ProviderError(error.message, true, undefined, 'transport');
@@ -197,6 +202,11 @@ export class OpenAIChatGPTProvider implements Provider {
       }
       return webCitations(response, options.maxResults ?? 5);
     } catch (error) {
+      // A plan-limit refusal keeps its quota classification for the owner.
+      if (error instanceof ProviderError && error.details?.quota === 'chatgpt-plan') {
+        await this.notePlanUsage(true);
+        throw error;
+      }
       // The server may already have performed a search when transport or
       // parsing fails. An automatic retry could charge the connected plan again.
       const detail =
@@ -204,6 +214,15 @@ export class OpenAIChatGPTProvider implements Provider {
           ? error.message
           : 'ChatGPT returned an unreadable web search result';
       throw new ProviderError(detail, false);
+    }
+  }
+
+  /** Diagnostics only: failing to record must not change the turn's outcome. */
+  private async notePlanUsage(limited: boolean): Promise<void> {
+    try {
+      await this.connection.recordPlanUsage?.(limited);
+    } catch {
+      // The reply or the original error is what the caller needs.
     }
   }
 
@@ -735,7 +754,10 @@ function apiProviderError(error: APIError): ProviderError {
   const status = error.status;
   const requestId =
     error.requestID && /^[a-zA-Z0-9_-]{1,100}$/.test(error.requestID) ? error.requestID : undefined;
-  if (status === 429 && error.code === PLAN_USAGE_LIMIT_CODE)
+  // The plan limit arrives either as HTTP 429 or inside an already open
+  // stream, where the SDK raises an APIError with no status. Both are the
+  // same quota, and neither is helped by retrying soon.
+  if ((status === 429 || status === undefined) && error.code === PLAN_USAGE_LIMIT_CODE)
     return new ProviderError(
       'ChatGPT plan usage limit exceeded',
       false,

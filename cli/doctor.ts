@@ -449,11 +449,11 @@ export async function runDoctor(
       'model profile',
       `${profileProblems.join(' · ')} — ${config.models.main} caduto sul profilo conservativo: ` +
         `thinking ${resolvedProfile.thinking}, sampling ${resolvedProfile.sampling}, ` +
-        // Due numeri distinti e per questo confondibili se non nominati per ciò che sono:
-        // `maxToolsExposed` è quanti tool il modello *vede*, `maxToolCallsPerTurn`
-        // è quante *chiamate* può fare; `null` lascia il conteggio libero e
-        // sono tempo e spesa a porre il limite.
-        `${resolvedProfile.maxToolsExposed} tool esposti, ${resolvedProfile.maxToolCallsPerTurn === null ? 'nessun tetto numerico di tool call' : `${resolvedProfile.maxToolCallsPerTurn} call/turno`}, ` +
+        // Il numero di tool visibili non è più un tetto: il nucleo resta in vista
+        // e il resto si carica. `maxToolCallsPerTurn` è quante *chiamate* può
+        // fare; `null` lascia il conteggio libero e sono tempo e spesa a porre
+        // il limite.
+        `tool caricati per pertinenza, ${resolvedProfile.maxToolCallsPerTurn === null ? 'nessun tetto numerico di tool call' : `${resolvedProfile.maxToolCallsPerTurn} call/turno`}, ` +
         `stampelle [${resolvedProfile.recovery.join(', ')}]`,
       `ripara o rimuovi il profilo scartato sopra, sotto ${cartelleCadute}`,
     );
@@ -750,11 +750,30 @@ export async function runDoctor(
     if (connection.kind === 'openai-chatgpt') {
       try {
         const session = new ChatGPTConnection(home).session();
-        if (session?.connected)
+        if (session?.planLimited)
+          credentialFail(
+            'ChatGPT',
+            `Plan usage limit reached${session.planLimitedAt === undefined ? '' : ` (last refusal ${new Date(session.planLimitedAt).toLocaleString('it-IT')})`}: replies fail until it resets. Cleared by the next successful reply.`,
+            'check https://chatgpt.com/settings/usage',
+          );
+        else if (session?.usable)
           credentialOk(
             'ChatGPT',
             'Account connected; plan quota and credits are managed at https://chatgpt.com/settings/usage',
           );
+        else if (session?.renewable)
+          credentialOk(
+            'ChatGPT',
+            'ChatGPT will attempt to refresh the saved authorization on the next request.',
+          );
+        else if (session?.needsLogin)
+          credentialFail(
+            'ChatGPT',
+            'Refresh was refused (authorization expired or revoked).',
+            'muffin chatgpt login',
+          );
+        else if (session?.accessExpired)
+          credentialFail('ChatGPT', 'Access token is expired.', 'muffin chatgpt login');
         else
           credentialFail(
             'ChatGPT',
@@ -1531,28 +1550,17 @@ export async function runDoctor(
     );
   }
 
-  // #469 changes what the profile ceiling means. It still bounds the
-  // model-visible schemas in one round, but an authorized native capability
-  // beyond the initial projection remains reachable through capability_search.
-  // baseToolOrder describes the native catalogue; the discovery meta-tool is
-  // not itself counted as a user capability in the under-cap fast path.
+  // baseToolOrder is the native catalogue doctor counts. Each turn projects
+  // that catalogue according to its authority and access to discovery.
   const ordineBase = baseToolOrder({
     sandboxAvailable: boundary.usable,
     searchOn: ricerca.on,
     sendFileAvailable: true,
   }).filter((name) => name !== 'capability_search');
-  const oltreProiezione = Math.max(0, ordineBase.length - resolvedProfile.maxToolsExposed);
-  if (oltreProiezione === 0) {
-    ok(
-      'capacità: tetto tool',
-      `${ordineBase.length} capability native entro la proiezione di ${resolvedProfile.maxToolsExposed} del profilo "${resolvedProfile.name}"`,
-    );
-  } else {
-    ok(
-      'capacità: tetto tool',
-      `${ordineBase.length} capability native, proiezione massima ${resolvedProfile.maxToolsExposed} del profilo "${resolvedProfile.name}": ${oltreProiezione} restano caricabili su richiesta via capability_search`,
-    );
-  }
+  ok(
+    'capacità: tool',
+    `${ordineBase.length} capability native nel profilo "${resolvedProfile.name}". Quando il turno può usare capability_search, il nucleo resta visibile e le altre si caricano su richiesta. Senza la ricerca, il modello vede l'intero catalogo consentito.`,
+  );
 
   // #213 upstream (cited in ADR-0026): on Linux the sandbox bridges its
   // egress proxy through a Unix-domain socket inside TMPDIR, and a TMPDIR
