@@ -110,9 +110,21 @@ describe('acceptance · #598 · deferred work delivery', () => {
       // One startup beat, then time for the owner turn and the deliberate restart.
       env: { MUFFIN_GATEWAY_TICK_MS: '60000' },
       main: [
+        {
+          tool: {
+            name: 'capability_search',
+            args: { query: 'arm an independent background objective once', max_results: 1 },
+          },
+        },
         { tool: { name: 'schedule_once', args: { goal } } },
         { text: armed },
         { tool: { name: 'schedule_once', args: { goal: 'Forbidden child job' } } },
+        {
+          tool: {
+            name: 'capability_search',
+            args: { query: 'write text content to a file', max_results: 1 },
+          },
+        },
         { tool: { name: 'fs_write', args: { path: filename, content: evidence } } },
         { tool: { name: 'fs_read', args: { path: filename } } },
         { text: final },
@@ -156,7 +168,9 @@ describe('acceptance · #598 · deferred work delivery', () => {
       );
       expect(ownerTurn).toEqual({ input_text: request });
       expect(inst.db((db) => db.prepare('SELECT * FROM job_fires').all())).toHaveLength(0);
-      expect(inst.provider.main()[0]?.tools).toContain('schedule_once');
+      expect(inst.provider.main()[0]?.tools).toContain('capability_search');
+      expect(inst.provider.main()[0]?.tools).not.toContain('schedule_once');
+      expect(inst.provider.main()[1]?.tools).toContain('schedule_once');
 
       await gateway.stop();
       expect(readJobs()).toEqual([job]);
@@ -221,13 +235,18 @@ describe('acceptance · #598 · deferred work delivery', () => {
           .all(fires[0]!.id),
       );
       expect(effects).toEqual([
+        { tool: 'capability_search', is_error: 0 },
         { tool: 'fs_write', is_error: 0 },
         { tool: 'fs_read', is_error: 0 },
       ]);
-      expect(inst.provider.main()[2]?.tools).not.toContain('schedule_once');
-      expect(inst.provider.main()[3]?.transcript).toContain('principal_forbidden');
-      expect(inst.provider.main()[5]?.transcript).toContain(evidence.trim());
-      expect(inst.provider.main()).toHaveLength(6);
+      const requests = inst.provider.main();
+      expect(requests.slice(3).every((request) => !request.tools.includes('schedule_once'))).toBe(
+        true,
+      );
+      expect(requests[4]?.transcript).toContain('principal_forbidden');
+      expect(requests[5]?.tools).toContain('fs_write');
+      expect(requests[7]?.transcript).toContain(evidence.trim());
+      expect(requests).toHaveLength(8);
       await restarted.stop();
     } finally {
       await inst.cleanup();
