@@ -85,7 +85,10 @@ export const MANIFEST: readonly ScenarioEntry[] = [
     'A3',
     'persona: the sealed identity register rule reaches the real system prompt, the voce skill is catalogued but its body is not in the prefix, and `muffin prompt show` on the same home is byte-identical to what the provider actually received',
   ),
-  verde('A5', 'doctor: a tampered sealed root-of-trust file is caught and named, with a remedy'),
+  verde(
+    'A5',
+    'doctor: an owner edit to rot/policy.json stays ok on root of trust, names the file informatively, and does not recommend a reseal (ADR-0108)',
+  ),
   // New (slice/journey-lifecycle): the row was BLOCKER only for a missing
   // scenario — `muffin config` is read-only by design (ADR-0036,
   // `cli/config.ts:7,22-37`) and the mechanism (`listConfigKnobs`, `muffin
@@ -98,7 +101,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // precondition for the value binding.
   verde(
     'A4',
-    'config: an unsealed knob (config.json) binds with no reseal, a sealed knob (rot/budgets.json) binds before reseal too, and `muffin rot reseal` is what clears doctor — all three witnessed by the real binary and `muffin config --json`',
+    'config: a config.json knob binds with no ceremony, a rot/budgets.json edit binds immediately, doctor stays ok on root of trust, and `muffin rot reseal` exits 78 as retired (ADR-0108) — witnessed by the real binary and `muffin config --json`',
   ),
   // New (slice/journey-lifecycle): `muffin update` (`cli/update.ts`) exists
   // (9f56484, 26/08) but had no acceptance scenario. `cmdUpdate` gives a
@@ -213,7 +216,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // own docstring for why that one does not register here).
   verde(
     'B13',
-    'progress telegram: a scripted multi-round turn produces one status message, edited in place (never a second one), throttled, and replaced by the real answer',
+    'progress telegram: a multi-tool turn uses a stoppable draft and delivers one result without a tool log',
   ),
   verde(
     'B14',
@@ -229,7 +232,7 @@ export const MANIFEST: readonly ScenarioEntry[] = [
   // would fall into safe mode the moment it paired).
   verde(
     'B15',
-    'owner binding: pairing writes the owner into the sealed root of trust, and the seal still verifies',
+    'owner binding: pairing writes the owner into rot/owner.json, and verify stays a non-incident diagnostic (ADR-0108)',
   ),
   verde(
     'D12',

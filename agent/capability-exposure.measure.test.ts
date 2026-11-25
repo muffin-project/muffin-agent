@@ -74,14 +74,17 @@ describe('#469 current-catalog exposure measurement', () => {
           directHits += 1;
           continue;
         }
-        const result = projection.discovery!.searchAndLoad(query, 3);
+        // Each case is its own task: a turn keeps what it loaded, so reusing
+        // one projection would measure the union of every task instead.
+        const task = createCapabilityExposure({ eligible, discoveryTool: discoveryTool! });
+        const result = task.discovery!.searchAndLoad(query, 3);
         if (result.loaded.some((entry) => entry.name === expected)) discoveryHits += 1;
-        projection.discovery!.activatePending();
+        task.discovery!.activatePending();
         expect(
-          projection.exposed.some((tool) => tool.spec.name === expected),
+          task.exposed.some((tool) => tool.spec.name === expected),
           'failed query: ' + query + ' -> ' + expected,
         ).toBe(true);
-        expect(projection.exposed.length).toBeLessThan(flat.length);
+        expect(task.exposed.length).toBeLessThan(flat.length);
       }
 
       const hits = directHits + discoveryHits;

@@ -38,7 +38,10 @@ export function reserveActivityAttempt(resource: 'model' | 'tool'): void {
 /** One reservation per physical main request, including stream fallback. */
 export function activityProvider(inner: Provider): Provider {
   return {
-    kind: inner.kind,
+    // A getter: a provider chain reports the link that will serve next (ADR-0110).
+    get kind() {
+      return inner.kind;
+    },
     ...(inner.resolveReasoning === undefined
       ? {}
       : { resolveReasoning: inner.resolveReasoning.bind(inner) }),

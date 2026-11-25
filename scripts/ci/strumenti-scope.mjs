@@ -19,7 +19,8 @@ import { appendFileSync } from 'node:fs';
  * duplicate full-repo typecheck is already covered by the always-running
  * `verifica` job. Those PRs get a truthful no-op success (~40s saved).
  *
- * Fail-safe: unknown files, unknown ranges, non-PR events and any error
+ * Fail-safe: unknown files, unknown ranges, events other than a PR or a
+ * merge queue group (both carry a base/head range) and any error
  * resolve to `run=true` (run too much, never too little).
  */
 
@@ -87,10 +88,13 @@ if (isMain) {
   const head = get('head') || process.env.HEAD_SHA || '';
   const filesArg = get('files');
 
-  if (event && event !== 'pull_request') {
+  if (event && event !== 'pull_request' && event !== 'merge_group') {
     emit(true, 'non-PR event always runs strumenti');
   } else if (filesArg !== undefined) {
-    const files = filesArg.split('\n').map((s) => s.trim()).filter(Boolean);
+    const files = filesArg
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
     emit(shouldRunStrumenti(files), `${files.length} changed files`);
   } else if (base && head) {
     let files;
@@ -98,7 +102,10 @@ if (isMain) {
       const out = execFileSync('git', ['diff', '--name-only', `${base}...${head}`, '--'], {
         encoding: 'utf8',
       });
-      files = out.split('\n').map((s) => s.trim()).filter(Boolean);
+      files = out
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
     } catch {
       emit(true, 'undeterminable range, fail-safe');
       process.exit(0);

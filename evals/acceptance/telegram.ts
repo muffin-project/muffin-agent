@@ -125,8 +125,12 @@ export type FakeTelegram = {
    * exactly like a transient rejection would.
    */
   guasta(method: string, status: number, description: string): void;
+  /** Observe one raw method after receipt of its request, before any response. */
+  beforeNextResponse(method: string, observe: () => void): void;
   /** Accept one message and leave its HTTP response unreadable until the client exits. */
   withholdNextSendResponse(): void;
+  /** Accept one message, then return a readable 502 instead of its receipt. */
+  failNextAcceptedSendResponse(): void;
   close(): Promise<void>;
 };
 
@@ -234,7 +238,8 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
   const bytesByPath = new Map<string, Buffer>();
   // B10-errori: one planned rejection per method, consumed in call order.
   const guasti = new Map<string, Array<{ status: number; description: string }>>();
-  let withholdSendResponse = false;
+  const responseObservers = new Map<string, () => void>();
+  let nextSendResponse: 'withhold' | 'fail' | undefined;
 
   const server: Server = createServer((req, res) => {
     // The file **download** route is not `<base>/bot<token>/METHOD` — it is
@@ -418,6 +423,9 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
         ...(files ? { files } : {}),
         ...(createdId !== undefined ? { messageId: createdId } : {}),
       });
+      const observe = responseObservers.get(method);
+      responseObservers.delete(method);
+      observe?.();
 
       // B10-errori: a planned rejection wins over every effect branch below
       // (`sendMessage`, `editMessageText`, …). Placed after `calls.push`, on
@@ -426,11 +434,22 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
       const guastoInCoda = guasti.get(recordedMethod)?.shift();
       if (guastoInCoda) {
         res.writeHead(guastoInCoda.status, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, description: guastoInCoda.description }));
+        res.end(
+          JSON.stringify({
+            ok: false,
+            error_code: guastoInCoda.status,
+            description: guastoInCoda.description,
+          }),
+        );
         return;
       }
-      if (recordedMethod === 'sendMessage' && withholdSendResponse) {
-        withholdSendResponse = false;
+      if (recordedMethod === 'sendMessage' && nextSendResponse !== undefined) {
+        const fault = nextSendResponse;
+        nextSendResponse = undefined;
+        if (fault === 'fail') {
+          res.writeHead(502, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, description: 'Bad Gateway: receipt unavailable' }));
+        }
         return;
       }
 
@@ -518,8 +537,14 @@ export async function startFakeTelegram(): Promise<FakeTelegram> {
       coda.push({ status, description });
       guasti.set(method, coda);
     },
+    beforeNextResponse: (method, observe) => {
+      responseObservers.set(method, observe);
+    },
     withholdNextSendResponse: () => {
-      withholdSendResponse = true;
+      nextSendResponse = 'withhold';
+    },
+    failNextAcceptedSendResponse: () => {
+      nextSendResponse = 'fail';
     },
     close: () =>
       new Promise<void>((resolve) => {

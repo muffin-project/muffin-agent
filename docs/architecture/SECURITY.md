@@ -818,10 +818,13 @@ hook-path deny remains in force.
 Before shell execution, `SandboxExecutor` tests the real `SandboxManager` path
 with ordinary writes, nested `git init`/`git add`, every active hook name in
 a newly-created `nested/.git/hooks`, a hardlink install, a write through a
-pre-existing hooks symlink, and a rename into place. Linux uses Git's default
-templates, so `*.sample` files must remain writable; macOS uses an empty
-template because Seatbelt denies writes anywhere under the hook directory. If
-any gated hook install succeeds, the sandbox reports `git_hooks_unprotected`
+pre-existing hooks symlink, and a rename into place. The custom template's
+`pre-commit.sample` and the nested index must remain writable. If macOS
+finds Apple's `/usr/bin/git` shim on PATH, the witness resolves the selected
+Git executable before entering Seatbelt. This keeps the developer-directory
+selector outside the contained command's read scope; the same hook and file
+checks still run inside Seatbelt. If any gated hook install succeeds, the
+sandbox reports `git_hooks_unprotected`
 and refuses the caller's command. The production `shell_run_write` wiring test
 also checks `fsmonitor-watchmanv2` and the existing top-level hook deny.
 Ubuntu hosts without the matching profile therefore lose shell execution

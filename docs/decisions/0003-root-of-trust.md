@@ -1,5 +1,7 @@
 # ADR-0003 — Root of Trust: contenuto e meccanica
 
+> **Superata, in parte, da [ADR-0108](0108-niente-sigillo-sui-dati.md).** Il 25 novembre 2026 l'owner ha ritirato la cerimonia di sigillo del tier dati (manifest, anchor, `muffin rot reseal`, safe mode su una deriva di file). Restano il tier codice e il divieto runtime di `rot.write`. Il testo sotto è il record storico della decisione del 2026-08-04 e della sua revisione; non è più la meccanica in vigore.
+
 **Contesto.** L0-2 (self-modifying) e L0-3 (RoT) collidono se il confine non è strutturale. Prior art: nessuno degli 8 peer ha un RoT immutabile a runtime; i surrogati procedurali (Hermes: `--apply`; approvazioni "always" eterne) derivano; il RoT-implicito di OpenClaw ("chi scrive sul filesystem è operatore") è la causa della sua storia CVE (A2).
 
 **Decisione.** RoT = insieme minimo, nominato: (1) kernel di policy + capability registry; (2) matrice permessi e trust-ladder; (3) egress allowlist; (4) `identity.md`; (5) budget caps e quiet-hours; (6) suite eval di riferimento del cricchetto; (7) il meccanismo di update. Vive in `~/.muffin/rot/`, **read-only per il processo agente via permessi OS** (utente/gruppo separato), hash verificato al boot (boot rifiutato su mismatch). Modifica solo via repo→install+riavvio, con conferma owner. L'agente può leggerlo e proporne modifiche via PR.

@@ -1,4 +1,5 @@
 import { ChatGPTConnection } from '../core/config/chatgpt-oauth.js';
+import { clearChainPauses } from '../core/config/provider-chain.js';
 import { openChatGPTBrowser } from './chatgpt-browser.js';
 import { cmdModel, type ModelDeps } from './model.js';
 
@@ -47,6 +48,7 @@ export async function cmdChatGPT(
         openBrowser: deps.openBrowser ?? openChatGPTBrowser,
         ...(value === '--new' ? { newProfile: true } : value ? { profileId: value } : {}),
       });
+      clearChainPauses(home, { apiKeyRef: 'secret://chatgpt' });
       out('Connection saved. Select and verify a model with `muffin chatgpt use <model>`.');
       out(`Manage plan usage and credit permissions: ${CHATGPT_USAGE_URL}`);
       return 0;

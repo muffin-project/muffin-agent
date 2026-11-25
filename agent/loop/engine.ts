@@ -1,5 +1,5 @@
 import { recall, recallTaint, renderForPrompt } from '../../core/memory/recall.js';
-import { memoryWriteCapability } from '../../core/policy/doors.js';
+import { memoryWriteCapability, replyCapability } from '../../core/policy/doors.js';
 import type { CapabilityId, Decision, DecisionRequest } from '../../core/policy/types.js';
 import type { SessionRef } from '../../core/session/store.js';
 import type { SpanHandle } from '../../core/tracing/types.js';
@@ -28,7 +28,9 @@ import {
   withActivityAllowance,
   withoutActivityAllowance,
 } from '../providers/activity-allowance.js';
+import { ReasoningConfigurationError } from '../providers/reasoning.js';
 import { type ContentBlock, type Message, ProviderError } from '../providers/types.js';
+import { WORK_MESSAGE_TOOL_NAME } from '../tools/work-message.js';
 import { buildContext, userAudios, userImages } from './context.js';
 import {
   announceEnd,
@@ -57,6 +59,7 @@ import {
   type TurnInput,
   type TurnResult,
 } from './types.js';
+import { workMessagesAvailable } from './work-message.js';
 
 /**
  * The engine of a turn: the deterministic pre-loop, and the round loop it hands
@@ -382,12 +385,16 @@ async function runClaimedTurn(
       },
     },
   );
+  // Messaging requires a bound owner DM and prompt reply authority.
+  const canWorkMessage =
+    workMessagesAvailable(deps, input) &&
+    snapshot.check(replyCapability.id, { kind: 'none' }, {}).effect === 'allow';
   const principalVisibleTools = visibleTools(
     deps.tools,
     input.principal,
     deps.capabilities,
     deps.grants?.get(input.tenant),
-  );
+  ).filter((tool) => tool.spec.name !== WORK_MESSAGE_TOOL_NAME || canWorkMessage);
   // Use the same kernel for categorical denials before preload, search or
   // flat projection. The placeholder request only classifies eligibility.
   // Keep it outside the execution snapshot's cache so real calls are checked
@@ -435,9 +442,11 @@ async function runClaimedTurn(
     : [];
   const capabilityExposure = createCapabilityExposure({
     eligible: eligibleTools,
-    ...(resumedToolNames.length === 0
-      ? {}
-      : { coreNames: [...DEFAULT_CORE_TOOL_NAMES, ...resumedToolNames] }),
+    coreNames: [
+      ...(canWorkMessage ? [WORK_MESSAGE_TOOL_NAME] : []),
+      ...DEFAULT_CORE_TOOL_NAMES,
+      ...resumedToolNames,
+    ],
     ...(discoveryTool === undefined
       ? {}
       : {
@@ -795,13 +804,17 @@ async function runClaimedTurn(
       const wakeAtMs = wakeAtRaw === null ? Number.NaN : Date.parse(wakeAtRaw);
       const scaduta = Number.isFinite(wakeAtMs) && (wakeAtMs as number) <= adesso;
       const rispostaNelRegistro = deps.approvals?.decidedUnconsumed(record.id) ?? false;
-      const why: WakeReason = aperta
-        ? 'event'
-        : scaduta
-          ? 'timer'
-          : rispostaNelRegistro
-            ? 'answer'
-            : 'early';
+      // Core commits the owner's reply into the same checkpoint and clears
+      // wake_at. A timeout leaves the deadline in place until the claim.
+      const ownerReplied = waitFor?.kind === 'owner_reply' && options.wakeAtAtWake === null;
+      const why: WakeReason =
+        aperta || ownerReplied
+          ? 'event'
+          : scaduta
+            ? 'timer'
+            : rispostaNelRegistro
+              ? 'answer'
+              : 'early';
       turn.setAttributes({ 'muffin.turn.woken_by': why });
       // Harness control (a transition report for this resume), not owner
       // words: a continuation to a new lease archives it instead of replaying
@@ -828,7 +841,7 @@ async function runClaimedTurn(
   } catch (error) {
     if (error instanceof ActivityAllowanceError)
       return releaseContinuable(scope, 'activity_budget', 0);
-    if (error instanceof ProviderError) {
+    if (error instanceof ProviderError || error instanceof ReasoningConfigurationError) {
       // Retry exhaustion is a yielded lease, not a connector exception — when
       // another attempt could still help. A retryable transport failure (or a
       // malformed-output cascade that spent itself in the loop) releases the
@@ -836,7 +849,7 @@ async function runClaimedTurn(
       // diagnostic is execution truth, delivered structurally, not a message
       // Muffin supposedly said. Only a non-retryable provider failure stays
       // terminal, on the pre-existing path below.
-      if (error.retryable) {
+      if (error instanceof ProviderError && error.retryable) {
         return releaseContinuable(
           scope,
           error.source === 'output' ? 'recovery_exhausted' : 'provider_transport',
@@ -845,8 +858,7 @@ async function runClaimedTurn(
             : MAX_TRANSPORT_RETRIES - scope.run.transportRetriesLeft,
         );
       }
-      // Retry exhaustion is a terminal turn result, not a connector exception.
-      // Persist a marked copy in TurnRecord before delivery so a failed send or
+      // Persist the terminal diagnostic before delivery so a failed send or
       // restart can recover this exact notice without invoking the provider.
       const text = providerErrorReply(error);
       scope.run.messages.push(markProviderErrorReplyForRecovery(text));
