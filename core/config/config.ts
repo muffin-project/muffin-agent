@@ -582,7 +582,7 @@ function migrateV1(
       `config.json era schemaVersion 1: "budget" non vive più qui — il tetto viene da rot/budgets.json, ` +
         `dentro il sigillo. I valori che c'erano (monthlyUsd ${String(b.monthlyUsd)}, ` +
         `perTenantDailyUsd ${String(b.perTenantDailyUsd)}) non sono stati copiati: se vuoi quel tetto, ` +
-        `scrivilo in rot/budgets.json e fai \`muffin rot reseal\`.`,
+        `scrivilo in rot/budgets.json e riavvia.`,
     );
   }
   return { ...rest, schemaVersion: 2 };
