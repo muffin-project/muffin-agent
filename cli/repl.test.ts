@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { capability, withReason } from '../test-support/requires.js';
 import { COMANDI, debugCommand, thinkingCommand } from '../agent/comandi.js';
 import type { TurnEvent } from '../agent/loop.js';
 import { TOOL_PHRASES, toolLine, toolPhrase, toolSubject } from '../agent/tool-phrase.js';
@@ -12,6 +11,7 @@ import { SurfaceRegistry } from '../core/surface/registry.js';
 import { DELIVERED, MUTA, type Surface } from '../core/surface/types.js';
 import { LANE_JOBS, LANE_TURNS, ModelLane } from '../core/turns/model-lane.js';
 import { startFakeProvider } from '../evals/acceptance/provider.js';
+import { capability, withReason } from '../test-support/requires.js';
 import { runInit } from './init.js';
 import { closingLine, formatProgressLine, makeReplCliWrite, runRepl, statusFor } from './repl.js';
 import { applica } from './schermo.js';
@@ -306,7 +306,9 @@ describe('the REPL streams the final answer while it forms (B11)', () => {
       expect(laneFreedAt).toBeGreaterThan(0);
       expect(provider.main()[0]?.at).toBeGreaterThanOrEqual(laneFreedAt);
       expect(released).toEqual([LANE_JOBS, LANE_TURNS]);
-      expect(err.join('')).toContain('attendo il modello: un’attività pianificata sta usando la corsia');
+      expect(err.join('')).toContain(
+        'attendo il modello: un’attività pianificata sta usando la corsia',
+      );
     } finally {
       await provider.close();
     }
@@ -358,10 +360,16 @@ describe('formatProgressLine (B13) — in debug, i numeri restano quelli di semp
 
   it('formats a model_retry event with the budget, the attempt and the declared wait', () => {
     expect(
-      formatProgressLine({ type: 'model_retry', class: 'provider_empty', attempt: 2, max: 3, inMs: 4200 }, 'debug'),
+      formatProgressLine(
+        { type: 'model_retry', class: 'provider_empty', attempt: 2, max: 3, inMs: 4200 },
+        'debug',
+      ),
     ).toBe('· provider provider_empty tentativo 2/3 fra 4200ms');
     expect(
-      formatProgressLine({ type: 'model_retry', class: 'transport', attempt: 1, max: 10, inMs: 500 }, 'debug'),
+      formatProgressLine(
+        { type: 'model_retry', class: 'transport', attempt: 1, max: 10, inMs: 500 },
+        'debug',
+      ),
     ).toBe('· provider transport tentativo 1/10 fra 500ms');
   });
 
@@ -524,114 +532,122 @@ describe("un'approvazione rientra nel vocabolario dei passi (§4.1/§5 della mem
   // chiede è quella che scrive, e questi due test misurano il vocabolario di un
   // ASK. Usare la corsia in sola lettura qui vorrebbe dire misurare un'attesa
   // che non arriva mai — un test verde su uno schermo che non ha niente da dire.
-  itWithShell('accettata: niente blocco ⚠, il verdetto precede subito il passo del tool, senza righe vuote fra i due', async () => {
-    const provider = await startFakeProvider({
-      main: [
-        { tool: { name: 'shell_run_write', args: { command: 'echo ciao', cwd: '.' } } },
-        { text: 'Fatto, ho stampato ciao.' },
-      ],
-    });
-    const originalIsTTY = process.stderr.isTTY;
-    process.stderr.isTTY = true;
-    try {
-      const home = homeAgainst(provider.baseUrl);
-      const out: string[] = [];
-      const err: string[] = [];
-      vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
-        out.push(String(chunk));
-        return true;
+  itWithShell(
+    'accettata: niente blocco ⚠, il verdetto precede subito il passo del tool, senza righe vuote fra i due',
+    async () => {
+      const provider = await startFakeProvider({
+        main: [
+          { tool: { name: 'shell_run_write', args: { command: 'echo ciao', cwd: '.' } } },
+          { text: 'Fatto, ho stampato ciao.' },
+        ],
       });
-      vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
-        err.push(String(chunk));
-        return true;
+      const originalIsTTY = process.stderr.isTTY;
+      process.stderr.isTTY = true;
+      try {
+        const home = homeAgainst(provider.baseUrl);
+        const out: string[] = [];
+        const err: string[] = [];
+        vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+          out.push(String(chunk));
+          return true;
+        });
+        vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+          err.push(String(chunk));
+          return true;
+        });
+
+        const code = await runRepl(home, {
+          stdin: stdinConSN('esegui il comando echo per favore', 's'),
+        });
+
+        expect(code).toBe(0);
+        // B11, la parte concreta della memo (`cli/textzone.ts:357`): il prompt
+        // `[s/N]`, la `s` digitata e la sua eco non hanno mai toccato stdout —
+        // solo la risposta del turno lo fa.
+        const suStdout = out.join('');
+        expect(suStdout).not.toContain('approvi');
+        expect(suStdout).not.toContain('[s/N]');
+        expect(suStdout).toContain('Fatto, ho stampato ciao.');
+
+        const schermo = applica(err);
+        const righe = schermo.righe.map((r) => r.trimEnd());
+        const testo = righe.join('\n');
+
+        // Il formato a parte è sparito per intero, non solo nascosto da un
+        // secondo ridisegno che lo cancella: applicare i byte è l'unico modo di
+        // saperlo (`cli/schermo.ts`, header del file).
+        expect(testo).not.toContain('⚠');
+        // Il vocabolario dei passi resta lo stesso di ogni altro tool: una riga
+        // `⏸` mentre aspetta, `✓`/il capability quando si risolve.
+        //
+        // Cosa c'è **su** quella riga è cambiato con ADR-0074 punto 2: era
+        // `sys.shell: aspetto la tua approvazione` — il nome della capability
+        // più una frase che non dice nulla — ed è diventata il testo del
+        // kernel, che dice cosa non si può annullare. Il terminale buttava via
+        // `ApprovalRequest.prompt`; Telegram lo mostrava già.
+        expect(testo).toContain(
+          '⏸ non si torna indietro: cambia questa macchina — sys.shell.write',
+        );
+
+        const rigaVerdetto = righe.findIndex((r) => r.includes('sys.shell.write: consentito'));
+        expect(rigaVerdetto).toBeGreaterThan(-1);
+        // Non «rifiutato»: l'unica riga che porta «sys.shell» dopo il verdetto è
+        // quella del tool che ne è seguito — l'owner ha detto sì una volta sola.
+        const dopo = righe.slice(rigaVerdetto + 1).find((r) => r.trim() !== '');
+        const indiceDopo = righe.findIndex((r, i) => i > rigaVerdetto && r.trim() !== '');
+        // Nessuna riga vuota fra il verdetto e il passo che segue.
+        expect(indiceDopo).toBe(rigaVerdetto + 1);
+        expect(dopo).toContain('✓ eseguo un comando: echo ciao');
+      } finally {
+        process.stderr.isTTY = originalIsTTY;
+        await provider.close();
+      }
+    },
+  );
+
+  itWithShell(
+    'rifiutata: il verdetto dice «rifiutato» nello stesso vocabolario, e il tool non gira mai',
+    async () => {
+      const provider = await startFakeProvider({
+        main: [
+          { tool: { name: 'shell_run_write', args: { command: 'rm -rf /tmp/x', cwd: '.' } } },
+          { text: 'Va bene, non lo eseguo.' },
+        ],
       });
+      const originalIsTTY = process.stderr.isTTY;
+      process.stderr.isTTY = true;
+      try {
+        const home = homeAgainst(provider.baseUrl);
+        const err: string[] = [];
+        vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+        vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+          err.push(String(chunk));
+          return true;
+        });
 
-      const code = await runRepl(home, {
-        stdin: stdinConSN('esegui il comando echo per favore', 's'),
-      });
+        const code = await runRepl(home, { stdin: stdinConSN('cancella /tmp/x', 'n') });
 
-      expect(code).toBe(0);
-      // B11, la parte concreta della memo (`cli/textzone.ts:357`): il prompt
-      // `[s/N]`, la `s` digitata e la sua eco non hanno mai toccato stdout —
-      // solo la risposta del turno lo fa.
-      const suStdout = out.join('');
-      expect(suStdout).not.toContain('approvi');
-      expect(suStdout).not.toContain('[s/N]');
-      expect(suStdout).toContain('Fatto, ho stampato ciao.');
-
-      const schermo = applica(err);
-      const righe = schermo.righe.map((r) => r.trimEnd());
-      const testo = righe.join('\n');
-
-      // Il formato a parte è sparito per intero, non solo nascosto da un
-      // secondo ridisegno che lo cancella: applicare i byte è l'unico modo di
-      // saperlo (`cli/schermo.ts`, header del file).
-      expect(testo).not.toContain('⚠');
-      // Il vocabolario dei passi resta lo stesso di ogni altro tool: una riga
-      // `⏸` mentre aspetta, `✓`/il capability quando si risolve.
-      //
-      // Cosa c'è **su** quella riga è cambiato con ADR-0074 punto 2: era
-      // `sys.shell: aspetto la tua approvazione` — il nome della capability
-      // più una frase che non dice nulla — ed è diventata il testo del
-      // kernel, che dice cosa non si può annullare. Il terminale buttava via
-      // `ApprovalRequest.prompt`; Telegram lo mostrava già.
-      expect(testo).toContain('⏸ non si torna indietro: cambia questa macchina — sys.shell.write');
-
-      const rigaVerdetto = righe.findIndex((r) => r.includes('sys.shell.write: consentito'));
-      expect(rigaVerdetto).toBeGreaterThan(-1);
-      // Non «rifiutato»: l'unica riga che porta «sys.shell» dopo il verdetto è
-      // quella del tool che ne è seguito — l'owner ha detto sì una volta sola.
-      const dopo = righe.slice(rigaVerdetto + 1).find((r) => r.trim() !== '');
-      const indiceDopo = righe.findIndex((r, i) => i > rigaVerdetto && r.trim() !== '');
-      // Nessuna riga vuota fra il verdetto e il passo che segue.
-      expect(indiceDopo).toBe(rigaVerdetto + 1);
-      expect(dopo).toContain('✓ eseguo un comando: echo ciao');
-    } finally {
-      process.stderr.isTTY = originalIsTTY;
-      await provider.close();
-    }
-  });
-
-  itWithShell('rifiutata: il verdetto dice «rifiutato» nello stesso vocabolario, e il tool non gira mai', async () => {
-    const provider = await startFakeProvider({
-      main: [
-        { tool: { name: 'shell_run_write', args: { command: 'rm -rf /tmp/x', cwd: '.' } } },
-        { text: 'Va bene, non lo eseguo.' },
-      ],
-    });
-    const originalIsTTY = process.stderr.isTTY;
-    process.stderr.isTTY = true;
-    try {
-      const home = homeAgainst(provider.baseUrl);
-      const err: string[] = [];
-      vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-      vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
-        err.push(String(chunk));
-        return true;
-      });
-
-      const code = await runRepl(home, { stdin: stdinConSN('cancella /tmp/x', 'n') });
-
-      expect(code).toBe(0);
-      const testo = applica(err)
-        .righe.map((r) => r.trimEnd())
-        .join('\n');
-      expect(testo).not.toContain('⚠');
-      expect(testo).toContain('✗ sys.shell.write: rifiutato');
-      // Il rifiuto arriva al tool come un `tool_result` d'errore — non un
-      // secondo canale — quindi la riga del passo segue comunque, con `✗`:
-      // stesso alfabeto, mai un `✓` per un comando mai eseguito davvero.
-      const righe = testo.split('\n').map((r) => r.trimEnd());
-      const rigaVerdetto = righe.findIndex((r) => r.includes('sys.shell.write: rifiutato'));
-      const indiceDopo = righe.findIndex((r, i) => i > rigaVerdetto && r.trim() !== '');
-      expect(indiceDopo).toBe(rigaVerdetto + 1);
-      expect(righe[indiceDopo]).toContain('✗ eseguo un comando: rm -rf /tmp/x');
-      expect(testo).not.toMatch(/✓ eseguo un comando/);
-    } finally {
-      process.stderr.isTTY = originalIsTTY;
-      await provider.close();
-    }
-  });
+        expect(code).toBe(0);
+        const testo = applica(err)
+          .righe.map((r) => r.trimEnd())
+          .join('\n');
+        expect(testo).not.toContain('⚠');
+        expect(testo).toContain('✗ sys.shell.write: rifiutato');
+        // Il rifiuto arriva al tool come un `tool_result` d'errore — non un
+        // secondo canale — quindi la riga del passo segue comunque, con `✗`:
+        // stesso alfabeto, mai un `✓` per un comando mai eseguito davvero.
+        const righe = testo.split('\n').map((r) => r.trimEnd());
+        const rigaVerdetto = righe.findIndex((r) => r.includes('sys.shell.write: rifiutato'));
+        const indiceDopo = righe.findIndex((r, i) => i > rigaVerdetto && r.trim() !== '');
+        expect(indiceDopo).toBe(rigaVerdetto + 1);
+        expect(righe[indiceDopo]).toContain('✗ eseguo un comando: rm -rf /tmp/x');
+        expect(testo).not.toMatch(/✓ eseguo un comando/);
+      } finally {
+        process.stderr.isTTY = originalIsTTY;
+        await provider.close();
+      }
+    },
+  );
 });
 
 /**
@@ -671,13 +687,15 @@ describe('/think', () => {
     expect(out.line).toContain('consumer-local');
   });
 
-  it('senza argomenti dice il livello attivo, non solo `on`: è l\'unico posto dove Telegram lo mostra', () => {
+  it("senza argomenti dice il livello attivo, non solo `on`: è l'unico posto dove Telegram lo mostra", () => {
     const out = thinkingCommand('', 'medium', 'medium', 'consumer-local');
     expect(out.line).toContain('on, livello medium');
     expect(out.line).toContain('config.json');
     expect(out.set).toBeUndefined();
     // `adaptive` resta «on» e basta: non ha un livello da dire.
-    expect(thinkingCommand('', 'adaptive', undefined, 'consumer-local').line).not.toContain('livello');
+    expect(thinkingCommand('', 'adaptive', undefined, 'consumer-local').line).not.toContain(
+      'livello',
+    );
   });
 
   it("l'aiuto del comando, da cui nasce il menu di Telegram, dice che un livello è accettato — e che non tutti i modelli ne accettano gli stessi", () => {
@@ -757,10 +775,16 @@ describe('formatProgressLine — modalità normale', () => {
 
   it("l'attesa di un re-drive si dice: senza, lo spinner fermo per due minuti sembra un guasto", () => {
     expect(
-      formatProgressLine({ type: 'model_retry', class: 'provider_empty', attempt: 2, max: 3, inMs: 4200 }, 'normale'),
+      formatProgressLine(
+        { type: 'model_retry', class: 'provider_empty', attempt: 2, max: 3, inMs: 4200 },
+        'normale',
+      ),
     ).toBe('  ↻ risposta vuota dal provider — riprovo (2/3) tra 4s');
     expect(
-      formatProgressLine({ type: 'model_retry', class: 'transport', attempt: 1, max: 10, inMs: 200 }, 'normale'),
+      formatProgressLine(
+        { type: 'model_retry', class: 'transport', attempt: 1, max: 10, inMs: 200 },
+        'normale',
+      ),
     ).toBe('  ↻ il provider non ha risposto — riprovo (1/10) tra 1s');
   });
 });

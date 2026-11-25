@@ -324,21 +324,21 @@ describe('la unit systemd passa il parser di systemd', () => {
   it.skipIf(!systemdAnalyze.ok)(
     withReason('produces a systemd unit the system itself accepts', systemdAnalyze),
     () => {
-    const dir = mkdtempSync(join(tmpdir(), 'muffin-unit-'));
-    const launcher = join(dir, 'muffin');
-    writeFileSync(launcher, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-    const file = join(dir, 'muffin-gateway.service');
-    writeFileSync(file, plan({ home: dir, exec: [launcher, 'gateway', 'run'] }).text);
+      const dir = mkdtempSync(join(tmpdir(), 'muffin-unit-'));
+      const launcher = join(dir, 'muffin');
+      writeFileSync(launcher, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      const file = join(dir, 'muffin-gateway.service');
+      writeFileSync(file, plan({ home: dir, exec: [launcher, 'gateway', 'run'] }).text);
 
-    const verify = spawnSync('systemd-analyze', ['verify', file], { encoding: 'utf8' });
-    // Host units that systemd walks are not this file. Ubuntu 26.04's image
-    // warns that CPUAccounting= was removed from xfs_scrub and the guest
-    // agent; those lines do not say the muffin unit was rejected.
-    const relevant = systemdDiagnosticsForUnit(
-      file,
-      `${verify.stdout ?? ''}${verify.stderr ?? ''}`,
-    );
-    expect(relevant).toBe('');
+      const verify = spawnSync('systemd-analyze', ['verify', file], { encoding: 'utf8' });
+      // Host units that systemd walks are not this file. Ubuntu 26.04's image
+      // warns that CPUAccounting= was removed from xfs_scrub and the guest
+      // agent; those lines do not say the muffin unit was rejected.
+      const relevant = systemdDiagnosticsForUnit(
+        file,
+        `${verify.stdout ?? ''}${verify.stderr ?? ''}`,
+      );
+      expect(relevant).toBe('');
     },
   );
 });

@@ -2,8 +2,8 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { capability } from '../../test-support/requires.js';
 import { SandboxExecutor } from '../../core/sandbox/executor.js';
+import { capability } from '../../test-support/requires.js';
 import { toolContext } from '../fixtures/tool-context.js';
 import { makeShellTool, makeShellWriteTool } from './shell.js';
 

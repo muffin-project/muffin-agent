@@ -310,7 +310,8 @@ describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate
     const r = await executor.run({
       command:
         'mkdir -p ordinary && printf ordinary > ordinary/file.txt && ' +
-        initNested + ' && printf tracked > nested/tracked.txt && ' +
+        initNested +
+        ' && printf tracked > nested/tracked.txt && ' +
         'git -C nested add tracked.txt',
       cwd: s.workspace,
       writeScope: [s.workspace],
@@ -330,7 +331,9 @@ describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate
         ? 'mkdir -p empty-template/hooks && git init --quiet --template=empty-template created-now'
         : 'git init --quiet created-now';
     const r = await executor.run({
-      command: initNested + ' && mkdir -p created-now/.git/hooks && ' +
+      command:
+        initNested +
+        ' && mkdir -p created-now/.git/hooks && ' +
         'if printf hook > created-now/.git/hooks/pre-commit; then echo WRITABLE; ' +
         'else echo DENIED; fi',
       cwd: s.workspace,
@@ -352,7 +355,9 @@ describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate
         ? 'mkdir -p empty-template/hooks && git init --quiet --template=empty-template .'
         : 'git init --quiet .';
     const r = await executor.run({
-      command: initTopLevel + ' && mkdir -p .git/hooks && ' +
+      command:
+        initTopLevel +
+        ' && mkdir -p .git/hooks && ' +
         'if printf hook > .git/hooks/pre-commit; then echo WRITABLE; ' +
         'else echo DENIED; fi',
       cwd: s.workspace,
@@ -483,9 +488,9 @@ describe('when the sandbox is unavailable', () => {
 
   it('run() refuses instead of running unsandboxed', async () => {
     const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, unavailable);
-    await expect(
-      executor.run({ command: 'true', cwd: tmpdir(), writeScope: [] }),
-    ).rejects.toThrow(/sandbox unavailable/);
+    await expect(executor.run({ command: 'true', cwd: tmpdir(), writeScope: [] })).rejects.toThrow(
+      /sandbox unavailable/,
+    );
   });
 
   /**
@@ -510,8 +515,8 @@ describe('when the sandbox is unavailable', () => {
    */
   it('the refusal carries the reason and the remedy', async () => {
     const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, unavailable);
-    await expect(
-      executor.run({ command: 'true', cwd: tmpdir(), writeScope: [] }),
-    ).rejects.toThrow(/userns_denied.*fix the host/s);
+    await expect(executor.run({ command: 'true', cwd: tmpdir(), writeScope: [] })).rejects.toThrow(
+      /userns_denied.*fix the host/s,
+    );
   });
 });

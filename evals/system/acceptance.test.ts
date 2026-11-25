@@ -3,13 +3,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { capability, withReason } from '../../test-support/requires.js';
 import { toolContext } from '../../agent/fixtures/tool-context.js';
 import { attachMcp, buildRuntime, type Runtime } from '../../agent/runtime.js';
 import { runInit } from '../../cli/init.js';
 import { isSameOrNestedPath } from '../../core/config/workspace.js';
 import { connectServer } from '../../core/mcp/connect.js';
 import { pinTools, saveMcpRegistry } from '../../core/mcp/registry.js';
+import { capability, withReason } from '../../test-support/requires.js';
 
 /**
  * The M3 definition of done, asserted against the PRODUCTION assembly.
