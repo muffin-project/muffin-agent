@@ -12,6 +12,7 @@ import { visibleTools } from './context/assemble.js';
 import { toolContext } from './fixtures/tool-context.js';
 import { buildRuntime } from './runtime.js';
 import { makeSendFileTool, sendFileCapability } from './tools/deliver.js';
+import { WORK_MESSAGE_TOOL_NAME } from './tools/work-message.js';
 
 /**
  * A tool that is off can say why — end to end, not just in the formatter.
@@ -54,7 +55,7 @@ describe('una capacità spenta lo dice, non solo al log', () => {
       expect(gap?.kind).toBe('disabled');
       expect(gap?.reason).toContain('api.tavily.com');
       expect(gap?.reason).toContain('rot/egress.json');
-      expect(gap?.remedy).toContain('rot reseal');
+      expect(gap?.remedy).toContain('riavvia');
 
       // Seconda verifica: lo stesso, dentro un turno vero — il tool reale
       // registrato da buildRuntime, non un InspectSources ricostruito a mano.
@@ -64,7 +65,7 @@ describe('una capacità spenta lo dice, non solo al log', () => {
       expect(out.content).toContain('web_search');
       expect(out.content).toContain('api.tavily.com');
       expect(out.content).toContain('rot/egress.json');
-      expect(out.content).toContain('rot reseal');
+      expect(out.content).toContain('riavvia');
     } finally {
       runtime.close();
     }
@@ -233,7 +234,7 @@ describe('cosa raggiunge un membro, con e senza grant (ADR-0073)', () => {
   /** I tool che quel principal può raggiungere, non solo il nucleo del primo giro. */
   function menu(runtime: ReturnType<typeof buildRuntime>, tenantId: string): string[] {
     return visibleTools(
-      runtime.deps.tools,
+      runtime.deps.tools.filter((tool) => tool.spec.name !== WORK_MESSAGE_TOOL_NAME),
       membro(tenantId),
       runtime.deps.capabilities,
       runtime.deps.grants?.get(tenantId),
@@ -282,11 +283,12 @@ describe('cosa raggiunge un membro, con e senza grant (ADR-0073)', () => {
     const { home, workspace } = homeConGrant();
     const runtime = buildRuntime(home, workspace);
     try {
-      // La frase dell'ADR, eseguita. `surface.reply` e `memory.write` sono le
-      // due porte del loop (`DOORS`), che non compaiono in `capabilities`.
+      // `surface.reply` is still the ordinary reply door for members. It is
+      // also registered now because the owner-DM tool uses the same policy row.
       expect(raggiunte(runtime, STANZA_SENZA)).toEqual([
         'documents.read',
         'memory.read',
+        'surface.reply',
         'sys.capability_discover',
         'sys.http',
       ]);

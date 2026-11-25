@@ -63,6 +63,7 @@ import {
   TOOL_RESULT_BUDGET_CHARS,
   type TurnResult,
 } from './types.js';
+import { sanitizeWorkCall } from './work-message.js';
 
 /**
  * What the provider said before a call failed, on the span that failed.
@@ -944,7 +945,16 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       model: result.model,
       // The route it was asked with, for the billing contract: the ledger
       // identity stays `result.model`, and the price seam decides (#499).
-      requestedModel: deps.model,
+      requestedModel: result.route?.model ?? deps.model,
+      // Which chain link served it (ADR-0110), so a fallback is priced as itself.
+      ...(result.route === undefined
+        ? {}
+        : {
+            route: {
+              kind: result.route.kind,
+              ...(result.route.baseUrl === undefined ? {} : { baseUrl: result.route.baseUrl }),
+            },
+          }),
       // Attribuzione, non contabilità: la riga di spesa porta il job da cui
       // il turno è nato, così il tetto per-job ha un contatore da leggere.
       ...(input.jobId === undefined ? {} : { jobId: input.jobId }),
@@ -1370,12 +1380,13 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     // the model's and the contents are opaque. A `?? []` because an adapter
     // may legitimately have none (openai-compat says so with `[]`), not
     // because absence is expected here.
+    const toolCalls = result.toolCalls.map((call) => sanitizeWorkCall(run, call));
     run.messages.push({
       role: 'assistant',
       content: [
         ...(result.thinking ?? []),
         ...(result.text ? [{ type: 'text' as const, text: result.text }] : []),
-        ...result.toolCalls.map((c) => ({
+        ...toolCalls.map((c) => ({
           type: 'tool_use' as const,
           id: c.id,
           name: c.name,
@@ -1412,7 +1423,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     if (!checkpoint(scope)) return finish(scope, 'error', '');
 
     const results: ContentBlock[] = [];
-    for (const call_ of result.toolCalls) {
+    for (const [index, call_] of toolCalls.entries()) {
       // Checked between tools, not only before the next model call: a Ctrl+C
       // during a run of tool calls used to do nothing visible until the batch
       // finished, which for a slow batch is indistinguishable from being
@@ -1441,7 +1452,12 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       }
       run.toolCallsMade += 1;
       try {
-        const outcome = await runTool(deps, snapshot, turn, call_, input, exposed, toolContext);
+        const outcome = await runTool(deps, snapshot, turn, call_, input, exposed, toolContext, {
+          record,
+          run,
+          size: toolCalls.length,
+          index,
+        });
         results.push(outcome);
         noteSensitiveResourceEcho(call_, outcome);
       } catch (error) {

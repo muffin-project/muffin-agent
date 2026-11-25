@@ -36,10 +36,12 @@ import { MemoryStore } from '../core/memory/store.js';
 import { VectorIndex } from '../core/memory/vectors.js';
 import { type EgressPolicy, hostAllowed, loadEgress } from '../core/net/egress.js';
 import { createDecide } from '../core/policy/decide.js';
+import { replyCapability } from '../core/policy/doors.js';
 import { loadPolicyMatrix } from '../core/policy/matrix.js';
 import type { CapabilityDecl } from '../core/policy/types.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { mandatoryGuards } from '../core/rot/guards.js';
+import { loadSealedOwner, telegramOwner } from '../core/rot/owner.js';
 import { type HardeningCheck, hardeningHolds, verify } from '../core/rot/verify.js';
 import { Delega } from '../core/runtime/delega.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
@@ -72,6 +74,7 @@ import {
   selectSourcedProfile,
   withThinking,
 } from './profiles/profile.js';
+import type { ChainEvent } from './providers/chain.js';
 import { configuredProvider } from './providers/configured.js';
 import { type LightAttemptReport, lightLane } from './providers/light-lane.js';
 import type { Provider } from './providers/types.js';
@@ -113,6 +116,7 @@ import { makeSkillTool, skillCapability } from './tools/skill.js';
 import { makeTodoTool, todoCapability } from './tools/todo.js';
 import { makeVaultSaveTool, vaultWriteCapability } from './tools/vault-save.js';
 import { makeWaitTool, waitCapability } from './tools/wait.js';
+import { makeWorkMessageTool } from './tools/work-message.js';
 
 /**
  * Assembly.
@@ -450,8 +454,8 @@ export function buildRuntime(
   const tracer = new SimpleTracer(exporter);
   exporter.pruneOlderThan(config.traces.retentionDays);
 
-  // Root of trust before anything reads policy from it: in single-user mode a
-  // divergence degrades instead of refusing, but it is never ignored.
+  // Policy is still read from rot/ after this diagnostic. ADR-0108 retired
+  // hash-mismatch as a boot incident; `verify` no longer drives safe mode.
   const rot = verify(home, config.rot.mode);
 
   // `hardened` is checked, never believed. The mode in `config.json` is a
@@ -474,14 +478,15 @@ export function buildRuntime(
     );
   }
 
-  let safeMode: Runtime['safeMode'] = null;
+  // ADR-0108: a leftover manifest, an owner edit, or a drifted default is
+  // not an incident. Hash mismatch must not refuse boot or drop the
+  // installation into safe mode. The agent still cannot write rot/ files
+  // (`rot.write` stays denied). `verify` is kept as a diagnostic.
+  const safeMode: Runtime['safeMode'] = null;
   if (!rot.ok) {
-    if (rot.action === 'refuse') {
-      throw new Error(
-        `root of trust diverged (${rot.reason}): ${rot.diverged.join(', ')}\n→ ${rot.remedy}`,
-      );
-    }
-    safeMode = { reason: rot.reason, diverged: rot.diverged };
+    rotNotes.push(
+      `rot/: ${rot.reason}${rot.diverged.length > 0 ? ` (${rot.diverged.join(', ')})` : ''} — gli edit valgono comunque, senza sigillo (ADR-0108)`,
+    );
   }
 
   // The permission matrix, read here and nowhere else: `decide` is synchronous
@@ -607,14 +612,35 @@ export function buildRuntime(
 
   // Each inference lane owns an adapter and credential route; neither lane
   // borrows the other's provider simply because its model id is different.
+  // A lane with fallbacks is an ordered chain (ADR-0110). Its transitions are
+  // persisted for `muffin doctor` and traced; the chain never names a provider.
+  const reportFailover = (event: ChainEvent): void => {
+    const span = tracer.start('muffin.provider.failover', {
+      'muffin.provider.lane': event.lane,
+      'muffin.provider.from': event.from.label,
+      'muffin.provider.to': event.to?.label ?? '(none)',
+      'muffin.provider.reason': event.reason,
+      'muffin.provider.until': new Date(event.until).toISOString(),
+    });
+    span.end();
+  };
+  const chainOptions = { persistChainState: true, onFailover: reportFailover };
   const createMainProvider = (source: Config): Provider =>
-    configuredProvider(source, home, undefined, 'main');
+    configuredProvider(source, home, undefined, 'main', chainOptions);
+  const mainChainFingerprint = (source: Config): string =>
+    JSON.stringify({
+      provider: inferenceProvider(source, 'main'),
+      fallbacks: source.fallbacks?.main ?? [],
+    });
+  const lightChainFingerprint = (source: Config): string =>
+    JSON.stringify({
+      provider: inferenceProvider(source, 'light'),
+      light: source.models.light,
+      fallbacks: source.fallbacks?.light ?? [],
+    });
   let provider: Provider = createMainProvider(config);
-  let providerFingerprint = JSON.stringify(inferenceProvider(config, 'main'));
-  let lightFingerprint = JSON.stringify({
-    provider: inferenceProvider(config, 'light'),
-    light: config.models.light,
-  });
+  let providerFingerprint = mainChainFingerprint(config);
+  let lightFingerprint = lightChainFingerprint(config);
 
   const profileProblems: string[] = [];
   const sourcedProfiles = loadEffectiveProfiles(home, undefined, (line) =>
@@ -647,16 +673,21 @@ export function buildRuntime(
     // machine behind it is funded outside the spend caps, so the served model
     // and the requested route both stop mattering here. Only the sealed list
     // decides — a model-reachable config.json never reaches this branch (#499).
+    // A chain call is billed as the link that served it (ADR-0110): a ChatGPT
+    // lane that fell through to a metered endpoint must not ride at $0.
+    const servedKind = entry.route?.kind ?? kind;
+    const servedBaseUrl = entry.route === undefined ? baseUrl : entry.route.baseUrl;
     const usd =
-      kind === 'openai-chatgpt' ||
-      (baseUrl !== undefined && isUnmeteredEndpoint(baseUrl, budgets.unmetered))
+      servedKind === 'openai-chatgpt' ||
+      (servedBaseUrl !== undefined && isUnmeteredEndpoint(servedBaseUrl, budgets.unmetered))
         ? 0
-        : costUsd(entry.model, entry, baseUrl, entry.requestedModel);
+        : costUsd(entry.model, entry, servedBaseUrl, entry.requestedModel);
     // `entry` porta già `jobId` quando il turno è il giro di un job
     // (`agent/loop.ts`), e lo spread lo passa dritto alla riga di `spend`:
     // niente da tenere in sincrono qui, e nessun secondo posto in cui
     // l'attribuzione possa perdersi.
-    budget.record({ ...entry, usd });
+    const { route: _route, ...row } = entry;
+    budget.record({ ...row, usd });
     return usd;
   };
   const makeRecordSpend =
@@ -696,7 +727,13 @@ export function buildRuntime(
     });
     span.end();
   };
-  let lightRouteProvider: Provider = configuredProvider(config, home, undefined, 'light');
+  let lightRouteProvider: Provider = configuredProvider(
+    config,
+    home,
+    undefined,
+    'light',
+    chainOptions,
+  );
   let light = lightLane(lightRouteProvider, {
     profile: selectSourcedProfile(config.models.light, sourcedProfiles)?.profile ?? CONSERVATIVE,
     record: (entry) =>
@@ -1328,7 +1365,7 @@ export function buildRuntime(
   const refreshMainModel = (): void => {
     const persisted = loadConfig(home);
     const mainProviderConfig = inferenceProvider(persisted, 'main');
-    const fingerprint = JSON.stringify(mainProviderConfig);
+    const fingerprint = mainChainFingerprint(persisted);
     if (fingerprint !== providerFingerprint) {
       provider = createMainProvider(persisted);
       providerFingerprint = fingerprint;
@@ -1347,6 +1384,7 @@ export function buildRuntime(
       lightProvider: inferenceProvider(persisted, 'light'),
       models: { ...config.models, main: persisted.models.main, light: persisted.models.light },
       thinking: persisted.thinking,
+      fallbacks: persisted.fallbacks,
     });
     Object.assign(profile, nextProfile);
     // An explicit custom profile without activity keeps its legacy policy.
@@ -1398,16 +1436,19 @@ export function buildRuntime(
   const refreshLightModel = (): void => {
     const persisted = loadConfig(home);
     const lightProviderConfig = inferenceProvider(persisted, 'light');
-    const fingerprint = JSON.stringify({
-      provider: lightProviderConfig,
-      light: persisted.models.light,
-    });
+    const fingerprint = lightChainFingerprint(persisted);
     if (fingerprint === lightFingerprint) return;
     const nextLightProvider = { ...lightProviderConfig };
     // Build the complete replacement before publishing any part of it. In
     // particular, resolving the selected lane's secret can throw; retaining
     // the old fingerprint in that case makes the next prepareTurn retry.
-    const nextLightRouteProvider = configuredProvider(persisted, home, undefined, 'light');
+    const nextLightRouteProvider = configuredProvider(
+      persisted,
+      home,
+      undefined,
+      'light',
+      chainOptions,
+    );
     const nextLight = lightLane(nextLightRouteProvider, {
       profile:
         selectSourcedProfile(persisted.models.light, sourcedProfiles)?.profile ?? CONSERVATIVE,
@@ -1461,7 +1502,9 @@ export function buildRuntime(
       .filter((riga) => riga.length > 0),
     provider: `main ${inferenceProvider(config, 'main').kind} · light ${inferenceProvider(config, 'light').kind}`,
     jobAttivi: jobs.list().filter((j) => j.active).length,
-    safeMode: safeMode ? { reason: safeMode.reason } : null,
+    // Always null after ADR-0108; kept on the fact object so inspect/ambiente stay typed.
+    safeMode: null,
+    ...(searchDiagnosis.gap === null ? {} : { webSearchUnavailable: searchDiagnosis.blockedBy }),
   });
 
   const runtime: Runtime = {
@@ -1534,6 +1577,8 @@ export function buildRuntime(
       provider,
       profile,
       model: config.models.main,
+      workMessageOwner: () =>
+        telegramOwner(loadSealedOwner(home), loadConfig(home).surfaces.telegram),
       tools,
       decide,
       // The declarations, so the loop derives the policy resource from
@@ -1610,6 +1655,7 @@ export function buildRuntime(
     },
   };
   loopDeps = runtime.deps;
+  runtime.register(makeWorkMessageTool(), replyCapability);
   return runtime;
 }
 

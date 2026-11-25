@@ -126,7 +126,7 @@ describe('config migration', () => {
     // value flow into the seal on its own is the exact hole this closed.
     expect(notes.join('\n')).toContain('monthlyUsd 500');
     expect(notes.join('\n')).toContain('perTenantDailyUsd 9');
-    expect(notes.join('\n')).toContain('rot reseal');
+    expect(notes.join('\n')).toContain('riavvia');
     rmSync(dir, { recursive: true, force: true });
   });
 

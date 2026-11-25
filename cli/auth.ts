@@ -34,12 +34,14 @@ export const AUTH_USAGE = `usage:
   muffin auth list
   muffin auth login openrouter [--new [id]] [--code|--browser]
   muffin auth login chatgpt [profile-id | --new]
-  muffin auth switch <openrouter|anthropic|chatgpt> <profile-id>
+  muffin auth switch <openrouter|anthropic|xai|chatgpt> <profile-id>
 `;
 
 const REFUSED_OAUTH =
   'Anthropic accepts a Console/API key only (including Max/Ultra API credits). No claude.ai login.';
-const REFUSED_XAI = 'This slice does not connect xAI/Grok. No OAuth client is included.';
+const REFUSED_XAI =
+  'xAI/Grok connects with a console.x.ai API key (billed per token): muffin secret set xai_api_key. ' +
+  'No SuperGrok/X Premium login: xAI publishes no OAuth client for third-party agents (ADR-0110).';
 
 export type AuthCommandDeps = {
   out: (line: string) => void;
@@ -225,7 +227,7 @@ async function switchProfile(home: string, rest: string[], deps: AuthCommandDeps
     deps.out(AUTH_USAGE.trim());
     return 2;
   }
-  if (provider === 'xai' || provider === 'grok') {
+  if (provider === 'grok') {
     deps.out(REFUSED_XAI);
     return 2;
   }
@@ -235,7 +237,7 @@ async function switchProfile(home: string, rest: string[], deps: AuthCommandDeps
       ...(deps.chatgpt ? { connection: deps.chatgpt } : {}),
     });
   }
-  if (provider !== 'openrouter' && provider !== 'anthropic') {
+  if (provider !== 'openrouter' && provider !== 'anthropic' && provider !== 'xai') {
     deps.out(AUTH_USAGE.trim());
     return 2;
   }

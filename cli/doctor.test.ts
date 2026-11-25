@@ -278,9 +278,9 @@ describe('doctor distinguishes seal checking from OS write protection', () => {
   it('describes the default without directing the owner to change it', async () => {
     const dir = home();
     const c = await check(dir, 'root of trust mode');
-    expect(c?.level).toBe('warn');
-    expect(c?.detail).toContain('single-user');
-    expect(c?.detail).toContain('does not change approvals');
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('rot/');
+    expect(c?.detail).toMatch(/ADR-0108|nessun sigillo/i);
     expect(c?.remedy).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
   });
@@ -702,7 +702,7 @@ describe('doctor names the spend cap and where it came from', () => {
     seal(dir, '1', new Date());
     const c = await check(dir, 'endpoint non conteggiati');
     expect(c?.level).toBe('warn');
-    expect(c?.remedy).toContain('rot reseal');
+    expect(c?.remedy).toMatch(/riavvia|muffin rot migrate|nessun sigillo/);
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -765,7 +765,7 @@ describe('doctor names the spend cap and where it came from', () => {
     const c = await check(dir, 'tetto di spesa');
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('compilati');
-    expect(c?.remedy).toContain('rot reseal');
+    expect(c?.remedy).toMatch(/riavvia|muffin rot migrate|nessun sigillo/);
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -1149,7 +1149,7 @@ describe('doctor tells the four consolidation outcomes apart', () => {
     const c = await check(dir, 'consolidamento');
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('budget mensile esaurito');
-    expect(c?.remedy).toContain('rot reseal');
+    expect(c?.remedy).toMatch(/riavvia|muffin rot migrate|nessun sigillo/);
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -1468,7 +1468,7 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('adopting a sealed rot/ file states the safe-mode consequence before the command, and names `rot reseal`', async () => {
+  it('adopting a rot/ default names muffin rot migrate and does not recommend a reseal (ADR-0108)', async () => {
     // A synthetic checkout, independent of this repository's own history, so
     // the "installed content matches an old shipped commit" fact is
     // constructed rather than borrowed from real history.
@@ -1504,15 +1504,11 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
       const c = await checkWith(dir, 'default rot/identity.md', { checkoutRoot: checkout });
       expect(c?.level).toBe('warn');
       expect(c?.remedy).toBeTruthy();
-      const safeModeAt = c!.remedy!.indexOf('safe mode');
-      const cpAt = c!.remedy!.indexOf('cp ');
-      const resealAt = c!.remedy!.indexOf('rot reseal');
-      expect(safeModeAt).toBeGreaterThan(-1);
-      expect(cpAt).toBeGreaterThan(-1);
-      expect(resealAt).toBeGreaterThan(-1);
-      // The consequence is said BEFORE the command — the owner decides first.
-      expect(safeModeAt).toBeLessThan(cpAt);
-      expect(cpAt).toBeLessThan(resealAt);
+      expect(c!.remedy).toContain('muffin rot migrate');
+      expect(c!.remedy).toMatch(/ADR-0108|non serve un sigillo/);
+      expect(c!.remedy).not.toContain('safe mode');
+      expect(c!.remedy).not.toContain('rot reseal');
+      expect(c!.remedy).not.toContain('cp ');
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(checkout, { recursive: true, force: true });
@@ -1567,15 +1563,13 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
       expect(group?.detail).toContain('rot/identity.md');
       expect(group?.detail).toContain('rot/policy.json');
       expect(group?.remedy).toBeTruthy();
-      // One explanation, one command sequence: `rot reseal` named exactly
-      // once for the whole batch, not once per file.
-      const resealCount = (group!.remedy!.match(/rot reseal/g) ?? []).length;
-      expect(resealCount).toBe(1);
-      // A command an owner can actually run — for each file — is still there.
-      expect(group?.remedy).toContain('cp ');
-      expect(group?.remedy).toContain(join(checkout, 'defaults', 'rot', 'identity.md'));
-      expect(group?.remedy).toContain(join(checkout, 'defaults', 'rot', 'policy.json'));
-      expect(group?.remedy).toContain('safe mode');
+      expect(group?.remedy).toContain('muffin rot migrate');
+      expect(group?.remedy).toMatch(/ADR-0108|non serve un sigillo/);
+      expect(group?.remedy).not.toContain('rot reseal');
+      expect(group?.remedy).not.toContain('cp ');
+      expect(group?.remedy).not.toContain('safe mode');
+      expect(group?.detail).toContain('rot/identity.md');
+      expect(group?.detail).toContain('rot/policy.json');
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(checkout, { recursive: true, force: true });
@@ -2388,7 +2382,7 @@ describe('doctor nomina le capacità spente o tagliate, come sys.inspect', () =>
     expect(c?.detail).toBe(gap?.reason);
     expect(c?.remedy).toBe(gap?.remedy);
     expect(c?.detail).toContain('api.tavily.com');
-    expect(c?.remedy).toContain('rot reseal');
+    expect(c?.remedy).toMatch(/riavvia|muffin rot migrate|nessun sigillo/);
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -2586,7 +2580,7 @@ describe('doctor names where the owner binding lives', () => {
     conConfigTelegram(dir, 111);
     const c = await checkWith(dir, 'owner binding legacy', { hardened: false });
     expect(c?.level).toBe('warn');
-    expect(c?.remedy).toContain('scrive rot/owner.json e risigilla nello stesso giro');
+    expect(c?.remedy).toContain('scrive rot/owner.json nello stesso giro');
   });
 
   it('says which of two disagreeing bindings wins', async () => {
@@ -2595,23 +2589,22 @@ describe('doctor names where the owner binding lives', () => {
     sealOwnerBinding(dir, { telegram: { userId: 999, chatId: 999 } }, { out: () => {} });
     const c = await check(dir, 'owner binding');
     expect(c?.level).toBe('warn');
-    expect(c?.detail).toContain('sigillo 999');
+    expect(c?.detail).toContain('rot/owner.json 999');
     expect(c?.detail).toContain('config.json 111');
-    expect(c?.detail).toMatch(/vince il sigillo/);
+    expect(c?.detail).toMatch(/vince rot\/owner\.json/);
   });
 
-  it('fails loudly when the sealed binding no longer verifies — nobody is owner', async () => {
+  it('a hand-edited valid owner.json still binds without a reseal (ADR-0108)', async () => {
     const dir = home();
     conConfigTelegram(dir, 111);
     sealOwnerBinding(dir, { telegram: { userId: 999, chatId: 999 } }, { out: () => {} });
-    // La manomissione: il file sigillato riscritto, nessun reseal.
     writeFileSync(
       join(dir, 'rot', 'owner.json'),
       JSON.stringify({ schemaVersion: 1, telegram: { userId: 111, chatId: 111 } }),
     );
     const c = await check(dir, 'owner binding');
-    expect(c?.level).toBe('fail');
-    expect(c?.detail).toMatch(/nessuna superficie riconosce più un owner/);
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('telegram 111');
   });
 });
 

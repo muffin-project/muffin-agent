@@ -18,6 +18,7 @@ import {
   readEffects,
 } from './effects.js';
 import { TURN_STORE_SCHEMA } from './schema.js';
+import { decodeWaitFor, OWNER_REPLY_PREFIX } from './wait.js';
 
 /**
  * Durable turn lifecycle, authority snapshot, and tool-effect journal.
@@ -351,6 +352,8 @@ function toLifetime(raw: string | null): LifetimeCounters {
   }
 }
 
+type StoredTurnCounters = TurnCounters & { ownerQuestionFinal?: true };
+
 /**
  * Counters as they come off disk, with the fields a row may predate filled in.
  *
@@ -360,10 +363,11 @@ function toLifetime(raw: string | null): LifetimeCounters {
  * bound above silently stops bounding. One place normalises, so no consumer has
  * to remember.
  */
-function toCounters(raw: string): TurnCounters {
-  const parsed = JSON.parse(raw) as TurnCounters;
+function toCounters(raw: string): StoredTurnCounters {
+  const { ownerQuestionFinal, ...parsed } = JSON.parse(raw) as StoredTurnCounters;
   return {
     ...parsed,
+    ...(ownerQuestionFinal === true ? { ownerQuestionFinal } : {}),
     ...(parsed.activityAllowance !== undefined
       ? { activityAllowance: checkedAllowance(parsed.activityAllowance) }
       : {}),
@@ -429,6 +433,8 @@ export type TurnRecord = {
   status: TurnStatus;
   wakeAt: string | null;
   waitFor: string | null;
+  /** A committed owner question opted this Work into journaled final recovery. */
+  ownerQuestionFinal?: true;
   claimedBy: number | null;
   claimedAt: string | null;
   /**
@@ -715,6 +721,7 @@ type Row = {
 };
 
 function toRecord(row: Row): TurnRecord {
+  const { ownerQuestionFinal, ...counters } = toCounters(row.counters);
   let continuableReason: ContinuableReason | null = null;
   if (row.continuable_reason !== null) {
     try {
@@ -732,12 +739,13 @@ function toRecord(row: Row): TurnRecord {
     inputText: row.input_text ?? null,
     providerLease: { model: row.model, checkpoint: JSON.parse(row.messages) as unknown },
     taint: row.taint as TrustTier,
-    counters: toCounters(row.counters),
+    counters,
     replyTo: row.reply_to === null ? null : (JSON.parse(row.reply_to) as Record<string, unknown>),
     jobId: row.job_id ?? null,
     status: row.status as TurnStatus,
     wakeAt: row.wake_at,
     waitFor: row.wait_for,
+    ...(ownerQuestionFinal === true ? { ownerQuestionFinal } : {}),
     claimedBy: row.claimed_by,
     claimedAt: row.claimed_at,
     claimToken: row.claim_token,
@@ -790,6 +798,12 @@ function argsDigest(args: unknown): string {
 function serializzaCheckpoint(checkpoint: unknown): string {
   return redactText(JSON.stringify(checkpoint));
 }
+
+// GLOB is case-sensitive and, unlike LIKE, treats the underscore literally.
+const OWNER_REPLY_GLOB = `'${OWNER_REPLY_PREFIX}*'`;
+const CAN_WAKE_WAITING = `(
+  wait_for IS NULL OR wait_for NOT GLOB ${OWNER_REPLY_GLOB} OR wake_at <= @now
+)`;
 
 /**
  * The lane's pickup query, with a legacy fallback for read-only diagnosis.
@@ -883,6 +897,9 @@ export class TurnStore {
   private readonly dueStmt: Database.Statement;
   private readonly armedStmt: Database.Statement;
   private readonly wakeStmt: Database.Statement;
+  private readonly ownerQuestionsStmt: Database.Statement;
+  private readonly answerOwnerQuestionStmt: Database.Statement;
+  private pendingOwnerQuestionFinalStmt?: Database.Statement;
   private readonly suspendedCountStmt: Database.Statement;
   private readonly outcomesStmt: Database.Statement;
   private readonly undeliverableCountStmt: Database.Statement;
@@ -1099,7 +1116,8 @@ export class TurnStore {
     this.claimStmt = db.prepare(
       `UPDATE turns SET status = 'running', claimed_by = @pid, claimed_at = @now, claim_token = @token,
                         wake_at = NULL, wait_for = NULL, updated_at = @now
-       WHERE id = @id AND status IN ('runnable','waiting','interrupted')`,
+       WHERE id = @id AND (status IN ('runnable','interrupted')
+          OR (status = 'waiting' AND ${CAN_WAKE_WAITING}))`,
     );
     // A queued turn that has never built context has no model-produced state
     // to pin. Let the newly selected main model own it, but only while it is
@@ -1127,18 +1145,30 @@ export class TurnStore {
     this.suspendStmt = db.prepare(
       `UPDATE turns SET status = 'waiting', wake_at = @wakeAt, wait_for = @waitFor,
                         messages = @messages, taint = @taint, counters = @counters,
+                        delivery = CASE WHEN @ownerQuestion AND reply_to IS NOT NULL
+                                        THEN coalesce(delivery, 'pending') ELSE delivery END,
                         claimed_by = NULL, claim_token = NULL, updated_at = @now
        WHERE id = @id AND status = 'running' AND claim_token = @claimToken`,
     );
     // The lane's pickup query — see `prepareDue` (module scope) for the
     // predicate and its legacy fallback.
     this.dueStmt = prepareDue(db);
-    /** Suspended turns with an event barrier — the rows whose predicate is evaluated. */
+    /** Only barriers evaluated by the lane; owner replies have their own ingress. */
     this.armedStmt = db.prepare(
-      `SELECT * FROM turns WHERE status = 'waiting' AND wait_for IS NOT NULL ORDER BY updated_at LIMIT @limit`,
+      `SELECT * FROM turns WHERE status = 'waiting' AND wait_for NOT GLOB ${OWNER_REPLY_GLOB}
+       ORDER BY updated_at LIMIT @limit`,
     );
     this.wakeStmt = db.prepare(
-      `UPDATE turns SET status = 'runnable', updated_at = @now WHERE id = @id AND status = 'waiting'`,
+      `UPDATE turns SET status = 'runnable', updated_at = @now
+       WHERE id = @id AND status = 'waiting' AND ${CAN_WAKE_WAITING}`,
+    );
+    this.ownerQuestionsStmt = db.prepare(
+      `SELECT * FROM turns WHERE status = 'waiting' AND wait_for GLOB ${OWNER_REPLY_GLOB}
+       ORDER BY updated_at, rowid LIMIT @limit`,
+    );
+    this.answerOwnerQuestionStmt = db.prepare(
+      `UPDATE turns SET messages = @messages, status = 'runnable', wake_at = NULL, updated_at = @now
+       WHERE id = @id AND status = 'waiting' AND wait_for = @barrier AND wake_at > @now`,
     );
     this.suspendedCountStmt = db.prepare(
       `SELECT count(*) AS n FROM turns WHERE tenant = @tenant AND status = 'waiting'`,
@@ -1233,7 +1263,8 @@ export class TurnStore {
                           -- diagnostico della lease N e chiudeva senza mai
                           -- mandare la risposta (review 2026-09-28).
                           delivery = CASE
-                            WHEN job_id IS NOT NULL AND reply_to IS NOT NULL THEN 'pending'
+                             WHEN (job_id IS NOT NULL OR @ownerQuestionFinal) AND reply_to IS NOT NULL
+                             THEN 'pending'
                             ELSE NULL
                           END,
                           updated_at = @now
@@ -1354,7 +1385,7 @@ export class TurnStore {
         model: providerLease.model,
         messages: serializzaCheckpoint(providerLease.checkpoint),
         taint: spec.taint,
-        counters: JSON.stringify(spec.counters),
+        counters: JSON.stringify({ ...spec.counters, ownerQuestionFinal: undefined }),
         replyTo: spec.replyTo === undefined ? null : JSON.stringify(spec.replyTo),
         // `?? null` esplicito: better-sqlite3 rifiuta un parametro nominato
         // assente dall'oggetto, e `undefined` non è un valore che sa legare.
@@ -1448,15 +1479,20 @@ export class TurnStore {
     },
     claimToken: string | null,
   ): boolean {
+    const ownerQuestion = patch.waitFor?.startsWith(OWNER_REPLY_PREFIX) === true;
+    if (ownerQuestion && decodeWaitFor(patch.waitFor)?.kind !== 'owner_reply') {
+      throw new Error('invalid serialized owner reply barrier');
+    }
     return this.db.transaction(
       () =>
         this.suspendStmt.run({
           id,
           messages: serializzaCheckpoint(patch.messages),
           taint: patch.taint,
-          counters: JSON.stringify(this.preserveActivity(id, patch.counters)),
+          counters: JSON.stringify(this.preserveTurnMetadata(id, patch.counters, ownerQuestion)),
           wakeAt: patch.wakeAt,
           waitFor: patch.waitFor,
+          ownerQuestion: Number(ownerQuestion),
           claimToken,
           now: this.clock().toISOString(),
         }).changes === 1,
@@ -1533,7 +1569,7 @@ export class TurnStore {
         reason: JSON.stringify(patch.reason),
         messages: serializzaCheckpoint(patch.messages),
         taint: patch.taint,
-        counters: JSON.stringify(this.preserveActivity(id, patch.counters)),
+        counters: JSON.stringify(this.preserveTurnMetadata(id, patch.counters)),
         lifetime,
         claimToken,
         now: at,
@@ -1547,7 +1583,7 @@ export class TurnStore {
         now: at,
         outcome: patch.reason.class,
         harness: redactText(JSON.stringify(patch.harnessMessages ?? [])),
-        counters: JSON.stringify(this.preserveActivity(id, patch.counters)),
+        counters: JSON.stringify(this.preserveTurnMetadata(id, patch.counters)),
         transportUsed: used,
         delivery: before.delivery,
       });
@@ -1614,7 +1650,7 @@ export class TurnStore {
             used.automaticContinuationsUsed + extension.maxAutomaticContinuations,
         });
       }
-      const counters = this.preserveActivity(id, patch.counters);
+      const counters = this.preserveTurnMetadata(id, patch.counters);
       if (allowance !== undefined) counters.activityAllowance = allowance;
       const leaseIndex =
         (Number.isFinite(before.lease_index) ? (before.lease_index as number) : 0) + 1;
@@ -1626,6 +1662,7 @@ export class TurnStore {
         messages: serializzaCheckpoint(patch.messages),
         taint: patch.taint,
         counters: JSON.stringify(counters),
+        ownerQuestionFinal: Number(counters.ownerQuestionFinal === true),
         leaseIndex,
       });
       if (r.changes !== 1) return;
@@ -1816,8 +1853,58 @@ export class TurnStore {
     return (this.armedStmt.all({ limit }) as Row[]).map(toRecord);
   }
 
+  /** Waiting question rows only; delivery and ingress routing remain surface concerns. */
+  ownerQuestions(limit = 50): TurnRecord[] {
+    return (this.ownerQuestionsStmt.all({ limit }) as Row[]).map(toRecord);
+  }
+
+  /** Delivery-only pickup. Without a committed question marker, even a pending owner final is historic to this path. */
+  pendingOwnerQuestionFinal(): TurnRecord | null {
+    this.pendingOwnerQuestionFinalStmt ??= this.db.prepare(
+      `SELECT * FROM turns
+       WHERE status = 'done' AND delivery = 'pending' AND job_id IS NULL AND reply_to IS NOT NULL
+         AND json_type(counters, '$.ownerQuestionFinal') = 'true'
+       ORDER BY updated_at, rowid LIMIT 1`,
+    );
+    const row = this.pendingOwnerQuestionFinalStmt.get() as Row | undefined;
+    return row === undefined ? null : toRecord(row);
+  }
+
   /**
-   * The barrier was satisfied: the row becomes runnable ahead of its deadline.
+   * Bind a surface-verified reply to the exact stored barrier. The callback
+   * must consume the ingress synchronously on this SQLite connection, throwing
+   * if it cannot; a thrown error rolls back both writes.
+   *
+   * Keep `wait_for` until claim so this still counts as resuming from a wait.
+   * A runnable owner reply with no `wake_at` means answered, not timed out.
+   */
+  answerOwnerQuestion(
+    turnId: string,
+    barrier: string,
+    messages: unknown,
+    consumeIngress: () => void,
+    now?: Date,
+  ): boolean {
+    if (decodeWaitFor(barrier)?.kind !== 'owner_reply') return false;
+    const checkpoint = serializzaCheckpoint(messages);
+    return this.db
+      .transaction(() => {
+        const result = this.answerOwnerQuestionStmt.run({
+          id: turnId,
+          barrier,
+          messages: checkpoint,
+          now: (now ?? this.clock()).toISOString(),
+        });
+        if (result.changes !== 1) return false;
+        consumeIngress();
+        return true;
+      })
+      .immediate();
+  }
+
+  /**
+   * Wake a satisfied event barrier or an expired wait. Before its deadline an
+   * owner reply barrier can only be released by `answerOwnerQuestion`.
    *
    * Guarded on `waiting` so an event arriving twice, or arriving for a turn the
    * deadline already woke, cannot move a row that has left the waiting set.
@@ -1962,10 +2049,27 @@ export class TurnStore {
     return row === undefined ? null : (toCounters(row.counters).activityAllowance ?? null);
   }
 
-  private preserveActivity(id: string, counters: TurnCounters): TurnCounters {
-    const { activityAllowance: _callerAllowance, ...rest } = counters;
-    const allowance = this.activityAllowance(id);
-    return { ...rest, ...(allowance === null ? {} : { activityAllowance: allowance }) };
+  // `counters` is an additive JSON checkpoint; historical rows have no marker.
+  // As with the activity allowance, execution checkpoints cannot supply or clear it.
+  private preserveTurnMetadata(
+    id: string,
+    counters: TurnCounters,
+    ownerQuestion = false,
+  ): StoredTurnCounters {
+    const {
+      activityAllowance: _allowance,
+      ownerQuestionFinal: _question,
+      ...rest
+    } = counters as StoredTurnCounters;
+    const row = this.getStmt.get(id) as Row | undefined;
+    const stored = row === undefined ? undefined : toCounters(row.counters);
+    return {
+      ...rest,
+      ...(stored?.activityAllowance !== undefined
+        ? { activityAllowance: stored.activityAllowance }
+        : {}),
+      ...(ownerQuestion || stored?.ownerQuestionFinal === true ? { ownerQuestionFinal: true } : {}),
+    };
   }
 
   /**
@@ -1988,7 +2092,7 @@ export class TurnStore {
           id,
           messages: serializzaCheckpoint(patch.messages),
           taint: patch.taint,
-          counters: JSON.stringify(this.preserveActivity(id, patch.counters)),
+          counters: JSON.stringify(this.preserveTurnMetadata(id, patch.counters)),
           claimToken,
           now: this.clock().toISOString(),
         }).changes === 1,
@@ -2051,7 +2155,7 @@ export class TurnStore {
         outcome: end.outcome,
         messages: serializzaCheckpoint(end.messages),
         taint: end.taint,
-        counters: JSON.stringify(this.preserveActivity(id, end.counters)),
+        counters: JSON.stringify(this.preserveTurnMetadata(id, end.counters)),
         lifetime,
         claimToken,
         now: at,
@@ -2065,7 +2169,7 @@ export class TurnStore {
         now: at,
         outcome: end.outcome,
         harness: redactText(JSON.stringify(end.harnessMessages ?? [])),
-        counters: JSON.stringify(this.preserveActivity(id, end.counters)),
+        counters: JSON.stringify(this.preserveTurnMetadata(id, end.counters)),
         transportUsed: used,
         delivery: before.delivery,
       });

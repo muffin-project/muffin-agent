@@ -8,7 +8,9 @@ describe('pricing', () => {
     // Billing a local model would trip the cap on the one configuration where
     // spending is not a risk.
     expect(priceOf('qwen3.6:27b', 'http://127.0.0.1:11434/v1')).toBeNull();
-    expect(costUsd('gemma4:26b', { inputTokens: 1e6, outputTokens: 1e6 }, 'http://localhost:11434')).toBe(0);
+    expect(
+      costUsd('gemma4:26b', { inputTokens: 1e6, outputTokens: 1e6 }, 'http://localhost:11434'),
+    ).toBe(0);
   });
 
   it('recognizes OpenRouter free routing as an explicit zero-price contract', () => {
@@ -27,10 +29,13 @@ describe('pricing', () => {
   it('keeps served-model pricing for auto routing and off-host free slugs (#499)', () => {
     // qwen3 $2/$6: 10k in = $0.02, 2k out = $0.012.
     const tokens = { inputTokens: 10_000, outputTokens: 2_000 };
-    expect(costUsd('qwen/qwen3.8-27b', tokens, OPENROUTER, 'openrouter/auto')).toBeCloseTo(0.032, 6);
-    expect(costUsd('qwen/qwen3.8-27b', tokens, 'https://my-proxy.example/v1', 'openrouter/free')).toBeCloseTo(
-      0.032, 6,
+    expect(costUsd('qwen/qwen3.8-27b', tokens, OPENROUTER, 'openrouter/auto')).toBeCloseTo(
+      0.032,
+      6,
     );
+    expect(
+      costUsd('qwen/qwen3.8-27b', tokens, 'https://my-proxy.example/v1', 'openrouter/free'),
+    ).toBeCloseTo(0.032, 6);
   });
 
   describe('unmetered endpoints (#499)', () => {
@@ -46,7 +51,9 @@ describe('pricing', () => {
     });
 
     it('matches any port when none is declared', () => {
-      expect(isUnmeteredEndpoint('http://192.168.1.10:9090/v1', [{ host: '192.168.1.10' }])).toBe(true);
+      expect(isUnmeteredEndpoint('http://192.168.1.10:9090/v1', [{ host: '192.168.1.10' }])).toBe(
+        true,
+      );
     });
 
     it('does not match other hosts, other ports, malformed urls, or an empty list', () => {
@@ -59,9 +66,19 @@ describe('pricing', () => {
 
   it('recognizes explicit :free variants only on the OpenRouter endpoint', () => {
     expect(isOpenRouterFreeRoute('qwen/qwen3.8-27b:free', OPENROUTER)).toBe(true);
-    expect(costUsd('qwen/qwen3.8-27b:free', { inputTokens: 1e6, outputTokens: 1e6 }, OPENROUTER)).toBe(0);
-    expect(isOpenRouterFreeRoute('qwen/qwen3.8-27b:free', 'https://example.invalid/v1')).toBe(false);
-    expect(costUsd('qwen/qwen3.8-27b:free', { inputTokens: 1e6, outputTokens: 1e6 }, 'https://example.invalid/v1')).toBeCloseTo(8, 5);
+    expect(
+      costUsd('qwen/qwen3.8-27b:free', { inputTokens: 1e6, outputTokens: 1e6 }, OPENROUTER),
+    ).toBe(0);
+    expect(isOpenRouterFreeRoute('qwen/qwen3.8-27b:free', 'https://example.invalid/v1')).toBe(
+      false,
+    );
+    expect(
+      costUsd(
+        'qwen/qwen3.8-27b:free',
+        { inputTokens: 1e6, outputTokens: 1e6 },
+        'https://example.invalid/v1',
+      ),
+    ).toBeCloseTo(8, 5);
   });
 
   it('does not confuse OpenRouter auto routing with the free router', () => {
@@ -101,7 +118,9 @@ describe('pricing', () => {
   });
 
   it('adds input and output', () => {
-    expect(costUsd('anthropic/claude-haiku-4.5', { inputTokens: 1e6, outputTokens: 1e6 })).toBeCloseTo(6, 5);
+    expect(
+      costUsd('anthropic/claude-haiku-4.5', { inputTokens: 1e6, outputTokens: 1e6 }),
+    ).toBeCloseTo(6, 5);
   });
 });
 
@@ -121,7 +140,10 @@ describe('pricing', () => {
  */
 describe('le cinque famiglie open-weight misurate 2026-09-04', () => {
   it('gpt-oss: $0.35/$0.75 (Cerebras, il host più caro per gpt-oss-120b)', () => {
-    expect(costUsd('openai/gpt-oss-120b', { inputTokens: 1e6, outputTokens: 1e6 })).toBeCloseTo(1.1, 5);
+    expect(costUsd('openai/gpt-oss-120b', { inputTokens: 1e6, outputTokens: 1e6 })).toBeCloseTo(
+      1.1,
+      5,
+    );
   });
 
   it('qwen3: $2/$6 (qwen3.8-max, il più caro della linea qwen3.x)', () => {
@@ -129,7 +151,9 @@ describe('le cinque famiglie open-weight misurate 2026-09-04', () => {
   });
 
   it('gemma: $0.15/$0.6 (Gemma 4 26B-A4B su Google Vertex)', () => {
-    expect(costUsd('google/gemma-4-26b-a4b-it', { inputTokens: 1e6, outputTokens: 1e6 })).toBeCloseTo(0.75, 5);
+    expect(
+      costUsd('google/gemma-4-26b-a4b-it', { inputTokens: 1e6, outputTokens: 1e6 }),
+    ).toBeCloseTo(0.75, 5);
   });
 
   it('glm: $1.4/$4.4 (GLM-5.3, il flagship — non la variante flash)', () => {
@@ -137,6 +161,21 @@ describe('le cinque famiglie open-weight misurate 2026-09-04', () => {
   });
 
   it('deepseek: $1.12/$3.35 (deepseek-v4-pro, non la tariffa "flash")', () => {
-    expect(costUsd('deepseek/deepseek-v4-pro-0813', { inputTokens: 1e6, outputTokens: 1e6 })).toBeCloseTo(4.47, 5);
+    expect(
+      costUsd('deepseek/deepseek-v4-pro-0813', { inputTokens: 1e6, outputTokens: 1e6 }),
+    ).toBeCloseTo(4.47, 5);
+  });
+
+  it('prices xAI Grok models from the published list, not the unknown-model fallback', () => {
+    const XAI = 'https://api.x.ai/v1';
+    expect(priceOf('grok-4.7', XAI)).toMatchObject({ inputPerMTok: 2, outputPerMTok: 6 });
+    expect(priceOf('grok-4.6', XAI)).toMatchObject({ inputPerMTok: 2, outputPerMTok: 6 });
+    expect(priceOf('grok-4.3', XAI)).toMatchObject({ inputPerMTok: 1.25, outputPerMTok: 2.5 });
+    expect(priceOf('x-ai/grok-4.7', OPENROUTER)).toMatchObject({ inputPerMTok: 2 });
+    // 10k in at $2 + 2k out at $6.
+    expect(costUsd('grok-4.7', { inputTokens: 10_000, outputTokens: 2_000 }, XAI)).toBeCloseTo(
+      0.032,
+      6,
+    );
   });
 });

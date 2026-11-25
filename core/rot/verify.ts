@@ -1,5 +1,13 @@
 import { createHash } from 'node:crypto';
-import { accessSync, constants, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import {
+  accessSync,
+  constants,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { isSelfOwned, tightenPrivateFile } from '../config/private-fs.js';
 
@@ -174,7 +182,11 @@ export function hardeningHolds(
     return { holds: false, why: `questo processo può scrivere ${relative(homeDir, path) || path}` };
   }
   return myUid === undefined
-    ? { holds: true, caveat: 'uid probe non disponibile su questa piattaforma: verificata solo la scrivibilità attuale (W_OK), non la proprietà — vedi ADR-0003' }
+    ? {
+        holds: true,
+        caveat:
+          'uid probe non disponibile su questa piattaforma: verificata solo la scrivibilità attuale (W_OK), non la proprietà — vedi ADR-0003',
+      }
     : { holds: true };
 }
 
@@ -232,10 +244,18 @@ export function verify(homeDir: string, mode: RotMode): VerifyOutcome {
   });
 
   if (!existsSync(manifestPath)) {
-    return fail('manifest_missing', [], 'run `muffin rot reseal` to rebuild it from the current files');
+    return fail(
+      'manifest_missing',
+      [],
+      'no leftover manifest — fine under ADR-0108; rot/ files are owner configuration and bind on the next load',
+    );
   }
   if (!existsSync(anchorPath)) {
-    return fail('anchor_missing', [], 'run `muffin rot reseal`');
+    return fail(
+      'anchor_missing',
+      [],
+      'no leftover anchor — fine under ADR-0108; rot/ files bind on the next load',
+    );
   }
 
   const serialized = readFileSync(manifestPath, 'utf8');
@@ -244,13 +264,17 @@ export function verify(homeDir: string, mode: RotMode): VerifyOutcome {
     return fail(
       'anchor_mismatch',
       [MANIFEST],
-      'the manifest changed without resealing — inspect it, then `muffin rot reseal` if the change was yours',
+      'leftover manifest and anchor diverged — inspect them if you want; edits to rot/ still bind, and there is nothing to reseal (ADR-0108)',
     );
   }
 
   const manifest = JSON.parse(serialized) as RotManifest;
   if (manifest.schemaVersion !== 1) {
-    return fail('files_diverged', [MANIFEST], `unknown manifest schemaVersion ${manifest.schemaVersion}`);
+    return fail(
+      'files_diverged',
+      [MANIFEST],
+      `unknown manifest schemaVersion ${manifest.schemaVersion}`,
+    );
   }
 
   const diverged: string[] = [];
@@ -260,13 +284,14 @@ export function verify(homeDir: string, mode: RotMode): VerifyOutcome {
     if (!existsSync(full) || sha256(readFileSync(full)) !== expected) diverged.push(path);
   }
   // A file added to the RoT without resealing is as much a divergence as an edit.
-  for (const path of listRotFiles(rotDir)) if (!declared.has(path)) diverged.push(`${path} (untracked)`);
+  for (const path of listRotFiles(rotDir))
+    if (!declared.has(path)) diverged.push(`${path} (untracked)`);
 
   if (diverged.length > 0) {
     return fail(
       'files_diverged',
       diverged,
-      'inspect the listed files, then `muffin rot reseal` if the change was yours',
+      'listed rot/ files differ from the leftover manifest — that is an owner edit, and it binds on the next load; there is nothing to reseal (ADR-0108)',
     );
   }
 

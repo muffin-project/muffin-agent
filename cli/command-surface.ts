@@ -41,6 +41,13 @@ export const COMMANDS: readonly CommandSpec[] = [
     primary: true,
   },
   {
+    name: 'fallback',
+    summary: 'ripieghi in ordine quando il provider principale si ferma',
+    audience: 'owner',
+    primary: true,
+    subcommands: ['add', 'remove', 'reset'],
+  },
+  {
     name: 'workspace',
     summary: 'dichiara il progetto in cui lavorano i turni',
     audience: 'owner',
@@ -101,9 +108,9 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'restore', summary: 'ripristino esplicito da backup', audience: 'recovery' },
   {
     name: 'rot',
-    summary: 'Root of Trust: verifica e reseal',
+    summary: 'Configurazione in rot/: verifica e migrazione dei default',
     audience: 'recovery',
-    subcommands: ['verify', 'reseal'],
+    subcommands: ['verify', 'migrate'],
   },
   { name: 'uninstall', summary: 'rimuove la Home dopo conferma', audience: 'recovery' },
   {
