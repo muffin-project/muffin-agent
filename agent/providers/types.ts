@@ -116,7 +116,14 @@ export type ContentBlock =
   | { type: 'text'; text: string; cache?: 'stable' }
   | ImageBlock
   | AudioBlock
-  | { type: 'tool_result'; toolCallId: string; content: string; isError?: boolean }
+  | {
+      type: 'tool_result';
+      toolCallId: string;
+      content: string;
+      isError?: boolean;
+      /** Durable harness link. Provider adapters only render the tool result. */
+      deferredApprovalId?: string;
+    }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | ThinkingBlock;
 
@@ -188,6 +195,8 @@ export type Message = {
    * explicitly and ignore this field.
    */
   origin?: MessageOrigin;
+  /** Redacted sender-authored input for permission checks. Kept in the checkpoint and omitted from provider requests. */
+  authoredText?: string;
 };
 
 export type ToolSpec = {

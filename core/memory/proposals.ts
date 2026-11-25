@@ -52,6 +52,8 @@ export type ProposeInput = {
   producer: ProposalProducer;
   /** At least one episode id, owned by this tenant. Never empty. */
   sourceEpisodeIds: number[];
+  /** Set by the authenticated ingress verifier for an owner-stated proposal. */
+  ownerIngressEpisodeId?: number | undefined;
   /** Runtime-derived floor from the current prompt, never from model arguments. */
   contextTier?: TrustTier;
   /** The candidate sentence, shown to the judge as the incoming evidence. */
@@ -74,6 +76,7 @@ export type MemoryProposal = {
   validFrom: string | null;
   producer: ProposalProducer;
   sourceEpisodeIds: number[];
+  ownerIngressEpisodeId: number | null;
   content: string;
   trustTier: TrustTier;
   confidence: number;
@@ -102,19 +105,21 @@ export function proposalIdentityKey(input: {
   validFrom?: string | null;
   producer: ProposalProducer;
   sourceEpisodeIds: number[];
+  ownerIngressEpisodeId?: number | undefined;
 }): string {
   const norm = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, ' ');
   const episodes = [...new Set(input.sourceEpisodeIds)].sort((a, b) => a - b);
   // Encode the semantic tuple as JSON rather than joining fields with a
   // delimiter that candidate text itself may contain.
   return JSON.stringify([
-    'v1',
+    input.ownerIngressEpisodeId === undefined ? 'v1' : 'v2',
     norm(input.subject),
     norm(input.predicate),
     norm(input.object),
     input.validFrom?.trim() || null,
     input.producer,
     episodes,
+    ...(input.ownerIngressEpisodeId === undefined ? [] : [input.ownerIngressEpisodeId]),
   ]);
 }
 
@@ -172,6 +177,12 @@ export function proposeMemoryRecord(
       'memory_propose: at least one source evidence episode is required — a belief without provenance is not staged.',
     );
   }
+  if (
+    input.ownerIngressEpisodeId !== undefined &&
+    (input.producer !== 'owner-stated' || !episodeIds.includes(input.ownerIngressEpisodeId))
+  ) {
+    throw new Error('memory_propose: the authenticated ingress must be an owner-stated source.');
+  }
   // Tenant-owned, or it is not evidence this tenant may build on. Read before
   // writing: a proposal citing a foreign episode must fail here, not at
   // reconcile, where the failure would look like a judgment.
@@ -193,6 +204,7 @@ export function proposeMemoryRecord(
       validFrom,
       producer: input.producer,
       sourceEpisodeIds: episodeIds,
+      ownerIngressEpisodeId: input.ownerIngressEpisodeId,
     }),
     subject,
     subjectKind: input.subjectKind?.trim() || 'person',
@@ -201,6 +213,7 @@ export function proposeMemoryRecord(
     validFrom,
     producer: input.producer,
     sourceEpisodeIds: episodeIds,
+    ownerIngressEpisodeId: input.ownerIngressEpisodeId,
     content: input.content,
     trustTier: tier,
     confidence: input.confidence,

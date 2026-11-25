@@ -120,7 +120,7 @@ describe('restoreFrom — refusals first, escape hatch always', () => {
     // a semantic compatibility marker. All nine still run and stamp.
     // Migration 11 (todos.armed_turn_id) no-ops here too — no `todos` table —
     // and still stamps, like the rest.
-    expect(applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
   });
 
   it('refuses while the gateway is alive', () => {
@@ -259,17 +259,27 @@ describe('backupNow — hot matrix: populated DB while another process writes (#
     return JSON.stringify(db.prepare(`SELECT id, body FROM notes ORDER BY id`).all());
   }
 
-  function expectConsistentSnapshot(snap: DatabaseCtor.Database, label: string): { n: number; json: string } {
+  function expectConsistentSnapshot(
+    snap: DatabaseCtor.Database,
+    label: string,
+  ): { n: number; json: string } {
     expect(snap.pragma('quick_check', { simple: true }), `${label}: quick_check`).toBe('ok');
     const rows = snap.prepare(`SELECT id, body FROM notes ORDER BY id`).all() as Array<{
       id: number;
       body: string;
     }>;
-    expect(rows.length, `${label}: rows within the writer's run`).toBeGreaterThanOrEqual(SEED_ROWS + READY_AFTER);
-    expect(rows.length, `${label}: rows within the writer's run`).toBeLessThanOrEqual(SEED_ROWS + WRITE_ROWS);
+    expect(rows.length, `${label}: rows within the writer's run`).toBeGreaterThanOrEqual(
+      SEED_ROWS + READY_AFTER,
+    );
+    expect(rows.length, `${label}: rows within the writer's run`).toBeLessThanOrEqual(
+      SEED_ROWS + WRITE_ROWS,
+    );
     rows.forEach((r, i) => {
       expect(r.id, `${label}: id prefix without gaps`).toBe(i + 1);
-      expect(r.body.startsWith('riga-') || r.body.startsWith('w-'), `${label}: well-formed body`).toBe(true);
+      expect(
+        r.body.startsWith('riga-') || r.body.startsWith('w-'),
+        `${label}: well-formed body`,
+      ).toBe(true);
     });
     return { n: rows.length, json: JSON.stringify(rows) };
   }
@@ -312,13 +322,19 @@ describe('backupNow — hot matrix: populated DB while another process writes (#
       });
       const exited = new Promise<number | null>((resolve) => child?.on('exit', resolve));
       const timeout = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('writer never signalled READY — fixture broken')), 15_000).unref();
+        setTimeout(
+          () => reject(new Error('writer never signalled READY — fixture broken')),
+          15_000,
+        ).unref();
       });
       await Promise.race([ready, timeout, exited.then(() => timeout)]);
 
       // The overlap is asserted, not assumed: if the writer already finished,
       // this would be a sequential test wearing a concurrent name.
-      expect(child.exitCode, 'the writer must still be running when the first backup starts').toBeNull();
+      expect(
+        child.exitCode,
+        'the writer must still be running when the first backup starts',
+      ).toBeNull();
 
       // Distinct production `now` values: three VACUUM INTO runs land
       // milliseconds apart and the filename carries the moment.
@@ -335,7 +351,10 @@ describe('backupNow — hot matrix: populated DB while another process writes (#
         // At least the first backup must land while the writer is alive; the
         // later ones may or may not, which is fine — they are still validated.
         if (i === 0) {
-          expect(child.exitCode, 'the writer must still be running after the first backup').toBeNull();
+          expect(
+            child.exitCode,
+            'the writer must still be running after the first backup',
+          ).toBeNull();
         }
       }
 
@@ -348,9 +367,9 @@ describe('backupNow — hot matrix: populated DB while another process writes (#
       // `database is locked` on its `journal_mode` pragma.
       const finalCount = new DatabaseCtor(dbPath, { readonly: true });
       try {
-        expect((finalCount.prepare(`SELECT count(*) AS n FROM notes`).get() as { n: number }).n).toBe(
-          SEED_ROWS + WRITE_ROWS,
-        );
+        expect(
+          (finalCount.prepare(`SELECT count(*) AS n FROM notes`).get() as { n: number }).n,
+        ).toBe(SEED_ROWS + WRITE_ROWS);
       } finally {
         finalCount.close();
       }
@@ -367,7 +386,9 @@ describe('backupNow — hot matrix: populated DB while another process writes (#
       const restored = new DatabaseCtor(dbPath, { readonly: true });
       try {
         expect(dump(restored), 'restored content equals the snapshot').toBe(snaps[1]!.json);
-        expect(restored.prepare(`SELECT count(*) AS n FROM notes WHERE body = 'da-perdere'`).get()).toEqual({ n: 0 });
+        expect(
+          restored.prepare(`SELECT count(*) AS n FROM notes WHERE body = 'da-perdere'`).get(),
+        ).toEqual({ n: 0 });
         expect(schemaVersionOf(restored)).toBe(currentSchemaVersion());
       } finally {
         restored.close();

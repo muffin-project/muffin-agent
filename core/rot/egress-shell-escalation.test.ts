@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { runInit } from '../../cli/init.js';
-import { capability } from '../../test-support/requires.js';
+import { capability, withReason } from '../../test-support/requires.js';
 import { paths } from '../config/config.js';
 import { SandboxExecutor } from '../sandbox/executor.js';
 import { mandatoryGuards } from './guards.js';
@@ -68,7 +68,7 @@ describe('la suite di contenimento dichiara se è girata', () => {
     }
     if (containmentRequired) {
       throw new Error(
-        `MUFFIN_REQUIRE_SANDBOX=1 e nessun contenimento reale è girato qui — ${gate.why}.`,
+        `sandbox richiesta (MUFFIN_REQUIRE_CAPABILITIES) e nessun contenimento reale è girato qui — ${gate.why}.`,
       );
     }
     console.warn(`[sandbox] contenimento reale SALTATO — ${gate.why}`);
@@ -141,7 +141,7 @@ function parsePtyProbe(code: number | null, stdout: string, stderr: string): Pty
 }
 
 describe.runIf(gate.run)(
-  `sys.shell non può allargare l egress (contenimento reale — ${gate.why})`,
+  withReason('sys.shell non può allargare l egress (contenimento reale)', sandboxCap),
   () => {
     const base = mkdtempSync(join(tmpdir(), 'muffin-shell-escalation-'));
     const home = join(base, 'home');
@@ -198,7 +198,7 @@ describe.runIf(gate.run)(
      * `openpty`, o l'ambiente non ha `python3`) il test si salta esplicitamente
      * — `t.skip()`, non un `return` silenzioso, quindi compare come "saltato"
      * e non come "passato" nel report — con la ragione stampata. Sotto
-     * `MUFFIN_REQUIRE_SANDBOX=1` (il runner Linux di CI) uno skip diventa un
+     * `MUFFIN_REQUIRE_CAPABILITIES=sandbox,…` (il runner Linux di CI) uno skip diventa un
      * fallimento: lì un pty deve potersi allocare, perché è la piattaforma su
      * cui questa proprietà deve essere vera.
      */
@@ -221,7 +221,7 @@ describe.runIf(gate.run)(
             : esito.reason;
         if (containmentRequired) {
           throw new Error(
-            `MUFFIN_REQUIRE_SANDBOX=1 e nessun pty è stato allocato qui — ${motivo}. Su questo runner deve potersi.`,
+            `sandbox richiesta (MUFFIN_REQUIRE_CAPABILITIES) e nessun pty è stato allocato qui — ${motivo}. Su questo runner deve potersi.`,
           );
         }
         console.warn(`[sandbox] prova col pty SALTATA — ${motivo}`);

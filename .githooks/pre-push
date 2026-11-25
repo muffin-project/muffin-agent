@@ -1,18 +1,57 @@
 #!/usr/bin/env bash
 #
 # Feedback locale veloce prima del push. Non è un gate: l'integrazione la
-# autorizzano solo i check GitHub richiesti (CONTRIBUTING.md). Attivazione,
-# una volta per clone:
+# autorizzano solo i check GitHub richiesti (CONTRIBUTING.md, "Controlli
+# locali e CI"). Attivazione, una volta per clone:
 #
 #   git config core.hooksPath .githooks
 #
-# Bypass: MUFFIN_SKIP_HOOKS=1 git push …
+# Budget: circa 90 s tipici, tetto 3 min. Ogni passo stampa la sua durata.
+#
+# Il hook non si salta: niente variabile di bypass, niente `--no-verify`. Se
+# fallisce per una causa estranea alla modifica, si apre una issue e si
+# corregge la causa (o l'etichetta di capacità del test).
 set -euo pipefail
 
-if [ "${MUFFIN_SKIP_HOOKS:-}" = "1" ]; then
-  echo "pre-push: saltato (MUFFIN_SKIP_HOOKS=1)"
-  exit 0
-fi
+# Git esporta GIT_DIR e simili agli hook (assoluto, da un worktree collegato).
+# I test che lanciano `git init/config/commit` in una directory temporanea li
+# erediterebbero e scriverebbero nel repository vero (#1032). La documentazione
+# di githooks dice di pulirli prima di usare Git altrove. Da qui in poi Git
+# ritrova il repository dalla directory corrente, che per un hook è la radice
+# del working tree.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
+
+# `node` e non `date +%s%3N`: il `date` di macOS (BSD) non conosce `%N`.
+ora_ms() { node -e 'process.stdout.write(String(Date.now()))'; }
+inizio_hook=$(ora_ms)
+passo() {
+  local nome="$1"
+  shift
+  local t0
+  t0=$(ora_ms)
+  echo "pre-push: $nome"
+  # L'esito si cattura invece di affidarlo a `set -e`: dentro un `|| …` bash
+  # lo sospende, e un passo rosso tornerebbe 0 dopo l'eco della durata.
+  local rc=0
+  "$@" || rc=$?
+  local ms=$(( $(ora_ms) - t0 ))
+  echo "pre-push: $nome — $((ms / 1000)),$((ms % 1000 / 100)) s (exit $rc)"
+  return "$rc"
+}
+
+report_dir=""
+fine() {
+  # Anche su interruzione: la cartella del report non resta in TMPDIR.
+  if [ -n "$report_dir" ]; then rm -rf "$report_dir"; fi
+  local totale=$(( ($(ora_ms) - inizio_hook) / 1000 ))
+  echo "pre-push: totale ${totale} s (budget: ~90 s tipici, tetto 180 s)"
+  if [ "$totale" -gt 180 ]; then
+    echo "pre-push: ATTENZIONE — oltre il tetto di 180 s: segnalalo, il hook va snellito"
+  fi
+}
+trap fine EXIT
+trap 'exit 130' INT TERM
 
 base_ref=""
 for ref in origin/dev origin/main; do
@@ -22,8 +61,7 @@ for ref in origin/dev origin/main; do
   fi
 done
 
-echo "pre-push: typecheck (tsc --noEmit)"
-npx tsc --noEmit
+passo "typecheck (tsc --noEmit)" npx tsc --noEmit
 
 if [ -z "$base_ref" ]; then
   echo "pre-push: nessun origin/dev o origin/main da confrontare; salto lint e test"
@@ -36,8 +74,24 @@ if [ -z "$changed" ]; then
   exit 0
 fi
 
-echo "pre-push: lint dei file cambiati rispetto a $base_ref"
-npx biome check --changed --since="$base_ref" --no-errors-on-unmatched
+passo "lint dei file cambiati rispetto a $base_ref" \
+  npx biome check --changed --since="$base_ref" --no-errors-on-unmatched
 
-echo "pre-push: test toccati dai cambi rispetto a $base_ref"
-npx vitest run --changed "$base_ref" --reporter=dot --passWithNoTests
+# I test che richiedono una capacità che questa macchina non ha (sandbox con
+# AppArmor, systemd-analyze, plutil) saltano con il motivo nel nome; la CI li
+# esegue e fallisce se mancano. Il riepilogo qui sotto li conta, così un verde
+# locale dice anche cosa non ha provato.
+# Una directory e non `mktemp …XXXXXX.json`: il mktemp di macOS sostituisce
+# solo le X finali.
+report_dir="$(mktemp -d "${TMPDIR:-/tmp}/muffin-pre-push.XXXXXX")"
+report="$report_dir/vitest.json"
+stato=0
+passo "test toccati dai cambi rispetto a $base_ref" \
+  npx vitest run --changed "$base_ref" --reporter=dot --reporter=json \
+  --outputFile.json="$report" --passWithNoTests || stato=$?
+if [ -s "$report" ]; then
+  echo "pre-push: riepilogo dei test marcati per capacità (saltati qui, eseguiti in CI)"
+  npx tsx scripts/test-capability-report.ts "$report" || true
+fi
+rm -rf "$report_dir"
+exit "$stato"

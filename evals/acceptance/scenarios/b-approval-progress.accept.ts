@@ -14,8 +14,10 @@ itConSandbox(
     const command = 'printf "%s\\n" "$((19 + 23))" | tee shell-calculation.txt';
     const call = { tool: { name: 'shell_run_write', args: { command, cwd: '.' } } };
     const reply = 'The calculation is complete.';
+    // Consent runs the saved call itself (ADR-0109), so the resumed provider
+    // replies without reissuing it; a reissue would ask a new approval.
     const inst = await install({
-      main: [call, call, { text: reply }],
+      main: [call, { text: reply }],
       env: { MUFFIN_GATEWAY_TICK_MS: '200' },
     });
     const telegram = await startFakeTelegram();

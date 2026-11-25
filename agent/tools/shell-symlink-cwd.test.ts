@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { SandboxExecutor } from '../../core/sandbox/executor.js';
-import { capability } from '../../test-support/requires.js';
+import { capability, withReason } from '../../test-support/requires.js';
 import { toolContext } from '../fixtures/tool-context.js';
 import { makeShellTool, makeShellWriteTool } from './shell.js';
 
@@ -50,7 +50,7 @@ describe('B1 prova dichiarata: o gira, o lo skip è dichiarato', () => {
     }
     if (containmentRequired) {
       throw new Error(
-        `MUFFIN_REQUIRE_SANDBOX=1 e nessun contenimento reale è girato su questo host — ${gate.why}.`,
+        `sandbox richiesta (MUFFIN_REQUIRE_CAPABILITIES) e nessun contenimento reale è girato su questo host — ${gate.why}.`,
       );
     }
     console.warn(`[sandbox] symlinked-cwd NON provato — ${gate.why}`);
@@ -58,7 +58,7 @@ describe('B1 prova dichiarata: o gira, o lo skip è dichiarato', () => {
   });
 });
 
-describe.runIf(gate.run)(`B1: un cwd symlink verso fuori non legge (${gate.why})`, () => {
+describe.runIf(gate.run)(withReason('B1: un cwd symlink verso fuori non legge', sandboxCap), () => {
   const base = mkdtempSync(join(tmpdir(), 'muffin-symlink-cwd-'));
   const workspace = join(base, 'workspace');
   const outside = join(base, 'outside');

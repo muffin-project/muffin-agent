@@ -15,7 +15,7 @@ import { audioAccettato, immagineAccettata } from '../agent/providers/modalita.j
 import { speaksReasoningEffort, wantsExplicitCache } from '../agent/providers/openai-compat.js';
 import { type VerificationResult, verifyInferenceRoute } from '../agent/providers/verify.js';
 import { baseToolOrder } from '../agent/runtime.js';
-import { diagnoseSearch } from '../agent/tools/search.js';
+import { diagnoseConfiguredSearch } from '../agent/search-readiness.js';
 import { type Prerequisito, prerequisitiTrascrizione } from '../core/audio/trascrivi.js';
 import { ChatGPTConnection } from '../core/config/chatgpt-oauth.js';
 import {
@@ -1542,7 +1542,9 @@ export async function runDoctor(
   } catch {
     egressPerRicerca = { allow: [] };
   }
-  const ricerca = diagnoseSearch(config, egressPerRicerca, (ref) => readSecret(ref, home));
+  const ricerca = diagnoseConfiguredSearch(config, egressPerRicerca, home, (ref) =>
+    readSecret(ref, home),
+  );
   if (config.search !== undefined) {
     if (ricerca.on) {
       ok('capacità: web_search', `${ricerca.backend.id} — attivo`);

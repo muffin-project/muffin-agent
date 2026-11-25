@@ -112,6 +112,8 @@ export type ToolContext = {
    * percorso. Non chiude la finestra per magia — la rende una finestra sola.
    */
   effectPath?: string;
+  /** Canonical scope of an exact deferred approval being applied. */
+  approvedScope?: string;
   /**
    * Arm the runtime's suspension barrier.
    *
@@ -531,6 +533,8 @@ export type RegisteredTool = {
    * nessun undo (vedi il paragrafo sopra). `fs.ts` lo ignora, come faceva.
    */
   resolveEffectPath?: (args: Record<string, unknown>, ctx: ToolContext) => string;
+  /** Verify an exact deferred approval resource without doing the operation. */
+  approvalScope?: (args: unknown) => string;
 };
 
 export type LoopDeps = {
@@ -784,6 +788,8 @@ export type TurnInput = {
    * not authority; policy still evaluates the principal, taint, and capability.
    */
   inputOrigin?: 'owner' | 'external';
+  /** The sender's own words when a surface supplies separately attributed context. An empty string means none. */
+  authoredText?: string;
   /**
    * Le immagini che questo turno porta con sé, già caricate (`agent/images.ts`).
    *

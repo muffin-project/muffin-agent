@@ -294,6 +294,8 @@ describe('a permanent failure stays down and says so', () => {
 
 /** Il parser vero, misurato una volta per run dal globalSetup. */
 const systemdAnalyze = capability('systemd-analyze');
+/** Il parser dei plist, solo su macOS. */
+const plutil = capability('plutil');
 
 describe('la unit systemd passa il parser di systemd', () => {
   /**
@@ -405,11 +407,11 @@ describe('the launchd agent', () => {
     expect(p.text).not.toContain('/Users/a&b/.muffin');
   });
 
-  it('produces a plist the system itself accepts', () => {
-    // Only on the machine that has the parser. A hand-checked plist is how you
-    // ship one launchd rejects at load time, and this repo's rule is to execute
-    // the check rather than assume it.
-    if (process.platform !== 'darwin') return;
+  // Only on the machine that has the parser. A hand-checked plist is how you
+  // ship one launchd rejects at load time, and this repo's rule is to execute
+  // the check rather than assume it. It used to `return` off macOS and count as
+  // passed; now it skips and the name says why.
+  it.skipIf(!plutil.ok)(withReason('produces a plist the system itself accepts', plutil), () => {
     const dir = mkdtempSync(join(tmpdir(), 'muffin-plist-'));
     const file = join(dir, 'muffin.plist');
     writeFileSync(file, mac().text);
