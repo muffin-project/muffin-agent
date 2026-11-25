@@ -52,36 +52,31 @@ describe('rot/owner.json — lettura e precedenza', () => {
     expect(telegramOwner(sealed, { ownerUserId: 111, ownerChatId: 111 })).toEqual({ userId: 999, chatId: 999 });
   });
 
-  it('un legame sigillato e poi modificato non autentica nessuno, e non retrocede su config.json', () => {
+  it('un owner.json valido vince su config.json anche dopo un edit a mano (ADR-0108, niente sigillo)', () => {
     const dir = casa();
     sealOwnerBinding(dir, { telegram: { userId: 999, chatId: 999 } }, { out });
-    // La manomissione: lo stesso file, un altro owner, nessun reseal.
     writeFileSync(join(dir, 'rot', OWNER_FILE), JSON.stringify({ schemaVersion: 1, telegram: { userId: 111, chatId: 111 } }));
 
     const sealed = loadSealedOwner(dir);
-    expect(sealed.source).toBe('refused');
-    expect(sealed.note).toMatch(/non corrisponde al sigillo/);
-    expect(telegramOwner(sealed, { ownerUserId: 111, ownerChatId: 111 })).toEqual({});
-    expect(discordOwner(sealed, { ownerUserId: '111' })).toEqual({});
+    expect(sealed.source).toBe('sealed');
+    expect(telegramOwner(sealed, { ownerUserId: 999, ownerChatId: 999 })).toEqual({ userId: 111, chatId: 111 });
+    expect(discordOwner(sealed, { ownerUserId: '111' })).toEqual({ userId: '111' });
   });
 
-  it('un legame sigillato e poi cancellato non fa tornare buono config.json', () => {
-    // La mossa ovvia per chi può scrivere come l'owner: togli il file
-    // sigillato e lascia parlare quello ordinario.
+  it('senza owner.json il legame torna legacy su config.json (ADR-0108)', () => {
     const dir = casa();
     sealOwnerBinding(dir, { telegram: { userId: 999, chatId: 999 } }, { out });
     rmSync(join(dir, 'rot', OWNER_FILE));
 
     const sealed = loadSealedOwner(dir);
-    expect(sealed.source).toBe('refused');
-    expect(telegramOwner(sealed, { ownerUserId: 111, ownerChatId: 111 })).toEqual({});
+    expect(sealed.source).toBe('legacy');
+    expect(telegramOwner(sealed, { ownerUserId: 111, ownerChatId: 111 })).toEqual({ userId: 111, chatId: 111 });
   });
 
-  it('un manifest riscritto per coprire la manomissione non passa: decide l\'anchor', () => {
+  it('un manifest o un anchor divergenti non nascondono un owner.json valido (ADR-0108)', () => {
     const dir = casa();
     sealOwnerBinding(dir, { telegram: { userId: 999, chatId: 999 } }, { out });
     writeFileSync(join(dir, 'rot', OWNER_FILE), JSON.stringify({ schemaVersion: 1, telegram: { userId: 111, chatId: 111 } }));
-    // Ri-sigilla senza l'anchor: è ciò che può fare chi non possiede la home.
     const manifest = JSON.parse(readFileSync(join(dir, 'rot', 'manifest.json'), 'utf8')) as {
       files: { path: string; sha256: string }[];
     };
@@ -89,18 +84,16 @@ describe('rot/owner.json — lettura e precedenza', () => {
     writeFileSync(join(dir, 'rot', 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 
     const sealed = loadSealedOwner(dir);
-    expect(sealed.source).toBe('refused');
-    expect(sealed.note).toMatch(/anchor|non è più confermato/);
+    expect(sealed.source).toBe('sealed');
+    expect(telegramOwner(sealed, undefined)).toEqual({ userId: 111, chatId: 111 });
   });
 
-  it('un owner.json scritto senza risigillare viene ignorato, e lo dice', () => {
+  it('un owner.json scritto a mano è vincolante senza reseal (ADR-0108)', () => {
     const dir = casa();
     writeFileSync(join(dir, 'rot', OWNER_FILE), JSON.stringify({ schemaVersion: 1, telegram: { userId: 111, chatId: 111 } }));
     const sealed = loadSealedOwner(dir);
-    expect(sealed.source).toBe('legacy');
-    expect(sealed.note).toMatch(/non è dentro il sigillo/);
-    // E `verify()` lo vede comunque come intruso: le due difese sono separate.
-    expect(verify(dir, 'single-user').ok).toBe(false);
+    expect(sealed.source).toBe('sealed');
+    expect(telegramOwner(sealed, { ownerUserId: 999, ownerChatId: 999 })).toEqual({ userId: 111, chatId: 111 });
   });
 
   it('un legame sigillato ma con la forma sbagliata è rifiutato, non ignorato', () => {
@@ -151,17 +144,14 @@ describe('rot/owner.json — scrittura', () => {
     expect(sealed.binding).toMatchObject({ telegram: { userId: 999 }, discord: { userId: '222' } });
   });
 
-  it('non risigilla sopra una divergenza che l\'owner non ha confermato', () => {
-    // `seal()` ricalcola gli hash di *tutti* i file: risigillare qui
-    // laverebbe la modifica a identity.md dietro un atto chiesto per altro.
+  it('un edit a identity.md non blocca la scrittura di owner.json (ADR-0108)', () => {
     const dir = casa();
     writeFileSync(join(dir, 'rot', 'identity.md'), '# sono qualcun altro\n');
     righe.length = 0;
     const esito = sealOwnerBinding(dir, { telegram: { userId: 999, chatId: 999 } }, { out });
-    expect(esito.ok).toBe(false);
-    expect(existsSync(join(dir, 'rot', OWNER_FILE))).toBe(false);
-    expect(righe.join('\n')).toMatch(/NON sigillato/);
-    expect(righe.join('\n')).toMatch(/identity\.md/);
+    expect(esito.ok).toBe(true);
+    expect(existsSync(join(dir, 'rot', OWNER_FILE))).toBe(true);
+    expect(loadSealedOwner(dir).binding?.telegram).toEqual({ userId: 999, chatId: 999 });
   });
 
   it('un rot/ non scrivibile non produce un successo finto: dice il rimedio esatto', () => {
@@ -184,7 +174,7 @@ describe('rot/owner.json — scrittura', () => {
       expect(detto).toMatch(/permesso negato/);
       // Il rimedio è copiabile: il file, il contenuto esatto e il comando.
       expect(detto).toContain('owner.json');
-      expect(detto).toContain('muffin rot reseal');
+      expect(detto).toContain('muffin rot migrate');
     } finally {
       chmodSync(join(dir, 'rot'), 0o755);
     }

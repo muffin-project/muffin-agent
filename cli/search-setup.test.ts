@@ -208,7 +208,7 @@ describe('muffin search', () => {
     const egress = JSON.parse(readFileSync(join(paths(h).rot, 'egress.json'), 'utf8'));
     expect(egress.allow).toEqual([]);
     expect(out.join('\n')).toContain('nessun terminale interattivo');
-    expect(out.join('\n')).toContain('muffin rot reseal');
+    expect(out.join('\n')).toContain('riavvia');
   });
 
   it('l owner dice no alla domanda: niente allargato, la config resta, e l exit code non è 0', async () => {

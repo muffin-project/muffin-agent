@@ -324,7 +324,7 @@ export function diagnoseSearch(
         capability: 'web_search',
         kind: 'disabled',
         reason: `${endpointHost} non è in rot/egress.json`,
-        remedy: `aggiungi ${endpointHost} a rot/egress.json e rifai \`muffin rot reseal\``,
+        remedy: `aggiungi ${endpointHost} a rot/egress.json e riavvia`,
       },
     };
   }

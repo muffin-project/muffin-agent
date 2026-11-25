@@ -200,8 +200,8 @@ async function allowlist(inst: Install, host: string): Promise<void> {
     `${JSON.stringify({ schemaVersion: 1, allow: [host] }, null, 2)}\n`,
     'utf8',
   );
-  const r = await inst.muffin(['rot', 'reseal']);
-  if (r.code !== 0) throw new Error(`rot reseal: exit ${r.code}\n${r.err}`);
+  // ADR-0108: editing egress.json is enough; the retired reseal command
+  // would exit 78 and is no longer part of this setup.
 }
 
 const orologio = () => {

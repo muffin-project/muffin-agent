@@ -188,8 +188,9 @@ describe('muffin adopt — cosa si rifiuta di fare', () => {
 
     const r = run(h, checkout, ['rot/identity.md']);
     expect(r.code).toBe(1);
-    expect(r.out).toContain('safe mode');
-    expect(r.out).toContain('muffin rot reseal');
+    expect(r.out).toContain('muffin rot migrate');
+    expect(r.out).not.toContain('safe mode');
+    expect(r.out).not.toContain('muffin rot reseal');
     expect(readFileSync(join(h, 'rot', 'identity.md'), 'utf8')).toBe('v1 identity\n');
   });
 
@@ -201,7 +202,8 @@ describe('muffin adopt — cosa si rifiuta di fare', () => {
     const r = run(h, checkout, ['--tutto']);
     expect(readFileSync(join(h, 'rot', 'identity.md'), 'utf8')).toBe('v1 identity\n');
     expect(r.out).toContain('rot/identity.md');
-    expect(r.out).toContain('rot reseal');
+    expect(r.out).toContain('muffin rot migrate');
+    expect(r.out).not.toContain('rot reseal');
   });
 
   it('un file che non esiste in defaults/ e un errore, non un silenzio', () => {

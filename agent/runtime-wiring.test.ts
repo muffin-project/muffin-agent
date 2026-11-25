@@ -655,7 +655,7 @@ describe('the cap that binds comes from inside the seal', () => {
     expect(runtime.budget.status().monthlyCapUsd).toBe(80);
     // And the owner is told, at boot, that the number they had stopped counting.
     expect(runtime.bootLines.join('\n')).toContain('monthlyUsd 500');
-    expect(runtime.bootLines.join('\n')).toContain('rot reseal');
+    expect(runtime.bootLines.join('\n')).toContain('riavvia');
     runtime.close();
   });
 });

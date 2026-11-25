@@ -89,7 +89,7 @@ describe('widenEgressForCapability', () => {
     expect(testo).toContain('api.tavily.com');
     expect(testo).toContain('nessun terminale interattivo');
     expect(testo).toContain(join(paths(h).rot, 'egress.json'));
-    expect(testo).toContain('muffin rot reseal');
+    expect(testo).toContain('riavvia');
     // Il root of trust non si è mosso: verify resta pulito.
     expect(verify(h, 'single-user').ok).toBe(true);
   });
@@ -447,7 +447,7 @@ describe('widenEgressForCapability — permesso negato al risigillo', () => {
     // sembrare un unico percorso inesistente (`…/egress.json//tmp/…/manifest.json`).
     expect(testo).toContain(`rimettere ${egressPath} e ${manifestPath} come stavano prima`);
     expect(testo).not.toContain(`${egressPath}/${manifestPath}`);
-    expect(testo).toContain('muffin rot verify');
+    expect(testo).toContain('backups');
     // Il disco, a differenza del rollback riuscito sopra, NON è tornato
     // com'era: `egress.json` ha già il nuovo host e il tentativo di
     // rimetterlo com'era è quello che è fallito.

@@ -197,10 +197,8 @@ describe('muffin prompt show', () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it('reflects safe mode on stdout and stderr when the root of trust has diverged', () => {
+  it('does not enter safe mode when a rot/ file has been edited (ADR-0108)', () => {
     const home = bootHome();
-    // Tamper with a real sealed file, the same way A5's acceptance scenario
-    // does — never a fixture doctor was merely told about.
     const policyPath = join(paths(home).rot, 'policy.json');
     const original = readFileSync(policyPath, 'utf8');
     writeFileSync(
@@ -210,10 +208,8 @@ describe('muffin prompt show', () => {
 
     const { out, err, code } = capture(() => cmdPromptShow(home, []));
     expect(code).toBe(0);
-    expect(err).toContain('safe mode');
-    // The prompt shown is the one actually produced in this degraded state —
-    // not a description of safe mode bolted on afterwards.
-    expect(out).toContain('Modalità sicura');
+    expect(err).not.toMatch(/safe mode/i);
+    expect(out).not.toContain('Modalità sicura');
     rmSync(home, { recursive: true, force: true });
   });
 });
