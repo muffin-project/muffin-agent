@@ -70,7 +70,7 @@ export async function resumeApprovedInvocations(
       );
     } else {
       const call = { id: original.id, name: original.name, args: original.input };
-      result = await runTool(deps, snapshot, turn, call, input, exposed, toolContext, {
+      result = await runTool(deps, snapshot, turn, call, input, exposed, toolContext, undefined, {
         approvalId: approval.id,
         claimToken: record.claimToken,
       });

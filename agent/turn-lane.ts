@@ -164,12 +164,25 @@ export function makeLaneRunner(
 ): LaneRun {
   return async (turnId) => {
     const before = deps.turns.get(turnId);
-    if (before?.status === 'done' && before.jobId !== null) {
+    if (before?.status === 'done') {
+      const ownerFinal =
+        before.jobId === null && before.ownerQuestionFinal === true && before.replyTo !== null;
+      if (before.jobId === null && !ownerFinal) return { refused: 'turn already finished' };
       if (before.delivery !== 'pending') return { refused: 'delivery already reconciled' };
       const stopped = before.outcome ?? 'error';
       try {
-        const text = recoveredText(deps.sessions, before, { preserveEmptyAnswer: true });
-        if (text.trim() === '') mark(deps, turnId, null);
+        let text: string;
+        try {
+          text = recoveredText(deps.sessions, before, { preserveEmptyAnswer: true });
+        } catch (error) {
+          if (!ownerFinal) throw error;
+          // The connector may already have a frozen plan even if the session
+          // transcript is unreadable. Give it the chance to reconcile it.
+          text = 'Il turno è concluso, ma non ho potuto recuperare il testo della risposta.';
+        }
+        // A marked final always reaches the connector's journal, even when
+        // there is no recovered text. Only the connector knows if a plan exists.
+        if (!ownerFinal && text.trim() === '') mark(deps, turnId, null);
         else await sendAndRecord(deps, before, text, true);
       } catch (error) {
         mark(deps, turnId, `failed:${error instanceof Error ? error.message : String(error)}`);

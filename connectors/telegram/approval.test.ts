@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ApprovalRequest, ApprovalWhere } from '../../agent/loop.js';
-import { TelegramError, type TelegramApiLike } from './api.js';
+import { type TelegramApiLike, TelegramError } from './api.js';
 import { approvatoreTelegram, askHtml, askKeyboard, askPlain } from './approval.js';
 
 /**
@@ -28,21 +28,41 @@ const where: ApprovalWhere = {
   approvalId: 'aabbccdd',
 };
 
-function recordingApi(refuseRich = false): { api: TelegramApiLike; calls: { method: string; chatId: number; text: string; threadId?: unknown; keyboard?: unknown }[] } {
-  const calls: { method: string; chatId: number; text: string; threadId?: unknown; keyboard?: unknown }[] = [];
-  const record = (method: string, chatId: number, html: string, options?: { threadId?: unknown; keyboard?: unknown }): void => {
+function recordingApi(refuseRich = false) {
+  const calls: {
+    method: string;
+    chatId: number;
+    messageId: number;
+    text: string;
+    threadId?: unknown;
+    keyboard?: unknown;
+  }[] = [];
+  let nextMessageId = 700;
+  const record = (
+    method: string,
+    chatId: number,
+    html: string,
+    options?: { threadId?: unknown; keyboard?: unknown },
+  ): number => {
+    const messageId = nextMessageId++;
     calls.push({
       method,
       chatId,
+      messageId,
       text: html,
       ...(options?.threadId === undefined ? {} : { threadId: options.threadId }),
       ...(options?.keyboard === undefined ? {} : { keyboard: options.keyboard }),
     });
+    return messageId;
   };
   const api = {
-    sendMessage: async (chatId: number, html: string, options?: { threadId?: unknown; keyboard?: unknown }) => {
-      record('sendMessage', chatId, html, options);
-      return { message_id: calls.length, date: 0, chat: { id: chatId, type: 'private' } };
+    sendMessage: async (
+      chatId: number,
+      html: string,
+      options?: { threadId?: unknown; keyboard?: unknown },
+    ) => {
+      const message_id = record('sendMessage', chatId, html, options);
+      return { message_id, date: 0, chat: { id: chatId, type: 'private' } };
     },
     // La lane rich si registra come il suo gemello legacy: le asserzioni
     // restano sul testo visibile e sulla tastiera. Con `refuseRich` il
@@ -52,9 +72,14 @@ function recordingApi(refuseRich = false): { api: TelegramApiLike; calls: { meth
       rich: { html?: string; blocks?: unknown[] },
       options?: { threadId?: unknown; keyboard?: unknown },
     ) => {
-      record('sendRichMessage', chatId, rich.html ?? JSON.stringify(rich.blocks ?? []), options);
+      const message_id = record(
+        'sendRichMessage',
+        chatId,
+        rich.html ?? JSON.stringify(rich.blocks ?? []),
+        options,
+      );
       if (refuseRich) throw new TelegramError(400, 'Bad Request: ricco rifiutato (simulato)');
-      return { message_id: calls.length, date: 0, chat: { id: chatId, type: 'private' } };
+      return { message_id, date: 0, chat: { id: chatId, type: 'private' } };
     },
   } as unknown as TelegramApiLike;
   return { api, calls };
@@ -67,7 +92,9 @@ describe('askHtml / askPlain · le stesse parole, due rese', () => {
     expect(html).toContain('stampa la parola ciao');
     expect(html).toContain('echo ciao');
     expect(html).toContain('taint 2');
-    expect(html.indexOf('non si torna indietro')).toBeLessThan(html.indexOf('stampa la parola ciao'));
+    expect(html.indexOf('non si torna indietro')).toBeLessThan(
+      html.indexOf('stampa la parola ciao'),
+    );
     expect(html.indexOf('stampa la parola ciao')).toBeLessThan(html.indexOf('echo ciao'));
   });
 
@@ -88,6 +115,36 @@ describe('askHtml / askPlain · le stesse parole, due rese', () => {
 });
 
 describe('approvatoreTelegram · il ripiego, quando nessuna trascrizione può ospitarla', () => {
+  it.each(['first chunk', 'keyboard chunk'] as const)(
+    'keeps a split ask actionable only on loss of the %s',
+    async (loss) => {
+      const { api, calls } = recordingApi();
+      const send = api.sendMessage.bind(api);
+      const requestTooLong = { ...request, resource: 'x'.repeat(9000) };
+      const confirmed: number[] = [];
+      api.sendMessage = async (...args) => {
+        const receipt = await send(...args);
+        if (loss === 'first chunk' || args[2]?.keyboard !== undefined) {
+          throw new TelegramError(0, 'response lost after send');
+        }
+        return receipt;
+      };
+      const result = approvatoreTelegram(api, (m) => confirmed.push(m.messageId))(
+        requestTooLong,
+        where,
+      );
+      if (loss === 'first chunk') {
+        await expect(result).rejects.toThrow('response lost after send');
+        expect(calls).toHaveLength(1);
+        expect(calls[0]?.keyboard).toBeUndefined();
+      } else {
+        await expect(result).resolves.toBe('asked');
+        expect(calls.filter((c) => c.keyboard !== undefined)).toEqual([calls.at(-1)]);
+      }
+      expect(confirmed).toEqual([]);
+    },
+  );
+
   it('manda la domanda intera e mette la tastiera sull’ultimo pezzo', async () => {
     const { api, calls } = recordingApi();
     const esito = await approvatoreTelegram(api)(request, where);
@@ -151,11 +208,8 @@ describe('approvatoreTelegram · onAsked registra dove la domanda si è mostrata
     })(request, where);
 
     expect(esito).toBe('asked');
-    expect(viste).toHaveLength(1);
-    expect(viste[0]!.approvalId).toBe('aabbccdd');
-    expect(typeof viste[0]!.messageId).toBe('number');
-    // È il messaggio mandato davvero, non un numero inventato.
-    expect(calls.length).toBeGreaterThan(0);
+    expect(calls).toHaveLength(1);
+    expect(viste).toEqual([{ approvalId: where.approvalId, messageId: calls[0]!.messageId }]);
   });
 
   it('una domanda spezzata registra l’ultimo pezzo: è lì che sta la tastiera', async () => {
@@ -168,9 +222,9 @@ describe('approvatoreTelegram · onAsked registra dove la domanda si è mostrata
 
     expect(esito).toBe('asked');
     expect(calls.length).toBeGreaterThan(1);
-    expect(viste).toHaveLength(1);
     // L’ultimo pezzo è l’unico con la tastiera.
-    expect(calls.at(-1)!.keyboard).toBeDefined();
+    expect(calls.filter((c) => c.keyboard !== undefined)).toEqual([calls.at(-1)]);
+    expect(viste).toEqual([{ approvalId: where.approvalId, messageId: calls.at(-1)!.messageId }]);
   });
 
   it('un gancio che lancia non rompe la domanda: è già partita', async () => {

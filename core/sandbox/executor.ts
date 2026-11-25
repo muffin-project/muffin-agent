@@ -13,7 +13,7 @@ import {
 } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { SandboxManager, type SandboxRuntimeConfig } from '@anthropic-ai/sandbox-runtime';
 import {
   APPARMOR_REMEDY,
@@ -919,7 +919,21 @@ export class SandboxExecutor {
    * the markers; they are asserted host-side, naming the exact door.
    */
   private async selfTestNestedGitHookWrite(cwd: string): Promise<ContainmentFailure | null> {
+    let git = 'git';
     try {
+      // Apple's PATH shim can only select the developer directory outside
+      // Seatbelt. Resolve it here so cold caches do not disable the entire
+      // shell. A real Git already on PATH and Linux keep the existing route.
+      if (process.platform === 'darwin') {
+        const lookup = { cwd, encoding: 'utf8', timeout: SELFTEST_LEG_TIMEOUT_MS } as const;
+        const onPath = execFileSync('/usr/bin/which', ['git'], lookup).trim();
+        if (realpathSync(onPath) === '/usr/bin/git') {
+          git = execFileSync('/usr/bin/xcrun', ['--find', 'git'], lookup).trim();
+          if (!isAbsolute(git) || realpathSync(git) === '/usr/bin/git') {
+            throw new Error('Xcode did not resolve an actual Git executable');
+          }
+        }
+      }
       execFileSync('git', ['init', '--quiet', 'pre'], { cwd, stdio: 'pipe' });
       mkdirSync(join(cwd, 'pre-resolved'), { recursive: true });
       writeFileSync(join(cwd, 'pre-resolved', 'pre-commit'), 'planted\n');
@@ -932,6 +946,7 @@ export class SandboxExecutor {
         remedy: 'check that git runs host-side and the self-test directory is writable',
       };
     }
+    const containedGit = quoteShell(git);
     const command = [
       "printf 'muffin sandbox nested-hook self-test\\n'",
       `apparmor_label=unavailable
@@ -943,10 +958,10 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
       'printf sample > template/hooks/pre-commit.sample',
       'printf ordinary > ordinary/file.txt',
       'printf evil > ordinary/evil',
-      'git init --quiet --template=template nested',
+      `${containedGit} init --quiet --template=template nested`,
       'test -f nested/.git/hooks/pre-commit.sample',
       'printf tracked > nested/tracked.txt',
-      'git -C nested add tracked.txt',
+      `${containedGit} -C nested add tracked.txt`,
       'mkdir -p nested/.git/hooks',
       `for hook in ${ACTIVE_GIT_HOOK_NAMES.join(' ')}; do if printf hook > "nested/.git/hooks/$hook" 2>/dev/null; then printf "muffin-hook-write: allowed:%s\\n" "$hook"; else printf "muffin-hook-write: denied:%s\\n" "$hook"; fi; done`,
       // Mid-command replacement: alias2 does not exist when the sandbox (and
@@ -954,7 +969,7 @@ printf "muffin-apparmor-label: %s\\n" "$apparmor_label"`,
       // platform; the symlink replacement is attempted and recorded but
       // gated on none (see the method docstring) — no through-write is
       // attempted, leaving nothing installed behind the marker.
-      'git init --quiet --template=template alias2',
+      `${containedGit} init --quiet --template=template alias2`,
       'test -f alias2/.git/hooks/pre-commit.sample',
       'printf evil2 > ordinary/evil2',
       'if ln ordinary/evil2 alias2/.git/hooks/pre-commit 2>/dev/null; then printf "muffin-hook-hardlink: allowed\\n"; else printf "muffin-hook-hardlink: denied\\n"; fi',

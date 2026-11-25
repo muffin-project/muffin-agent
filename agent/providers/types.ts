@@ -130,6 +130,8 @@ export type ContentBlock =
 /** Opaque provider-owned continuation data; never rendered or interpreted by the loop. */
 export type ProviderMessageMetadata = {
   reasoning?: { provider: string; details?: unknown; content?: unknown };
+  /** Chain link that produced the message (ADR-0110); other links never receive its reasoning. */
+  link?: string;
 };
 
 /**
@@ -421,6 +423,23 @@ export type ChatResult = {
   upstream?: string;
   /** Opaque provider metadata needed when the next request continues reasoning. */
   providerMetadata?: ProviderMessageMetadata;
+  /**
+   * The provider-chain link that served this call (ADR-0110). Set only by the
+   * chain, and read by billing: a fallback served by a metered endpoint must
+   * be priced as that endpoint, not as the lane's first connection.
+   */
+  route?: ChatRoute;
+};
+
+export type ChatRoute = {
+  kind: 'anthropic' | 'openai-compat' | 'openai-chatgpt';
+  baseUrl?: string;
+  /** The model the link was asked for (its configured slug). */
+  model: string;
+  /** Owner-facing name of the link, secret-free. */
+  label: string;
+  /** Position in the chain, 0 = the lane's own connection. */
+  index: number;
 };
 
 /**
@@ -490,7 +509,10 @@ export class ProviderStreamError extends Error {
 export interface Provider {
   readonly kind: 'anthropic' | 'openai-compat' | 'openai-chatgpt';
   chat(call: ChatCall): Promise<ChatResult>;
-  resolveReasoning?(call: ChatCall): ReasoningResolution | Promise<ReasoningResolution>;
+  /** `undefined` = this provider cannot say yet (e.g. a chain whose next link is not built). */
+  resolveReasoning?(
+    call: ChatCall,
+  ): ReasoningResolution | undefined | Promise<ReasoningResolution | undefined>;
   /**
    * Optional: a provider that can stream implements this. Absent means "this
    * provider cannot stream" and the loop falls back to `chat()` unconditionally
@@ -533,6 +555,21 @@ export type ProviderErrorDetails = {
   quota?: 'chatgpt-plan';
   /** The provider confirmed that a fresh owner sign-in is required. */
   reauthentication?: 'chatgpt';
+  /** The credential could not be obtained locally (missing, unreadable or not refreshable). */
+  credentials?: 'unavailable';
+  /**
+   * The request never reached a response: DNS, refused or reset connection,
+   * timeout before headers. Set only by adapters on their SDK's connection
+   * error, so a local bug wrapped as a retryable error is not mistaken for an
+   * outage (ADR-0110).
+   */
+  connection?: true;
+  /**
+   * Epoch ms at which the provider said the refused quota resets, when it said
+   * so. Distinct from `retryAfterMs`: a plan reset can be days away, far past
+   * any retry window, and only the provider chain (ADR-0110) acts on it.
+   */
+  retryAt?: number;
   /** Upstream generation/request id, when the provider exposed one. */
   requestId?: string;
   /** Concrete upstream that served the call (e.g. OpenRouter `provider`), when known. */

@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
-import { describe, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { MemoryStore } from '../../../core/memory/store.js';
 import { type Install, install, until } from '../harness.js';
 import { shellNonDisponibileQui } from '../sandbox-host.js';
@@ -330,11 +330,9 @@ describe('acceptance · B13 · la trascrizione del turno su Telegram', () => {
           // a fresh rich send whose `details` block collapses the process.
           const sent = tg.sent();
           const drafts = sent.filter((c) => c.method === 'sendMessageDraft');
-          if (!drafts.some((c) => testoDi(c).includes('cerco in memoria'))) {
-            throw new Error(
-              `la bozza non ha mai mostrato i passi:\n${JSON.stringify(drafts, null, 2)}`,
-            );
-          }
+          expect(drafts.map(testoDi).join('\n')).toContain('sto lavorando');
+          expect(drafts.every((c) => c.payload['can_stop'] === true)).toBe(true);
+          expect(JSON.stringify(drafts)).not.toMatch(/Processo|appunti di ieri|appunti di oggi/);
 
           // Exactly two durable creates in the whole scenario: the pairing
           // confirmation plus the turn's one final message.
@@ -370,26 +368,8 @@ describe('acceptance · B13 · la trascrizione del turno su Telegram', () => {
           }
           const blocks =
             (finaleCall.payload['rich_message'] as { blocks?: Block[] } | undefined)?.blocks ?? [];
-          const details = blocks.find((b) => b.type === 'details');
-          if (details === undefined || details.summary !== 'Processo') {
-            throw new Error(
-              `manca il blocco details del processo:\n${JSON.stringify(blocks, null, 2)}`,
-            );
-          }
-          const processText = JSON.stringify(details.blocks);
-          if (
-            !processText.includes('cerco in memoria: appunti di ieri') ||
-            !processText.includes('cerco in memoria: appunti di oggi')
-          ) {
-            throw new Error(`il details non tiene entrambi i passi:\n${processText}`);
-          }
-          if (/⏳|· \d+s/.test(processText)) {
-            throw new Error(`il processo finale ha ancora un contatore vivo:\n${processText}`);
-          }
-          const answerText = JSON.stringify(blocks.filter((b) => b.type !== 'details'));
-          if (!answerText.includes('niente di nuovo da ieri a oggi')) {
-            throw new Error(`la risposta non è fuori dal details:\n${answerText}`);
-          }
+          expect(blocks.some((b) => b.type === 'details')).toBe(false);
+          expect(JSON.stringify(blocks)).not.toMatch(/Processo|appunti di ieri|appunti di oggi|⏳/);
         } finally {
           await gw.stop();
         }
@@ -768,7 +748,8 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
           const blocks =
             (finalCall.payload['rich_message'] as { blocks?: Block[] } | undefined)?.blocks ?? [];
           const details = blocks.find((b) => b.type === 'details');
-          if (details === undefined) throw new Error('manca il blocco details del processo');
+          expect(details?.summary).toBe('Approvazioni');
+          if (details === undefined) throw new Error('missing approval receipt');
           const processText = JSON.stringify(details.blocks);
           if (processText.includes('aspetto la tua approvazione')) {
             throw new Error(`la riga di attesa resta congelata a turno concluso:\n${processText}`);
@@ -776,14 +757,9 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
           if (!processText.includes('sys.shell.write: consentito')) {
             throw new Error(`il verdetto non compare, risolto, nel processo:\n${processText}`);
           }
-          // E il tool rieseguito dopo la ripresa è nello stesso processo, a
-          // riprova che `resumeStream` ha riusato la trascrizione tenuta
-          // aperta invece di aprirne una fresca.
-          if (!processText.includes('eseguo un comando: echo ciao')) {
-            throw new Error(
-              `il passo del tool rieseguito dopo l'approvazione non è nel processo:\n${processText}`,
-            );
-          }
+          expect(processText).toContain('echo ciao');
+          expect(processText).not.toContain('eseguo un comando:');
+          expect(JSON.stringify(blocks[0])).toContain('ha risposto ciao');
           // (c) La risposta finale è fuori dal `details`, e in un solo
           // messaggio: quello della domanda, editato.
           const answerText = JSON.stringify(blocks.filter((b) => b.type !== 'details'));
@@ -831,34 +807,36 @@ describe('acceptance · #746 · una seconda approvazione in un turno ripreso res
    * seconda domanda perde la tastiera alla sospensione e il click non risolve
    * più niente: l'`until` sulla seconda domanda o sulla risposta finale scade.
    *
-   * Il turno: due comandi diversi, quindi due approvazioni reali. La prima
-   * sospende il turno fresco; il click lo riprende; il modello chiede il
-   * secondo comando; la lane finalizza l'AttachStream sull'esito sospeso; la
+   * A workspace read raises taint before the two URL reads. The model-chosen
+   * paths require approval and the loopback target is rejected before the
+   * network request. D12 separately covers shell output.
+   *
+   * La prima sospende il turno fresco; il click lo riprende; il modello chiede
+   * la seconda lettura; la lane finalizza l'AttachStream sull'esito sospeso; la
    * domanda deve restare sullo **stesso messaggio** con la tastiera viva, e il
    * secondo click deve chiudere il turno.
    */
   it('#746 doppia approvazione: la seconda domanda vive sullo stesso messaggio, la tastiera sopravvive alla sospensione, il turno riprende e chiude', async () => {
     const tg = await startFakeTelegram();
+    const firstRead = {
+      tool: { name: 'http_get', args: { url: 'http://127.0.0.1:1/first-approval' } },
+    };
+    const secondRead = {
+      tool: { name: 'http_get', args: { url: 'http://127.0.0.1:1/second-approval' } },
+    };
     const inst = await install({
       main: [
-        {
-          tool: {
-            name: 'shell_run_write',
-            args: { command: 'echo primo', cwd: '.', description: 'primo comando' },
-          },
-        },
-        {
-          tool: {
-            name: 'shell_run_write',
-            args: { command: 'echo secondo', cwd: '.', description: 'secondo comando' },
-          },
-        },
-        { text: 'fatto, entrambi i comandi hanno risposto' },
+        { tool: { name: 'fs_read', args: { path: 'resources.txt' } } },
+        // ADR-0109: consent runs the saved call itself; the model does not
+        // issue it again after the turn resumes.
+        firstRead,
+        secondRead,
+        { text: 'entrambe le letture sono terminate' },
       ],
       env: { MUFFIN_GATEWAY_TICK_MS: '200' },
     });
     try {
-      plantTier2Episode(inst.home, 'fixture-746');
+      writeFileSync(join(inst.workspace, 'resources.txt'), 'Synthetic research notes.', 'utf8');
       const gw = await pairOwner(inst, tg, OWNER_ID);
       try {
         type Tastiera = { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
@@ -886,11 +864,11 @@ describe('acceptance · #746 · una seconda approvazione in un turno ripreso res
           return ok.callback_data;
         };
 
-        tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'esegui due comandi'));
+        tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'controlla le due risorse'));
 
-        // Prima domanda: il comando è `echo primo`.
         await until(
-          () => ultimaDomanda() !== undefined && testoDi(ultimaDomanda()!).includes('echo primo'),
+          () =>
+            ultimaDomanda() !== undefined && testoDi(ultimaDomanda()!).includes('first-approval'),
           20_000,
         );
         const prima = ultimaDomanda()!;
@@ -904,7 +882,7 @@ describe('acceptance · #746 · una seconda approvazione in un turno ripreso res
           }),
         );
 
-        // Seconda domanda: comando diverso, nuova approvazione, e deve vivere
+        // Seconda domanda: risorsa diversa, nuova approvazione, e deve vivere
         // sullo stesso messaggio del turno.
         try {
           await until(() => {
@@ -912,7 +890,7 @@ describe('acceptance · #746 · una seconda approvazione in un turno ripreso res
             return (
               ultima !== undefined &&
               idDi(ultima) === messaggio &&
-              testoDi(ultima).includes('echo secondo')
+              testoDi(ultima).includes('second-approval')
             );
           }, 30_000);
         } catch (error) {
@@ -941,6 +919,7 @@ describe('acceptance · #746 · una seconda approvazione in un turno ripreso res
           );
         }
         const seconda = ultimaDomanda()!;
+        expect(okDi(seconda)).not.toBe(okDi(prima));
 
         // La sospensione non deve aver tolto la tastiera: nessuna rimozione
         // esplicita dopo la seconda domanda, prima del click.
@@ -974,10 +953,19 @@ describe('acceptance · #746 · una seconda approvazione in un turno ripreso res
                     c.method === 'editMessageRichText' ||
                     c.method === 'sendMessage') &&
                   Number(c.payload['message_id'] ?? c.messageId) === messaggio &&
-                  testoDi(c).includes('entrambi i comandi hanno risposto'),
+                  testoDi(c).includes('entrambe le letture sono terminate'),
               ),
           30_000,
         );
+        expect(
+          inst.db((db) =>
+            db
+              .prepare(
+                "SELECT count(*) AS n FROM approvals WHERE capability = 'sys.http' AND decision = 'allow' AND consumed_at IS NOT NULL",
+              )
+              .get(),
+          ),
+        ).toEqual({ n: 2 });
       } finally {
         await gw.stop();
       }

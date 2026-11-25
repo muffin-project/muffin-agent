@@ -1,4 +1,5 @@
 import { pidAlive } from '../lock/durable.js';
+import { redactText } from '../tracing/redact.js';
 
 /**
  * The vocabulary of a wait, and the arithmetic of when it ends.
@@ -63,33 +64,23 @@ export const MAX_WAIT_MS = 7 * 24 * 60 * 60 * 1000;
 export const MAX_SUSPENDED_PER_TENANT = 8;
 
 /**
- * The events a turn may wait for.
- *
- * **One member, and that is a deliberate floor rather than a stub.** The rule
- * this set exists to hold is that a barrier must be *evaluated by something* —
- * a closed set whose members nothing can satisfy is the thirteenth instance of
- * this repo's own defect, a mechanism declared and connected to nothing. So the
- * set contains exactly what the lane can decide, on this machine, without a
- * broker: whether a process id is still alive.
- *
- * It is also the shape the prior art converged on: Hermes's `/goal wait <pid>`
- * parks until *"the process with that PID exits"* — a predicate that is
- * concrete and checkable, not "when something happens". Adding a member means
- * adding its evaluator in the same change; `satisfied` below is a `switch` with
- * an exhaustive `default`, so the build says so.
+ * `parseWait` only arms process exits. The approval kernel arms `approval`,
+ * and the conversational work path stages an `owner_reply` before delivery.
+ * Owner replies are committed with their actual ingress, not polled like the
+ * other events.
  */
-/**
- * `process_exit:<pid>` o `approval:<id>` — la forma persistita: una stringa,
- * così la colonna resta una colonna.
- *
- * **`approval` non è armabile dal modello.** `parseWait` — l'unico parser che
- * legge argomenti di una tool call — produce solo `process_exit`, e non ha
- * nessun ramo che arrivi qui. Una barriera d'approvazione la arma il kernel
- * quando *lui* decide di chiedere, mai il modello dicendo di volerla: potersela
- * armare da sé vorrebbe dire potersi far riprendere da una risposta che nessuno
- * ha dato.
- */
-export type WaitFor = { kind: 'process_exit'; pid: number } | { kind: 'approval'; id: string };
+export type WaitFor =
+  | { kind: 'process_exit'; pid: number }
+  | { kind: 'approval'; id: string }
+  | { kind: 'owner_reply'; id: string; question: string };
+
+export const OWNER_REPLY_PREFIX = 'owner_reply:';
+/** Bound the full UTF-8 wire value, including its JSON escapes. */
+export const MAX_OWNER_REPLY_BYTES = 8 * 1024;
+
+function isOwnerReplyId(id: string): boolean {
+  return id.length === 64 && /^[0-9a-f]+$/.test(id);
+}
 
 export type WaitSpec = {
   /** ISO 8601. The deadline, always present. */
@@ -103,7 +94,25 @@ export type WaitRefusal = { ok: false; why: string };
 export type WaitParsed = { ok: true; spec: WaitSpec };
 
 export function encodeWaitFor(waitFor: WaitFor): string {
-  return waitFor.kind === 'approval' ? `approval:${waitFor.id}` : `process_exit:${waitFor.pid}`;
+  switch (waitFor.kind) {
+    case 'process_exit':
+      return `process_exit:${waitFor.pid}`;
+    case 'approval':
+      return `approval:${waitFor.id}`;
+    case 'owner_reply': {
+      const { id, question } = waitFor;
+      if (!isOwnerReplyId(id) || question.trim() === '') {
+        throw new Error('invalid owner reply barrier');
+      }
+      const raw = `${OWNER_REPLY_PREFIX}${id}:${JSON.stringify(redactText(question))}`;
+      if (Buffer.byteLength(raw) > MAX_OWNER_REPLY_BYTES) {
+        throw new Error('owner reply barrier exceeds serialized size limit');
+      }
+      return raw;
+    }
+    default:
+      return assertNever(waitFor);
+  }
 }
 
 /**
@@ -116,8 +125,26 @@ export function encodeWaitFor(waitFor: WaitFor): string {
  */
 export function decodeWaitFor(raw: string | null): WaitFor | null {
   if (raw === null) return null;
-  const [kind, rest] = raw.split(':', 2);
-  if (rest === undefined || rest === '') return null;
+  if (raw.startsWith(OWNER_REPLY_PREFIX)) {
+    if (raw.length > MAX_OWNER_REPLY_BYTES || Buffer.byteLength(raw) > MAX_OWNER_REPLY_BYTES) {
+      return null;
+    }
+    const idEnd = OWNER_REPLY_PREFIX.length + 64;
+    const id = raw.slice(OWNER_REPLY_PREFIX.length, idEnd);
+    if (raw[idEnd] !== ':' || !isOwnerReplyId(id)) return null;
+    try {
+      const question: unknown = JSON.parse(raw.slice(idEnd + 1));
+      return typeof question === 'string' && question.trim() !== ''
+        ? { kind: 'owner_reply', id, question }
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  const separator = raw.indexOf(':');
+  if (separator === -1) return null;
+  const kind = raw.slice(0, separator);
+  const rest = raw.slice(separator + 1);
   if (kind === 'approval') {
     // Esadecimale, come lo scrive `ApprovalStore.ask`. Un id di un'altra forma
     // è una riga che non abbiamo scritto noi.
@@ -210,6 +237,9 @@ export function satisfied(
       return !(c.alive ?? pidAlive)(waitFor.pid);
     case 'approval':
       return c.answered !== undefined && c.answered(waitFor.id);
+    case 'owner_reply':
+      // Only the transaction recording the actual reply can release this early.
+      return false;
     default:
       return assertNever(waitFor);
   }
@@ -244,6 +274,11 @@ export function wakeReport(
   reason: WakeReason,
   boundApproval = false,
 ): string {
+  if (waitFor?.kind === 'owner_reply') {
+    return reason === 'timer'
+      ? 'No reply arrived to your question before the deadline. Do not assume an answer.'
+      : 'The turn has resumed from waiting for an owner reply.';
+  }
   if (waitFor?.kind === 'approval') {
     // Cosa ha risposto l'owner non si dice qui: lo dice il ramo che rifà la
     // chiamata, perché è quello che ha letto il registro. Qui si dice soltanto
