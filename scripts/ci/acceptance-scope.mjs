@@ -102,7 +102,10 @@ if (isMain) {
   if (event && event !== 'pull_request' && event !== 'merge_group') {
     emit(true, 'non-PR event always runs acceptance');
   } else if (filesArg !== undefined) {
-    const files = filesArg.split('\n').map((s) => s.trim()).filter(Boolean);
+    const files = filesArg
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
     emit(shouldRunAcceptance(files), `${files.length} changed files`);
   } else if (base && head) {
     let files;
@@ -110,7 +113,10 @@ if (isMain) {
       const out = execFileSync('git', ['diff', '--name-only', `${base}...${head}`, '--'], {
         encoding: 'utf8',
       });
-      files = out.split('\n').map((s) => s.trim()).filter(Boolean);
+      files = out
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
     } catch {
       emit(true, 'undeterminable range, fail-safe');
       process.exit(0);
