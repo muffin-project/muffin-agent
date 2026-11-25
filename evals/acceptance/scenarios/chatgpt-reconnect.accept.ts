@@ -17,7 +17,7 @@ const REQUEST = 'Tell me what you can do today.';
 const RECONNECT = 'muffin chatgpt login';
 const CANARY = 'secret-provider-error-canary';
 
-function seedExpiredChatGPTProfile(inst: Install, thinking: Thinking): void {
+function seedChatGPTProfile(inst: Install, thinking: Thinking, expired: boolean): void {
   const now = Date.now();
   writeFileSync(
     join(inst.home, 'secrets', 'chatgpt'),
@@ -38,7 +38,7 @@ function seedExpiredChatGPTProfile(inst: Install, thinking: Thinking): void {
             scopes: ['chatgpt.tokens.use.direct', 'offline_access', 'resource.invoke'],
             receivedAt: now - 120_000,
             idTokenReceivedAt: now - 120_000,
-            expiresAt: now - 60_000,
+            expiresAt: now + (expired ? -60_000 : 3_600_000),
             pendingIdentity: false,
           },
         },
@@ -93,6 +93,8 @@ async function withCompiledGateway(
       return /telegram: connesso/.test(log);
     });
     await run();
+  } catch (error) {
+    throw new Error(`${String(error)}\nGateway output:\n${log}`, { cause: error });
   } finally {
     gateway.kill(crashBeforeDelivery ? 'SIGKILL' : 'SIGTERM');
     const timer = setTimeout(() => gateway.kill('SIGKILL'), 3_000);
@@ -103,17 +105,51 @@ async function withCompiledGateway(
   return log;
 }
 
-describe('acceptance · #937 · ChatGPT reconnection on Telegram', () => {
+describe('acceptance · #937 · ChatGPT terminal notices on Telegram', () => {
   it.each([
-    { thinking: 'low', interruption: 'after delivery', crashBeforeDelivery: false },
-    { thinking: 'adaptive', interruption: 'after delivery', crashBeforeDelivery: false },
-    { thinking: 'low', interruption: 'before delivery', crashBeforeDelivery: true },
+    {
+      fault: 'refresh refused',
+      thinking: 'low',
+      interruption: 'after delivery',
+      crashBeforeDelivery: false,
+    },
+    {
+      fault: 'refresh refused',
+      thinking: 'adaptive',
+      interruption: 'after delivery',
+      crashBeforeDelivery: false,
+    },
+    {
+      fault: 'refresh refused',
+      thinking: 'low',
+      interruption: 'before delivery',
+      crashBeforeDelivery: true,
+    },
+    {
+      fault: 'catalog unavailable',
+      thinking: 'low',
+      interruption: 'before delivery',
+      crashBeforeDelivery: true,
+    },
+    {
+      fault: 'effort incompatible',
+      thinking: 'low',
+      interruption: 'after delivery',
+      crashBeforeDelivery: false,
+    },
   ] as const)(
-    'delivers one reconnect notice with thinking=$thinking and restart $interruption',
-    async ({ thinking, crashBeforeDelivery }) => {
+    'delivers one notice for $fault with thinking=$thinking and restart $interruption',
+    async ({ fault, thinking, crashBeforeDelivery }) => {
       const inst = await install({ main: [] });
       const telegram = await startFakeTelegram();
       try {
+        const expired = fault === 'refresh refused';
+        const expectedNotice = expired
+          ? RECONNECT
+          : fault === 'catalog unavailable'
+            ? 'Non ho potuto verificare il livello di ragionamento'
+            : 'Il modello non può applicare il ragionamento configurato';
+        const expectedRequests = expired ? 'refresh\n' : 'models\n';
         // The scene is text-only. The gateway has no reason to fetch speech weights.
         mkdirSync(join(inst.home, 'models'), { recursive: true });
         writeFileSync(join(inst.home, 'models', 'ggml-base.bin'), 'unused text-only fixture');
@@ -129,7 +165,7 @@ describe('acceptance · #937 · ChatGPT reconnection on Telegram', () => {
           String(OWNER),
         ]);
         expect(enable.code, enable.err).toBe(0);
-        seedExpiredChatGPTProfile(inst, thinking);
+        seedChatGPTProfile(inst, thinking, expired);
         seal(inst.home, '1', new Date());
 
         const calls = join(inst.workspace, 'network.log');
@@ -153,6 +189,16 @@ globalThis.fetch = async (input, init) => {
       { status: 400 },
     );
   }
+  if (url.href === 'https://api.openai.com/v1/models') {
+    record('models');
+    if (${JSON.stringify(fault)} === 'catalog unavailable') {
+      return Response.json({ error: ${JSON.stringify(CANARY)} }, { status: 503 });
+    }
+    return Response.json({ models: [{
+      slug: 'gpt-fixture', display_name: 'Fixture', visibility: 'list',
+      supported_reasoning_levels: ['high'], default_reasoning_level: 'high',
+    }] });
+  }
   if (url.href === 'https://api.openai.com/v1/responses') record('responses');
   throw new Error('Unstubbed network call in ChatGPT reconnect fixture');
 };
@@ -167,16 +213,20 @@ globalThis.fetch = async (input, init) => {
           ) as { id: string; status: string; turn_outcome: string; delivery: string }[];
         const readTurn = () => readTurns()[0];
         const notice = () =>
-          telegram.messages().filter((message) => message.text.includes(RECONNECT));
+          telegram.messages().filter((message) => message.text.includes(expectedNotice));
         const verifyDelivery = async () => {
           await until(() => notice().length > 0, 4_000).catch(() => {
             throw new Error(
-              `Owner received no ChatGPT reconnect notice (delivery=${readTurn()?.delivery}): ${JSON.stringify(telegram.messages())}`,
+              `Owner received no ChatGPT terminal notice (delivery=${readTurn()?.delivery}): ${JSON.stringify(telegram.messages())}`,
             );
           });
           expect(notice()).toEqual([
-            expect.objectContaining({ chatId: OWNER, text: expect.stringContaining(RECONNECT) }),
+            expect.objectContaining({
+              chatId: OWNER,
+              text: expect.stringContaining(expectedNotice),
+            }),
           ]);
+          if (!expired) expect(notice()[0]?.text).toContain('/think');
           await until(() => readTurn()?.delivery === 'sent');
           expect(JSON.stringify(telegram.sent())).not.toContain(CANARY);
         };
@@ -186,7 +236,7 @@ globalThis.fetch = async (input, init) => {
           async () => {
             telegram.deliver(privateMessage({ id: OWNER }, REQUEST));
             await until(() => readTurn()?.status === 'done');
-            expect(readFileSync(calls, 'utf8')).toBe('refresh\n');
+            expect(readFileSync(calls, 'utf8')).toBe(expectedRequests);
             expect(readTurn()).toMatchObject({ status: 'done', turn_outcome: 'error' });
             if (crashBeforeDelivery) {
               // Cut the process while the committed result is waiting for its first send.
@@ -215,12 +265,13 @@ globalThis.fetch = async (input, init) => {
         if (crashBeforeDelivery) await withCompiledGateway(inst, preload, readBack);
         expect(readTurns()).toEqual([{ ...finished, delivery: 'sent' }]);
         expect(notice()).toHaveLength(1);
-        expect(readFileSync(calls, 'utf8')).toBe('refresh\n');
+        expect(readFileSync(calls, 'utf8')).toBe(expectedRequests);
+        expect(loadConfig(inst.home).thinking).toBe(thinking);
       } finally {
         await telegram.close();
         await inst.cleanup();
       }
     },
-    60_000,
+    120_000,
   );
 });
