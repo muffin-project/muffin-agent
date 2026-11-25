@@ -57,6 +57,74 @@ import { runInit } from './init.js';
  * default install, and the owner has no other way to learn which one answered.
  */
 
+it.each([
+  { refreshToken: 'refresh', level: 'ok', detail: 'will attempt to refresh', remedy: undefined },
+  { refreshToken: '', level: 'fail', detail: 'expired', remedy: 'muffin chatgpt login' },
+  // A valid token on an exhausted plan is not a usable model.
+  {
+    refreshToken: 'refresh',
+    level: 'fail',
+    detail: 'Plan usage limit reached',
+    remedy: 'check https://chatgpt.com/settings/usage',
+    planLimited: true,
+  },
+])(
+  'ChatGPT doctor reports an expired or limited session with a $level result',
+  async ({ refreshToken, level, detail, remedy, ...limit }) => {
+    const planLimited = 'planLimited' in limit && limit.planLimited === true;
+    const dir = home();
+    const config = loadConfig(dir);
+    saveConfig(
+      {
+        ...config,
+        provider: {
+          kind: 'openai-chatgpt',
+          baseUrl: 'https://api.openai.com/v1',
+          apiKeyRef: 'secret://chatgpt',
+        },
+      },
+      dir,
+    );
+    const file = join(dir, 'secrets', 'chatgpt');
+    writeFileSync(
+      file,
+      `${JSON.stringify({
+        version: 1,
+        hostId: 'urn:uuid:00000000-0000-4000-8000-000000000001',
+        activeProfileId: 'p1',
+        profiles: [
+          {
+            id: 'p1',
+            clientId: 'client',
+            subject: 'subject-1',
+            tokens: {
+              accessToken: 'access',
+              refreshToken,
+              idToken: 'id',
+              tokenType: 'Bearer',
+              scopes: ['chatgpt.tokens.use.direct', 'offline_access', 'resource.invoke'],
+              receivedAt: 1,
+              idTokenReceivedAt: 1,
+              expiresAt: planLimited ? Date.now() + 3_600_000 : 1,
+              pendingIdentity: false,
+            },
+            ...(planLimited ? { planLimit: { at: 1 } } : {}),
+          },
+        ],
+      })}\n`,
+      { mode: 0o600 },
+    );
+    try {
+      const c = await check(dir, 'ChatGPT');
+      expect(c?.level).toBe(level);
+      expect(c?.detail).toContain(detail);
+      expect(c?.remedy).toBe(remedy);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
 function home(): string {
   const dir = mkdtempSync(join(tmpdir(), 'muffin-doctor-'));
   // The persistent secret store defaults to the *real* `~/.config`, so without
@@ -261,10 +329,8 @@ describe('doctor names which profile the configured model resolves to', () => {
     // The cost, not just the fact (D4 half 2): the fallback's own numbers,
     // named — not merely "something changed".
     expect(c?.detail).toContain('sampling deterministic');
-    expect(c?.detail).toContain('10 tool esposti');
-    // Etichettato come su `sys_inspect`, non "orizzonte N" — i due numeri si
-    // somigliano (qui: 10 e 15) e vanno distinti per quello che sono, quanti
-    // tool si vedono contro quante call si fanno, non con un termine indefinito.
+    expect(c?.detail).toContain('tool caricati per pertinenza');
+    expect(c?.detail).not.toContain('tool esposti');
     expect(c?.detail).toContain('15 call/turno');
     expect(report.exitCode).toBe(2);
 
@@ -2260,6 +2326,20 @@ describe('doctor says whether a voice note would be understood, before the first
     expect(c?.detail).toContain(join(dir, 'models', 'ggml-base.bin'));
   });
 
+  it('describes the first-use download when only the local model is missing', async () => {
+    const dir = conTelegram(home());
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'ffmpeg'), '');
+    writeFileSync(join(bin, 'whisper-cli'), '');
+    const c = await checkWith(dir, 'note vocali', {
+      voce: { accettaAudio: async () => false, path: bin },
+    });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toMatch(/scaricare il modello locale alla prima nota da trascrivere/);
+    expect(c?.remedy).toBeUndefined();
+  });
+
   it('takes the transcription branch when the probe fails, like the runtime does', async () => {
     const dir = conTelegram(home());
     const c = await checkWith(dir, 'note vocali', {
@@ -2415,7 +2495,7 @@ describe('doctor nomina le capacità spente o tagliate, come sys.inspect', () =>
     config.models.main = 'modello-mai-schedato-xyz';
     writeFileSync(configPath, JSON.stringify(config, null, 2));
 
-    const c = await check(dir, 'capacità: tetto tool');
+    const c = await check(dir, 'capacità: tool');
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('conservative');
     expect(c?.detail).toContain('capability native');
@@ -2427,9 +2507,9 @@ describe('doctor nomina le capacità spente o tagliate, come sys.inspect', () =>
 
   it('tetto tool: ok quando il profilo risolto copre tutto il catalogo nativo', async () => {
     const dir = home();
-    const c = await check(dir, 'capacità: tetto tool');
+    const c = await check(dir, 'capacità: tool');
     expect(c?.level).toBe('ok');
-    expect(c?.detail).toContain('capability native entro la proiezione');
+    expect(c?.detail).toContain('il nucleo resta visibile');
     expect(c?.remedy).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
   });
