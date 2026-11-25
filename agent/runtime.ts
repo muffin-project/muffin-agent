@@ -1464,6 +1464,7 @@ export function buildRuntime(
     jobAttivi: jobs.list().filter((j) => j.active).length,
     // Always null after ADR-0108; kept on the fact object so inspect/ambiente stay typed.
     safeMode: null,
+    ...(searchDiagnosis.gap === null ? {} : { webSearchUnavailable: searchDiagnosis.blockedBy }),
   });
 
   const runtime: Runtime = {

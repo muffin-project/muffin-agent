@@ -256,9 +256,12 @@ export function keenableBackend(options: KeenableOptions): SearchBackend {
   };
 }
 
+export type SearchStartupBlocker = 'credential' | 'egress';
+
 export type SearchDiagnosis =
   | { on: true; backend: SearchBackend; gap: null }
-  | { on: false; backend?: undefined; gap: CapabilityGap | null };
+  | { on: false; backend?: undefined; gap: null }
+  | { on: false; backend?: undefined; gap: CapabilityGap; blockedBy: SearchStartupBlocker };
 
 /**
  * Is `web_search` on, and if not, why — the one producer `buildRuntime`,
@@ -316,6 +319,7 @@ export function diagnoseSearch(
     const remedy = (error as { remedy?: unknown }).remedy;
     return {
       on: false,
+      blockedBy: 'credential',
       gap: {
         capability: 'web_search',
         kind: 'disabled',
@@ -329,6 +333,7 @@ export function diagnoseSearch(
   if (!hostAllowed(endpointHost, egress)) {
     return {
       on: false,
+      blockedBy: 'egress',
       gap: {
         capability: 'web_search',
         kind: 'disabled',
