@@ -167,7 +167,7 @@ copied on clone and can always be skipped, so policy lives on the server).
 |---|---|---|---|
 | pre-push | `.githooks/pre-push` | ~90 s typical, 180 s ceiling | `tsc --noEmit`; Biome on files changed vs `origin/dev`; the tests those files affect |
 | full local | `npm test`, `npm run gate:local` | minutes | the whole suite; the clean-clone gate |
-| CI (required) | `verifica`, `accettazione`, `collegamenti`, `strumenti` | ≤ 20 min | everything, with the environment capabilities **required** |
+| CI (required) | `verifica`, `accettazione`, `collegamenti`, `strumenti`, `install`, `dco` | ≤ 20 min | everything, with the environment capabilities **required** |
 
 Activate the hook once per clone with `git config core.hooksPath .githooks`.
 It prints how long each step took and the total. If it goes past the ceiling,
