@@ -187,8 +187,8 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
 
   if (discoveryTool === undefined) return { exposed, pressured: false, snapshot };
 
-  let pending: Map<string, T> | null = null;
-  let loaded: T[] = [];
+  const pending = new Map<string, T>();
+  const loadedTools = new Map<string, T>();
 
   const discovery: CapabilityDiscoveryPort = {
     searchAndLoad(query, maxResults, firstName) {
@@ -203,8 +203,9 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
         .sort((left, right) => right.score - left.score || left.index - right.index);
 
       const selected = ranked.slice(0, limit).map((row) => row.tool);
-      pending ??= new Map();
-      for (const tool of selected) pending.set(tool.spec.name, tool);
+      for (const tool of selected) {
+        if (!loadedTools.has(tool.spec.name)) pending.set(tool.spec.name, tool);
+      }
 
       const loaded = selected.map((tool) => ({
         name: tool.spec.name,
@@ -220,14 +221,16 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
 
     activatePending() {
       const available = input.canDiscover?.() ?? true;
-      const selectionChanged = pending !== null;
-      if (pending !== null) {
-        loaded = [...pending.values()];
-        pending = null;
-      }
+      const selectionChanged = pending.size > 0;
+      for (const [name, tool] of pending) loadedTools.set(name, tool);
+      pending.clear();
       if (available !== discoveryAvailable || (available && selectionChanged)) {
         discoveryAvailable = available;
-        exposed.splice(0, exposed.length, ...(available ? [...fixed, ...loaded] : catalog));
+        exposed.splice(
+          0,
+          exposed.length,
+          ...(available ? [...fixed, ...loadedTools.values()] : catalog),
+        );
       }
       return discoveryAvailable;
     },
@@ -246,8 +249,8 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
  * round from the task text. This is the provider-neutral fallback for models
  * that do not reliably decide to invoke the discovery meta-tool themselves.
  *
- * The search door remains visible, so a later need can still replace the
- * task-local selection.
+ * Later searches add to this task's selection. A tool chosen for a later
+ * step, such as sending a file, stays available while other work is done.
  */
 export function preloadCapabilitiesForTask<T extends CapabilityTool>(
   exposure: CapabilityExposure<T>,
