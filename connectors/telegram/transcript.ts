@@ -1,10 +1,16 @@
 import type { ApprovalRequest, TurnEvent } from '../../agent/loop.js';
 import { toolPhrase, toolProgress } from '../../agent/tool-phrase.js';
 import type { Negotiation } from '../../core/surface/types.js';
+import { type TelegramApiLike, TelegramError } from './api.js';
 import { askHtml, askKeyboard, askPlain } from './approval.js';
-import { TelegramError, type TelegramApiLike } from './api.js';
 import { escapeHtml, splitHtml, TELEGRAM_MAX, toTelegramHtml } from './render.js';
-import { richFitsHard, richFromHtml, thinkingRich, turnRichMessage, type OutboundRich } from './rich.js';
+import {
+  type OutboundRich,
+  richFitsHard,
+  richFromHtml,
+  thinkingRich,
+  turnRichMessage,
+} from './rich.js';
 
 /**
  * What the agent said and did on its way to the answer, kept — DAY-1
@@ -271,7 +277,11 @@ export type TranscriptOptions = {
   onAsked?: (mostrata: { approvalId: string; messageId: number }) => void;
 };
 
-export function startTranscript(api: TelegramApiLike, chatId: number, options: TranscriptOptions): Transcript {
+export function startTranscript(
+  api: TelegramApiLike,
+  chatId: number,
+  options: TranscriptOptions,
+): Transcript {
   const now = options.now ?? Date.now;
   const log = options.log ?? ((): void => {});
   const negotiation = options.negotiation;
@@ -307,9 +317,10 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
    * streaming deve scorrere. 1,5 s faceva arrivare il testo a scatti.
    */
   const DRAFT_TICK_MS = 350;
-  const draftEveryMs = Math.max(1, Math.floor(negotiation.draftTtlMs / 3) || DRAFT_TICK_MS) < DRAFT_TICK_MS
-    ? Math.max(1, Math.floor(negotiation.draftTtlMs / 3) || DRAFT_TICK_MS)
-    : DRAFT_TICK_MS;
+  const draftEveryMs =
+    Math.max(1, Math.floor(negotiation.draftTtlMs / 3) || DRAFT_TICK_MS) < DRAFT_TICK_MS
+      ? Math.max(1, Math.floor(negotiation.draftTtlMs / 3) || DRAFT_TICK_MS)
+      : DRAFT_TICK_MS;
   const draftId = prossimoDraftId++;
   let draftText = '';
   /**
@@ -408,7 +419,12 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
             ...(keyboard === undefined ? {} : { keyboard }),
           });
         }
-        return await api.editMessageRichText(chatId, messageId!, rich, keyboard === undefined ? {} : { keyboard });
+        return await api.editMessageRichText(
+          chatId,
+          messageId!,
+          rich,
+          keyboard === undefined ? {} : { keyboard },
+        );
       } catch (error) {
         if (nonModificato(error)) throw error;
         // Fall back ONLY on a deterministic refusal (a status > 0). A status-0
@@ -418,7 +434,9 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         // retry. The caller disables the transcript on the rethrow.
         if (!(error instanceof TelegramError && error.status > 0)) throw error;
         richTransport = false;
-        log(`telegram: trasporto rich rifiutato, torno a legacy — ${error instanceof Error ? error.message : String(error)}`);
+        log(
+          `telegram: trasporto rich rifiutato, torno a legacy — ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     }
     if (kind === 'send') {
@@ -427,13 +445,25 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         ...(keyboard === undefined ? {} : { keyboard }),
       });
     }
-    return await api.editMessageText(chatId, messageId!, html, keyboard === undefined ? {} : { keyboard });
+    return await api.editMessageText(
+      chatId,
+      messageId!,
+      html,
+      keyboard === undefined ? {} : { keyboard },
+    );
   }
 
   function current(): Segment {
     const last = segments[segments.length - 1];
     if (last !== undefined && !last.closed) return last;
-    const fresh: Segment = { messageId: null, html: '', plain: '', steps: [], shown: undefined, closed: false };
+    const fresh: Segment = {
+      messageId: null,
+      html: '',
+      plain: '',
+      steps: [],
+      shown: undefined,
+      closed: false,
+    };
     segments.push(fresh);
     return fresh;
   }
@@ -482,7 +512,8 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       lines.push(`<i>${escapeHtml(status)} · ${s}s</i>`);
     }
     const stepsHtml = lines.join('\n');
-    const base = seg.html === '' ? stepsHtml : stepsHtml === '' ? seg.html : `${seg.html}\n\n${stepsHtml}`;
+    const base =
+      seg.html === '' ? stepsHtml : stepsHtml === '' ? seg.html : `${seg.html}\n\n${stepsHtml}`;
     if (tail === '') return base;
     return base === '' ? tail : `${base}\n\n${tail}`;
   }
@@ -561,7 +592,8 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     // promessa dalla pagina ufficiale, e un edit del processo non deve poter
     // far sparire i pulsanti.
     const inAttesa = [...pendingAsks].reverse().find((p) => p.seg === seg);
-    const keyboard = inAttesa === undefined ? undefined : askKeyboard(inAttesa.capability, inAttesa.approvalId);
+    const keyboard =
+      inAttesa === undefined ? undefined : askKeyboard(inAttesa.capability, inAttesa.approvalId);
     lastCallAt = now();
     finestra.push(lastCallAt);
     everSent = true;
@@ -581,7 +613,9 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         return;
       }
       disabled = true;
-      log(`telegram: trascrizione del turno sospesa — ${error instanceof Error ? error.message : String(error)}`);
+      log(
+        `telegram: trascrizione del turno sospesa — ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
@@ -748,7 +782,9 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         }
       }
       draftDisabled = true;
-      log(`telegram: anteprima del turno sospesa — ${error instanceof Error ? error.message : String(error)}`);
+      log(
+        `telegram: anteprima del turno sospesa — ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
@@ -828,7 +864,8 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
     await enqueue(() => syncAll(false));
     // Keep the counter moving while something is running or the turn is
     // between steps: one edit per window, and nothing once it is quiet.
-    if (!stopped && !disabled && (running(current()) || status !== null) && hasContent(current())) schedule();
+    if (!stopped && !disabled && (running(current()) || status !== null) && hasContent(current()))
+      schedule();
   }
 
   /**
@@ -915,7 +952,8 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
   function trySyncFirstPaint(): boolean {
     if (segments.length !== 1) return false;
     const seg = segments[0]!;
-    if (seg.closed || seg.messageId !== null || seg.shown !== undefined || !hasContent(seg)) return false;
+    if (seg.closed || seg.messageId !== null || seg.shown !== undefined || !hasContent(seg))
+      return false;
     const text = render(seg, true, now(), liveText);
     if (text === '') return false;
     lastCallAt = now();
@@ -931,7 +969,9 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       // A synchronous throw (e.g. unserialisable payload) is a failed first
       // send like any other: decoration stays down, the answer does not.
       disabled = true;
-      log(`telegram: trascrizione del turno sospesa — ${error instanceof Error ? error.message : String(error)}`);
+      log(
+        `telegram: trascrizione del turno sospesa — ${error instanceof Error ? error.message : String(error)}`,
+      );
       return true;
     }
     const occupant: Promise<void> = started.then(
@@ -939,12 +979,20 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         seg.messageId = message.message_id;
         // The counter keeps moving exactly as after a `flush()`-driven first
         // paint — one edit per window while something runs.
-        if (!stopped && !disabled && (running(current()) || status !== null) && hasContent(current())) schedule();
+        if (
+          !stopped &&
+          !disabled &&
+          (running(current()) || status !== null) &&
+          hasContent(current())
+        )
+          schedule();
       },
       (error: unknown) => {
         if (nonModificato(error)) return;
         disabled = true;
-        log(`telegram: trascrizione del turno sospesa — ${error instanceof Error ? error.message : String(error)}`);
+        log(
+          `telegram: trascrizione del turno sospesa — ${error instanceof Error ? error.message : String(error)}`,
+        );
       },
     );
     const tracked: Promise<void> = occupant.finally(() => {
@@ -992,7 +1040,12 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         seg.plain = trimmed;
       }
       if (reason === 'superseded' && trimmed !== '') {
-        addStep({ line: '↺ quel tentativo è stato sostituito', plain: '↺ quel tentativo è stato sostituito', state: 'note', startedAt: now() });
+        addStep({
+          line: '↺ quel tentativo è stato sostituito',
+          plain: '↺ quel tentativo è stato sostituito',
+          state: 'note',
+          startedAt: now(),
+        });
       }
       scheduleSoon();
     },
@@ -1007,10 +1060,20 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
           if (status !== PREPARING_CONTEXT_STATUS) status = 'sto pensando';
           break;
         case 'model':
-          status = event.stopReason === 'tool_use' ? 'ho deciso i prossimi passi' : 'sto scrivendo la risposta';
+          status =
+            event.stopReason === 'tool_use'
+              ? 'ho deciso i prossimi passi'
+              : 'sto scrivendo la risposta';
           break;
         case 'model_status':
-          status = event.status === 'stalled' ? `nessuna attività del modello da ${Math.round(event.idleMs / 1000)}s` : event.status === 'thinking' ? 'sto pensando' : event.status === 'receiving' ? 'sto ricevendo la risposta' : 'aspetto il modello';
+          status =
+            event.status === 'stalled'
+              ? `nessuna attività del modello da ${Math.round(event.idleMs / 1000)}s`
+              : event.status === 'thinking'
+                ? 'sto pensando'
+                : event.status === 'receiving'
+                  ? 'sto ricevendo la risposta'
+                  : 'aspetto il modello';
           break;
         case 'model_retry':
           // Un retry silenzioso è indistinguibile da uno stallo: l'attesa è
@@ -1031,7 +1094,8 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
           if (step) {
             step.line = escapeHtml(retry);
             step.plain = retry;
-          } else addStep({ line: escapeHtml(retry), plain: retry, state: 'running', startedAt: now() });
+          } else
+            addStep({ line: escapeHtml(retry), plain: retry, state: 'running', startedAt: now() });
           break;
         }
         case 'tool_end': {
@@ -1048,7 +1112,11 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
               step.plain = settled.plain;
             }
           } else {
-            addStep({ ...stepOf(event.name, event.args), state: event.isError ? 'error' : 'done', startedAt: now() });
+            addStep({
+              ...stepOf(event.name, event.args),
+              state: event.isError ? 'error' : 'done',
+              startedAt: now(),
+            });
           }
           break;
         }
@@ -1057,8 +1125,19 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
           // La domanda può essere già stata mostrata da `ask()` — l'approvatore
           // di Telegram parla *prima* che il loop emetta questo evento: stesso
           // passo, mai due.
-          if ([...current().steps].reverse().some((s) => s.state === 'waiting' && s.capability === event.capability)) break;
-          addStep({ line: escapeHtml(`${toolPhrase(event.name)}: aspetto la tua approvazione`), plain: `${toolPhrase(event.name)}: aspetto la tua approvazione`, state: 'waiting', startedAt: now(), capability: event.capability });
+          if (
+            [...current().steps]
+              .reverse()
+              .some((s) => s.state === 'waiting' && s.capability === event.capability)
+          )
+            break;
+          addStep({
+            line: escapeHtml(`${toolPhrase(event.name)}: aspetto la tua approvazione`),
+            plain: `${toolPhrase(event.name)}: aspetto la tua approvazione`,
+            state: 'waiting',
+            startedAt: now(),
+            capability: event.capability,
+          });
           break;
         default:
           return assertNever(event);
@@ -1086,15 +1165,23 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         if (seg.messageId !== null) {
           const ultima = [...pendingAsks].reverse().find((p) => p.seg === seg);
           void api
-            .editMessageReplyMarkup(chatId, seg.messageId, ultima === undefined ? [] : askKeyboard(ultima.capability, ultima.approvalId))
+            .editMessageReplyMarkup(
+              chatId,
+              seg.messageId,
+              ultima === undefined ? [] : askKeyboard(ultima.capability, ultima.approvalId),
+            )
             .catch((error: unknown) => {
-              log(`telegram: tastiera non rimossa — ${error instanceof Error ? error.message : String(error)}`);
+              log(
+                `telegram: tastiera non rimossa — ${error instanceof Error ? error.message : String(error)}`,
+              );
             });
         }
       }
       for (let i = segments.length - 1; i >= 0; i--) {
         const seg = segments[i]!;
-        const step = [...seg.steps].reverse().find((s) => s.state === 'waiting' && s.approvalId === ask.approvalId);
+        const step = [...seg.steps]
+          .reverse()
+          .find((s) => s.state === 'waiting' && s.approvalId === ask.approvalId);
         if (step === undefined) continue;
         step.state = allowed ? 'done' : 'error';
         // Il contenuto della domanda (prompt, descrizione, comando) **resta**
@@ -1115,11 +1202,20 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       let esistente: { seg: Segment; step: Step } | undefined;
       for (let i = segments.length - 1; i >= 0 && esistente === undefined; i--) {
         const s = segments[i]!;
-        const step = [...s.steps].reverse().find((x) => x.state === 'waiting' && x.approvalId === approvalId);
+        const step = [...s.steps]
+          .reverse()
+          .find((x) => x.state === 'waiting' && x.approvalId === approvalId);
         if (step !== undefined) esistente = { seg: s, step };
       }
       if (esistente === undefined) {
-        addStep({ line: askHtml(request), plain: askPlain(request), state: 'waiting', startedAt: now(), capability: request.capability, approvalId });
+        addStep({
+          line: askHtml(request),
+          plain: askPlain(request),
+          state: 'waiting',
+          startedAt: now(),
+          capability: request.capability,
+          approvalId,
+        });
         // `addStep` può aver ruotato il segmento (overflow): la domanda vive
         // dove è stata scritta davvero.
         seg = current();
@@ -1159,10 +1255,16 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       // visibile ma muta.
       if (seg.shown === shownPrima) {
         try {
-          await api.editMessageReplyMarkup(chatId, seg.messageId, askKeyboard(request.capability, approvalId));
+          await api.editMessageReplyMarkup(
+            chatId,
+            seg.messageId,
+            askKeyboard(request.capability, approvalId),
+          );
         } catch (error) {
           if (!nonModificato(error)) {
-            log(`telegram: tastiera della domanda non attaccata — ${error instanceof Error ? error.message : String(error)}`);
+            log(
+              `telegram: tastiera della domanda non attaccata — ${error instanceof Error ? error.message : String(error)}`,
+            );
             const i = pendingAsks.indexOf(pending);
             if (i !== -1) pendingAsks.splice(i, 1);
             return false;
@@ -1175,7 +1277,9 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       try {
         options.onAsked?.({ approvalId, messageId: seg.messageId });
       } catch (error) {
-        log(`telegram: domanda non registrata — ${error instanceof Error ? error.message : String(error)}`);
+        log(
+          `telegram: domanda non registrata — ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
       return true;
     },
@@ -1275,7 +1379,9 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
         for (const seg of conTastiera) {
           if (seg.messageId === null) continue;
           void api.editMessageReplyMarkup(chatId, seg.messageId).catch((error: unknown) => {
-            log(`telegram: tastiera non rimossa — ${error instanceof Error ? error.message : String(error)}`);
+            log(
+              `telegram: tastiera non rimossa — ${error instanceof Error ? error.message : String(error)}`,
+            );
           });
         }
       }
@@ -1319,7 +1425,10 @@ export function startTranscript(api: TelegramApiLike, chatId: number, options: T
       // made for its cleanup).
       const done = enqueue(() => syncAll(true));
       try {
-        await Promise.race([done, new Promise<void>((resolve) => setTimeout(resolve, STOP_WAIT_MS))]);
+        await Promise.race([
+          done,
+          new Promise<void>((resolve) => setTimeout(resolve, STOP_WAIT_MS)),
+        ]);
       } catch {
         // `sendSegment` already swallows and disables; nothing to add.
       }
