@@ -36,6 +36,10 @@ Una corsia aveva una sola connessione; un account fermo fermava Muffin.
 - Se anche i ripieghi rifiutano, l'errore mostrato è **quello dell'anello 1**,
   il motivo vero del guasto; il rifiuto del ripiego (es. 404 per uno slug
   sbagliato) resta in `lastFallbackError` e `muffin fallback` lo segnala.
+- Fa eccezione un guasto passeggero sull'ultimo anello provato: se è un 5xx, un
+  429 o una connessione caduta che l'adapter dichiara ritentabile, esce quello,
+  così il backoff del loop e della corsia leggera riprova invece di chiudere il
+  turno con "piano esaurito". Le pause di tutti gli anelli restano registrate.
 - L'anello caduto va in pausa fino all'orario che il provider dichiara (reset del
   piano, `Retry-After`), al massimo un giorno; altrimenti 15 minuti per quota e
   accesso, 60 secondi per i limiti di frequenza, 30 per i guasti. Allo scadere
