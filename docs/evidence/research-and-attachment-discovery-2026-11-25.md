@@ -13,3 +13,17 @@ Both schemas were authorized. Tool discovery stages a new selection for the next
 Try a cumulative projection drawn from the same filtered catalogue. It does not alter approvals, permissions or the execution registry. Prove that a later search and a miss preserve earlier selected schemas, including the artifact tool, and repeat the original real-inference task. Verify bytes at the receiving API, separate from file existence and the final reply. This does not exercise a configured web search backend.
 
 Anthropic documents expanding discovered tool references into full definitions inline in the conversation. OpenAI documents deferred tools produced by tool search. These are integration interfaces, without evidence for the private behavior of either end-user product. [Anthropic tool search](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool), [OpenAI tool search](https://developers.openai.com/api/docs/guides/tools-tool-search).
+
+## Results
+
+| Evidence | Replacing selection `504398a3` | Cumulative selection `c6fc6750` |
+| --- | --- | --- |
+| Real public source and workspace file | Correct tag, date and link | Correct tag, date and link |
+| Loopback Telegram document | Zero attachments | One attachment in the original chat, identical SHA-256 to the workspace file |
+| Unprompted tool repair | The model ended after reporting that the file existed | The model called `send_file` after reading and writing |
+| Owner actions | One request, zero approvals | One request, zero approvals |
+| Free-model observations | Five HTTP 200 requests, 105 seconds | Five HTTP 200 requests and three recovered 503s, 130 seconds |
+
+The numbers describe two runs, with no latency comparison across upstream conditions. Both used the pinned free model with embeddings off and zero reported cost. The source was [the official live release endpoint](https://api.github.com/repos/cli/cli/releases/latest) and artifact facts were checked by an independent request after the turn. The prototype used loopback Telegram, with no owner data or configured web search.
+
+An independent compiled fixture discovers an attachment tool and then the runtime inspector. It checks both schemas in the next model request, workspace bytes, the attachment and the final reply. Restoring the old selection code in a disposable compiled binary made the fixture fail at the second menu check. The focused projection suite passed seven cases, including a miss, preservation of earlier selections and exclusion of unauthorized tools.
