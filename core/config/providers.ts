@@ -227,6 +227,12 @@ export function providerFor(provider: {
  * selezione automatica e nessuna modalità senza chiave: il motore lo nomina
  * l'owner, e con lui la destinazione delle sue query.
  */
+export const CHATGPT_SEARCH_PROVIDER = {
+  id: 'chatgpt',
+  label: 'ChatGPT',
+  endpoint: 'https://api.openai.com/v1/responses',
+} as const;
+
 export type SearchProviderId = 'tavily' | 'keenable';
 
 export type SearchProviderEntry = {

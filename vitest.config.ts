@@ -8,7 +8,9 @@ const QUI = dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   test: {
     // Fail the run if a test writes under the operator's real home.
-    globalSetup: ['./vitest.home-guard.ts'],
+    globalSetup: ['./vitest.git-env.ts', './vitest.home-guard.ts', './vitest.capabilities.ts'],
+    // Never run Git fixtures against the caller's repository (vitest.git-env.ts).
+    setupFiles: ['./vitest.git-env.ts'],
     // Exclude Git-ignored generated trees, including nested worktrees/releases.
     exclude: escludiPerVitest(QUI),
     // SQLite-backed tests can exceed Vitest's five-second default on busy

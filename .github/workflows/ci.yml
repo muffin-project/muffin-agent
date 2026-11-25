@@ -199,19 +199,39 @@ jobs:
       # ripetono qui — `docs/collegamenti*` è di `collegamenti`, `.claude/**`
       # è di `strumenti`, ed entrambi girano su ogni PR. `npm test` locale
       # resta la suite intera; la partizione è una proprietà della CI.
+      #
+      # `MUFFIN_REQUIRE_CAPABILITIES` (test-support/capabilities.ts) è la forma
+      # generica delle due variabili sopra, che restano alias: il globalSetup
+      # misura ogni capacità una volta, e se una di queste manca la run si
+      # ferma prima del primo test invece di contare salti.
       - name: suite
         env:
-          MUFFIN_REQUIRE_SANDBOX: '1'
-          MUFFIN_REQUIRE_SYSTEMD: '1'
-        run: npx vitest run --reporter=dot --exclude 'docs/collegamenti*.test.ts' --exclude '**/.claude/**/*.test.ts'
+          MUFFIN_REQUIRE_CAPABILITIES: 'sandbox,shell-boundary,systemd-analyze'
+        run: npx vitest run --reporter=dot --reporter=json --outputFile.json=${{ runner.temp }}/suite.json --exclude 'docs/collegamenti*.test.ts' --exclude '**/.claude/**/*.test.ts'
+
+      # La seconda cintura. Il globalSetup ferma la run se una capacità
+      # richiesta manca; questo step legge il report JSON e controlla che i
+      # test marcati `[richiede <capacità>]` abbiano girato davvero: nessun
+      # salto di una capacità richiesta, e almeno quanti ne registra
+      # `test-support/capability-minimums.json`. Un'etichetta tolta o un test
+      # sparito senza dirlo diventano rossi qui, non un conteggio da leggere.
+      - name: test marcati per capacità (nessun salto, minimi rispettati)
+        env:
+          MUFFIN_REQUIRE_CAPABILITIES: 'sandbox,shell-boundary,systemd-analyze'
+        run: npx tsx scripts/test-capability-report.ts --ci "${{ runner.temp }}/suite.json"
 
       # Mutation proof for the AppArmor hook rules: remove the shared
       # profile's hook policy, then run the same production-path test. Its
       # failure must name git_hooks_unprotected, so an unrelated setup failure
       # cannot masquerade as evidence that the rules are load-bearing.
+      #
+      # `MUFFIN_FORCE_CAPABILITIES`, non `MUFFIN_REQUIRE_*`: senza i deny il
+      # self-test del globalSetup dice `git_hooks_unprotected`, e una richiesta
+      # fermerebbe la run prima del test di produzione. Forzata, la capacità
+      # fa girare quel test, che deve fallire lui nominando la ragione.
       - name: 'mutazione del profilo: senza deny Git-hook la shell rifiuta il runtime'
         env:
-          MUFFIN_REQUIRE_SANDBOX: '1'
+          MUFFIN_FORCE_CAPABILITIES: 'sandbox,shell-boundary'
         run: |
           set -euo pipefail
           sudo bash scripts/install-ci-apparmor.sh --without-hook-denies
