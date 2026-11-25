@@ -42,7 +42,7 @@ import { RICH_MAX_CHARS } from './rich.js';
  */
 
 /** `telegram`, `telegram:<chatId>` or `telegram:<chatId>#<threadId>` → the room, or null when it is neither. */
-function indirizzoPer(
+export function telegramAddress(
   channel: string,
   ownerChatId: number | undefined,
 ): { chatId: number; threadId?: number } | null {
@@ -74,6 +74,15 @@ function indirizzoPer(
  * registrano non possono divergere (§4 invariante 1).
  */
 export const TELEGRAM_ID = 'telegram';
+
+export function telegramDeliveryResult(status: TelegramDeliveryOutcome): DeliveryOutcome {
+  if (status === 'sent') return DELIVERED;
+  const why =
+    status === 'possibly_sent'
+      ? 'Telegram potrebbe aver ricevuto il messaggio'
+      : 'consegna Telegram già in corso';
+  return { delivered: false, status, why };
+}
 
 export function telegramSurface(
   api: TelegramApiLike,
@@ -124,10 +133,10 @@ export function telegramSurface(
     places: TELEGRAM_PLACES,
     negotiate: negoziazioneTelegram,
 
-    handles: (channel) => indirizzoPer(channel, ownerChatId) !== null,
+    handles: (channel) => telegramAddress(channel, ownerChatId) !== null,
 
     deliver: async (channel, text, turn): Promise<DeliveryOutcome> => {
-      const indirizzo = indirizzoPer(channel, ownerChatId);
+      const indirizzo = telegramAddress(channel, ownerChatId);
       if (indirizzo === null) {
         // Reachable only if a caller skipped `handles`. Refusing is right: the
         // alternative is inventing a destination for a message.
@@ -137,13 +146,7 @@ export function telegramSurface(
         if (text.trim() === '') return notDelivered('niente da consegnare: il testo è vuoto');
         if (deliverTurn === undefined)
           return notDelivered('registro di consegna Telegram non disponibile');
-        const status = await deliverTurn(turn, indirizzo, text);
-        if (status === 'sent') return DELIVERED;
-        const why =
-          status === 'possibly_sent'
-            ? 'Telegram potrebbe aver ricevuto il messaggio'
-            : 'consegna Telegram già in corso';
-        return { delivered: false, status, why };
+        return telegramDeliveryResult(await deliverTurn(turn, indirizzo, text));
       }
       // Convert first, split second. The limit is on the rendered HTML, and
       // splitting the markdown at 4000 then expanding it produced messages over
@@ -195,7 +198,7 @@ export function telegramSurface(
      * docstring says. This is that caller.
      */
     deliverFile: async (channel, file: FileSpec): Promise<DeliveryOutcome> => {
-      const indirizzo = indirizzoPer(channel, ownerChatId);
+      const indirizzo = telegramAddress(channel, ownerChatId);
       if (indirizzo === null)
         return notDelivered(`"${channel}" non è un canale telegram indirizzabile`);
       // Il thread vale per tutte e due le uscite di questa funzione — il

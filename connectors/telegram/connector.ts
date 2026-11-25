@@ -9,7 +9,8 @@ import type {
   Update,
 } from '@grammyjs/types';
 import { tipoAudio } from '../../agent/audio.js';
-import { COMANDI, type Controlli, sembraComando } from '../../agent/comandi.js';
+import { COMANDI, type Controlli } from '../../agent/comandi.js';
+import { providerMessages } from '../../agent/loop/provider-checkpoint.js';
 import type {
   ApprovalRequest,
   ApprovalWhere,
@@ -26,6 +27,7 @@ import type { PendingPairing } from '../../core/config/pairing.js';
 import { estraiFotogramma } from '../../core/media/fotogramma.js';
 import { fence } from '../../core/memory/spotlight.js';
 import { sleep } from '../../core/net/sleep.js';
+import { replyCapability } from '../../core/policy/doors.js';
 import type { TrustTier } from '../../core/policy/types.js';
 import { levaDelega } from '../../core/runtime/delega.js';
 import type { SessionStore } from '../../core/session/store.js';
@@ -35,7 +37,9 @@ import {
   type SurfaceIdentity,
   tierOf,
 } from '../../core/surface/types.js';
+import { redactText } from '../../core/tracing/redact.js';
 import type { ModelLane } from '../../core/turns/model-lane.js';
+import type { TurnRecord } from '../../core/turns/store.js';
 import { decodeWaitFor } from '../../core/turns/wait.js';
 import type { Vista } from '../../core/vista/vista.js';
 import { composeTurnText as sharedComposeTurnText } from '../shared/ingress/compose.js';
@@ -98,9 +102,13 @@ type ApprovalDecide = (
   now: Date,
   by?: 'owner' | 'delegation',
 ) => 'ok' | 'already' | 'unknown' | 'withdrawn';
-type ApprovalGet = (
-  id: string,
-) => { id: string; turnId: string; capability: string; resource: string | null } | null;
+type ApprovalGet = (id: string) => {
+  id: string;
+  turnId: string;
+  capability: string;
+  resource: string | null;
+  telegramQuestionPending: boolean;
+} | null;
 type ApprovalOpenRows = (turnId: string) => { id: string }[];
 /**
  * Solo i due metodi che la chiusura orfana usa (#784): registrare dove una
@@ -287,6 +295,8 @@ export type ConnectorDeps = {
     get: ApprovalGet;
     openRows: ApprovalOpenRows;
     noteQuestionMessage: ApprovalNoteQuestion;
+    beginTelegramQuestion: (id: string, turnId: string) => boolean;
+    rejectTelegramQuestion: (id: string) => void;
     withdrawnQuestionMessages: ApprovalWithdrawnQuestions;
   };
   /**
@@ -535,7 +545,7 @@ export function apreUnTurno(i: {
  * accettabile — un turno in piu' in un gruppo lo vedono tutti.
  */
 function comandoPerNoi(testo: string, meUsername: string | undefined): string {
-  const m = /^\/([a-z]+)(?:@([A-Za-z0-9_]+))?/i.exec(testo.trim());
+  const m = /^\/([a-z]+)(?:@([A-Za-z0-9_]+))?(?=\s|$)/i.exec(testo.trim());
   const nome = m?.[1]?.toLowerCase() ?? '';
   if (nome === '') return '';
   const bersaglio = m?.[2];
@@ -1142,14 +1152,8 @@ export class TelegramConnector {
   private readonly approvalSulTurno = new Set<string>();
 
   /**
-   * What a just-finished turn's answer must account for: the process it
-   * showed and, when there is one, the real message it should extend.
-   *
-   * In a group `messageId` is that message (the tool trail is persistent) and
-   * the answer **edits** it, through the durable, crash-recoverable
-   * write-ahead every delivery goes through. In a DM it is `null`: the process
-   * only ever lived in the ephemeral draft, and the answer is a fresh rich
-   * send whose `details` block carries `process`. Written by
+   * The approval message a just-finished turn can reuse. An ordinary turn
+   * has no entry. Written by
    * `noteTranscriptHandoff` the moment a transcript closes for good (never for
    * a turn that is merely pausing — see the two call sites), read and deleted
    * the one time `deliverTo` builds a plan for that turn.
@@ -1161,17 +1165,253 @@ export class TelegramConnector {
    */
   private readonly transcriptHandoff = new Map<
     string,
-    { messageId: number | null; process: string[]; processHtml: string }
+    NonNullable<ReturnType<Transcript['handoff']>>
   >();
 
   private noteTranscriptHandoff(turnId: string, transcript: Transcript): void {
     const handoff = transcript.handoff();
     if (handoff) this.transcriptHandoff.set(turnId, handoff);
+    else this.transcriptHandoff.delete(turnId);
   }
 
   constructor(private readonly deps: ConnectorDeps) {
     this.port = telegramPort(deps.api, deps.config.ownerChatId);
     this.sleep = deps.sleep ?? sleep;
+  }
+
+  private currentOwnerChat(): number | null {
+    let binding: ReturnType<NonNullable<LoopDeps['workMessageOwner']>> | undefined;
+    try {
+      binding = this.deps.loop.workMessageOwner?.();
+    } catch {
+      return null;
+    }
+    const userId = binding?.userId;
+    const chatId = binding?.chatId ?? userId;
+    if (
+      userId === undefined ||
+      chatId !== userId ||
+      !isDirectChat(chatId) ||
+      userId !== this.deps.config.ownerUserId ||
+      chatId !== (this.deps.config.ownerChatId ?? userId)
+    )
+      return null;
+    return chatId;
+  }
+
+  /** Gate the cached owner before ordinary DM ingress and the poller's fast paths. */
+  private staleOwnerDM(chatId: number, fromId?: number): boolean {
+    if (
+      this.deps.loop.sendWorkMessage !== this.sendWorkMessage ||
+      this.deps.config.ownerUserId === undefined
+    )
+      return false; // Keep the unpaired connector's pairing path available.
+    return (fromId !== undefined && fromId !== chatId) || this.currentOwnerChat() !== chatId;
+  }
+
+  private workChat(turn: TurnRecord): number | null {
+    const chatId = this.currentOwnerChat();
+    if (
+      chatId === null ||
+      turn.surface !== 'telegram' ||
+      turn.tenant !== 'host' ||
+      turn.jobId !== null ||
+      turn.principal.kind !== 'owner' ||
+      turn.principal.connector !== 'telegram' ||
+      turn.principal.externalId !== String(chatId) ||
+      turn.replyTo?.chatId !== chatId ||
+      turn.replyTo.channel !== `telegram:${chatId}` ||
+      turn.replyTo.threadId !== undefined
+    )
+      return null;
+    return chatId;
+  }
+
+  private canSendWork(turn: TurnRecord, chatId: number): boolean {
+    return (
+      !this.stopping &&
+      this.workChat(turn) === chatId &&
+      this.deps.loop.decide({
+        principal: turn.principal,
+        tenant: turn.tenant,
+        capability: replyCapability.id,
+        resource: { kind: 'none' },
+        args: {},
+        taint: turn.taint,
+      }).effect === 'allow'
+    );
+  }
+
+  /** Separate outbox identity: no access to the final delivery or its handoff. */
+  sendWorkMessage = async (
+    turnId: string,
+    id: string,
+    text: string,
+  ): Promise<TelegramDeliveryOutcome> => {
+    if (this.stopping || !/^[a-f0-9]{64}$/.test(id)) return 'deferred';
+    const turn = this.deps.loop.turns.get(turnId);
+    if (turn === null) return 'deferred';
+    const chatId = this.workChat(turn);
+    if (chatId === null) return 'deferred';
+    const html = escapeHtml(redactText(text));
+    // Keep the question in a single addressable bubble even for escaped text.
+    if (html === '' || html.length > 4096) return 'deferred';
+    return deliverTelegram(
+      this.deps.delivery,
+      this.deps.api,
+      `work:${id}`,
+      [
+        {
+          operation: 'send',
+          chatId,
+          threadId: null,
+          replyTo: null,
+          editMessageId: null,
+          html,
+        },
+      ],
+      () => this.now(),
+      0,
+      (part) => {
+        const current = this.deps.loop.turns.get(turnId);
+        return part.chatId === chatId && current !== null && this.canSendWork(current, chatId);
+      },
+    );
+  };
+
+  private questionText(question: { id: string; question: string }): string {
+    // Telegram includes the original bot message on a native reply. The
+    // reference distinguishes identical questions if the send receipt was lost.
+    return `${question.question}\n\nRispondi a questo messaggio per continuare. · Rif. ${question.id.slice(0, 24)}`;
+  }
+
+  private async publishQuestions(): Promise<void> {
+    if (this.deps.loop.sendWorkMessage !== this.sendWorkMessage || this.stopping) return;
+    for (const turn of this.deps.loop.turns.ownerQuestions()) {
+      const question = decodeWaitFor(turn.waitFor);
+      if (question?.kind !== 'owner_reply' || turn.wakeAt === null || turn.wakeAt <= this.now())
+        continue;
+      if (this.workChat(turn) === null) continue;
+      try {
+        // A pending intent can be replayed. A prior success, refusal or
+        // ambiguous send needs no further request on every poll.
+        const parts = this.deps.delivery.parts(`work:${question.id}`, 0);
+        if (parts.some((part) => part.status === 'rejected')) {
+          this.resumeAfterUnsentQuestion(turn);
+        } else if (parts.length === 0 || parts.some((part) => part.status === 'pending')) {
+          const outcome = await this.sendWorkMessage(
+            turn.id,
+            question.id,
+            this.questionText(question),
+          );
+          if (
+            outcome === 'deferred' &&
+            this.deps.delivery.parts(`work:${question.id}`, 0).length === 0 &&
+            this.workChat(turn) !== null &&
+            !this.stopping
+          )
+            this.resumeAfterUnsentQuestion(turn);
+        }
+      } catch {
+        this.deps.log?.(`telegram: work question ${question.id.slice(0, 12)} was not confirmed`);
+        if (
+          this.deps.delivery
+            .parts(`work:${question.id}`, 0)
+            .some((part) => part.status === 'rejected')
+        ) {
+          this.resumeAfterUnsentQuestion(turn);
+        }
+      }
+    }
+  }
+
+  private resumeAfterUnsentQuestion(turn: TurnRecord): void {
+    if (turn.waitFor === null) return;
+    const resumed = this.deps.loop.turns.answerOwnerQuestion(
+      turn.id,
+      turn.waitFor,
+      [
+        ...providerMessages(turn),
+        {
+          role: 'user',
+          origin: 'harness',
+          content: [
+            {
+              type: 'text',
+              text: 'Your clarification could not be delivered. The owner has not seen it and has not answered. Continue where possible or explain the blocker in the final response.',
+            },
+          ],
+        },
+      ],
+      () => {},
+      new Date(this.now()),
+    );
+    if (resumed) this.deps.onWork?.();
+  }
+
+  private answerQuestion(stored: StoredUpdate, incoming: Incoming, update: Update): boolean {
+    if (
+      this.deps.loop.sendWorkMessage !== this.sendWorkMessage ||
+      this.meId === undefined ||
+      stored.turnId !== null ||
+      !incoming.isPrivate ||
+      incoming.threadId !== undefined ||
+      incoming.forwarded !== undefined ||
+      incoming.attachment !== undefined ||
+      incoming.text.trim() === '' ||
+      incoming.fromId !== incoming.chatId
+    )
+      return false;
+    const command = comandoPerNoi(incoming.text, this.meUsername);
+    if (COMANDI.some(({ nome, soloTerminale }) => nome === command && !soloTerminale)) return false;
+    const prompt = update.message?.reply_to_message;
+    if (
+      prompt?.from?.id !== this.meId ||
+      !prompt.from.is_bot ||
+      prompt.chat.id !== incoming.chatId ||
+      !Number.isSafeInteger(prompt.message_id) ||
+      prompt.message_id <= 0
+    )
+      return false;
+    for (const turn of this.deps.loop.turns.ownerQuestions()) {
+      if (turn.waitFor === null || turn.replyTo?.chatId !== incoming.chatId) continue;
+      const question = decodeWaitFor(turn.waitFor);
+      if (question?.kind !== 'owner_reply') continue;
+      const expected = this.questionText(question);
+      const matches = this.deps.delivery
+        .parts(`work:${question.id}`, 0)
+        .some(
+          (part) =>
+            part.chatId === incoming.chatId &&
+            part.threadId === null &&
+            (part.status === 'sent'
+              ? part.telegramMessageId === prompt.message_id
+              : part.status === 'possibly_sent' &&
+                part.html === escapeHtml(expected) &&
+                prompt.text === expected),
+        );
+      if (!matches) continue;
+      const at = this.now();
+      // Recognize the durable reply target before checking live authority.
+      // Refusal must not send it to ordinary ingress under the boot-time owner.
+      if (this.workChat(turn) !== incoming.chatId) {
+        this.deps.inbox.discard(stored.updateId, at);
+        return true;
+      }
+      const answered = this.deps.loop.turns.answerOwnerQuestion(
+        turn.id,
+        turn.waitFor,
+        [
+          ...providerMessages(turn),
+          { role: 'user', content: [{ type: 'text', text: incoming.text }] },
+        ],
+        () => this.deps.inbox.consumeWorkAnswer(stored.updateId, at),
+        new Date(at),
+      );
+      if (answered) this.deps.onWork?.();
+      return answered;
+    }
+    return false;
   }
 
   /**
@@ -1283,6 +1523,12 @@ export class TelegramConnector {
           // risposta e' arrivata, e quello che viene dopo — `accept`, `drain` —
           // e' lavoro nostro, non la prova che Telegram risponde.
           this.deps.salute?.connessa('telegram', new Date(this.now()));
+          if (
+            updates.length === 0 &&
+            this.deps.loop.sendWorkMessage === this.sendWorkMessage &&
+            this.deps.loop.turns.ownerQuestions(1).length > 0
+          )
+            this.scheduleDrain();
           if (updates.length > 0) {
             const { stored, duplicates, accepted } = this.deps.inbox.accept(updates, this.now());
             if (duplicates > 0) log(`telegram: ${duplicates} update già visti, ignorati`);
@@ -1522,11 +1768,32 @@ export class TelegramConnector {
     turnId: string,
     replyTo: Record<string, unknown>,
     text: string,
+    api: TelegramApiLike = this.deps.api,
   ): Promise<TelegramDeliveryOutcome> {
     const chatId = replyTo['chatId'];
     if (typeof chatId !== 'number') {
       throw new Error(`replyTo senza chatId numerico: ${JSON.stringify(replyTo)}`);
     }
+    const record = this.deps.loop.turns.get(turnId);
+    if (record?.ownerQuestionFinal) {
+      const receipt = this.deps.delivery.recordedOutcome(turnId, record.leaseIndex);
+      if (receipt !== undefined) return receipt;
+    }
+    const checkAuthority = record?.ownerQuestionFinal
+      ? (destination: number): true => {
+          const current = this.deps.loop.turns.get(turnId);
+          if (
+            destination !== chatId ||
+            !current?.ownerQuestionFinal ||
+            current.leaseIndex !== record.leaseIndex ||
+            !this.canSendWork(current, chatId)
+          ) {
+            throw new Error('Work reply is no longer authorized for this chat');
+          }
+          return true;
+        }
+      : undefined;
+    checkAuthority?.(chatId);
     // #784 — il turno è terminale (la risposta che stiamo per consegnare lo
     // dice): le domande ritirate non hanno più nessuno che le decida, e le
     // loro bolle — mandate magari da un processo morto prima di un riavvio —
@@ -1543,7 +1810,7 @@ export class TelegramConnector {
     // diagnostico la inghiottirebbe: `plan` restituirebbe le parti di prima,
     // tutte `sent`, e la superficie riferirebbe una consegna mai avvenuta
     // (misurato il 28/09 sulla catena reale `riprendi`).
-    const leaseIndex = this.deps.loop.turns.get(turnId)?.leaseIndex ?? 0;
+    const leaseIndex = record?.leaseIndex ?? 0;
     // Sta sulla riga durevole e non su questo stack, perché la ripresa dopo
     // un riavvio legge la riga: senza, un turno ripescato rispondeva in
     // *General* invece che nel topic da cui era partita la domanda.
@@ -1554,19 +1821,16 @@ export class TelegramConnector {
     const handoff = this.transcriptHandoff.get(turnId);
     if (handoff) this.transcriptHandoff.delete(turnId);
 
-    const processHtml = handoff?.processHtml ?? '';
-    // A handoff with a real message (a group with no draft) edits that bubble;
-    // an ephemeral one (a DM) has nothing to edit, so this is a fresh send.
-    const editId =
-      handoff !== undefined && handoff.messageId !== null ? handoff.messageId : editMessageId;
+    // Only an approval message is handed off to the result writer.
+    const editId = handoff?.messageId ?? editMessageId;
     // Una chat privata è la stanza con la bozza: lì il turno ha una sola forma,
     // i blocchi, e il finale la ripete — mai il vecchio cambio forma.
     const isPrivate = isDirectChat(chatId);
 
     // The unsplit HTML both lanes start from: `splitHtml` is the legacy plan
     // (and the rich fallback); the rich lane carries `combined` whole.
-    const combined =
-      processHtml === '' ? toTelegramHtml(text) : `${processHtml}\n\n${toTelegramHtml(text)}`;
+    const answer = toTelegramHtml(text);
+    const combined = handoff ? `${answer}\n\n<b>Approvazioni</b>\n${handoff.approvalHtml}` : answer;
     const parts = splitHtml(combined);
 
     const legacy: TelegramDeliveryPlanPart[] = parts.map((html, i) => {
@@ -1583,43 +1847,41 @@ export class TelegramConnector {
       };
     });
 
-    // In a DM the turn's one message is always blocks — the same shape the
-    // draft showed (process in `details`, answer as native blocks), whether the
-    // turn had tools or not. Da quando una domanda di approvazione apre il
-    // messaggio del turno, anche la consegna in DM è un **edit** di quel
-    // messaggio: stessa forma a blocchi, processo ripiegato nel `details`, una
-    // sola bolla per il turno. Un gruppo tiene l'edit-merge qui sotto (i suoi
-    // passi sono una traccia silenziosa e la risposta estende quella bolla).
-    if (isPrivate) {
-      const turn = turnRichMessage({ process: handoff?.process ?? [], answer: text });
-      const first = legacy[0];
-      if (turn !== null && first !== undefined && richFitsHard(turn) === null) {
-        return deliverTelegram(
-          this.deps.delivery,
-          this.deps.api,
-          turnId,
-          [{ ...first, kind: 'rich' as const, rich: turn, fallback: legacy }],
-          () => this.now(),
-          leaseIndex,
-        );
-      }
-      return deliverTelegram(
+    const canAttempt =
+      checkAuthority && ((part: { chatId: number }) => checkAuthority(part.chatId));
+    const send = (plan: TelegramDeliveryPlanPart[]) =>
+      deliverTelegram(
         this.deps.delivery,
-        this.deps.api,
+        api,
         turnId,
-        legacy,
+        plan,
         () => this.now(),
         leaseIndex,
+        canAttempt,
       );
+    let plan = legacy;
+    // In DMs, the answer uses the same blocks as the draft. A hosted approval
+    // adds its receipt beneath the answer and reuses the message ID.
+    if (isPrivate) {
+      const turn = turnRichMessage(text, handoff?.approvals);
+      const first = legacy[0];
+      if (turn !== null && first !== undefined && richFitsHard(turn) === null) {
+        plan = [{ ...first, kind: 'rich', rich: turn, fallback: legacy }];
+      }
+    } else {
+      plan = this.maybeRich(text, combined, legacy);
     }
-    return deliverTelegram(
-      this.deps.delivery,
-      this.deps.api,
-      turnId,
-      this.maybeRich(text, combined, legacy),
-      () => this.now(),
-      leaseIndex,
-    );
+    try {
+      return await send(plan);
+    } catch (error) {
+      if (canAttempt === undefined || !(error instanceof TelegramError) || error.status !== 429)
+        throw error;
+      // Only a definitive rejection is retryable. Re-enter the frozen plan to
+      // skip any delivered parts and check live authority before another write.
+      await this.sleep(((error.retryAfter ?? 1) + 1) * 1000, this.abortController?.signal);
+      if (this.stopping) return 'deferred';
+      return send(plan);
+    }
   }
 
   /**
@@ -1691,6 +1953,20 @@ export class TelegramConnector {
   resumeStream: AttachStream = (record) => {
     const chatId = record.replyTo?.['chatId'];
     if (typeof chatId !== 'number') return undefined;
+    if (record.ownerQuestionFinal) {
+      if (this.workChat(record) !== chatId) return undefined;
+      // This Work already has a conversational message. Keep controls, but
+      // leave presentation to journaled Work messages and the final result.
+      const { lane, release } = this.corsie.attach(this.corsia(chatId));
+      return {
+        signal: lane.controller.signal,
+        steer: () => (this.workChat(record) === chatId ? lane.correzioni.splice(0) : []),
+        stop: async () => {
+          release();
+          this.scheduleDrain();
+        },
+      };
+    }
     const isPrivate = isDirectChat(chatId);
     // Stesso topic della domanda: la riga durevole è l'unica fonte che
     // sopravvive al riavvio da cui questo percorso riparte.
@@ -1789,6 +2065,8 @@ export class TelegramConnector {
         // nuovo. Più stretto, e non peggiore, del buco preesistente che questa
         // mappa aveva già sulla ri-sospensione.
         this.noteTranscriptHandoff(record.id, transcript);
+        if (dopo?.status === 'waiting' && decodeWaitFor(dopo.waitFor)?.kind === 'owner_reply')
+          this.scheduleDrain();
       },
     };
   };
@@ -1815,20 +2093,57 @@ export class TelegramConnector {
     where: ApprovalWhere,
   ): Promise<Awaited<ReturnType<Approver>>> {
     const chatId = where.replyTo?.['chatId'];
-    const transcript = typeof chatId === 'number' ? this.transcriptVivi.get(chatId) : undefined;
-    if (transcript !== undefined && where.approvalId !== undefined) {
-      const presa = await transcript.ask({ request, approvalId: where.approvalId });
+    const { approvalId, turnId } = where;
+    const approvals = this.deps.approvals;
+    if (typeof chatId !== 'number' || approvalId === undefined || approvals === undefined)
+      return 'unavailable';
+    const record = this.deps.loop.turns.get(turnId);
+    const canAttempt = record?.ownerQuestionFinal
+      ? () => {
+          const current = this.deps.loop.turns.get(turnId);
+          return (
+            current?.ownerQuestionFinal === true &&
+            current.leaseIndex === record.leaseIndex &&
+            where.replyTo?.['threadId'] === undefined &&
+            this.canSendWork(current, chatId)
+          );
+        }
+      : undefined;
+    if (canAttempt?.() === false) return 'unavailable';
+    const row = approvals.get(approvalId);
+    if (row === null || row.turnId !== turnId) return 'unavailable';
+    if (row.telegramQuestionPending) return 'asked';
+    const attempt = {
+      begin: () => approvals.beginTelegramQuestion(approvalId, turnId),
+      reject: () => approvals.rejectTelegramQuestion(approvalId),
+    };
+    // Resumed Work has no transcript, and must not borrow an unguarded one.
+    const transcript = canAttempt === undefined ? this.transcriptVivi.get(chatId) : undefined;
+    if (transcript !== undefined) {
+      let began = false;
+      const presa = await transcript.ask({
+        request,
+        approvalId,
+        begin: () => (began = attempt.begin()),
+      });
+      // Telegram may already have posted the question. Wait for its callback
+      // on the existing approval row; do not post a second keyboard.
+      if (presa === 'uncertain') return 'asked';
       if (presa) {
-        this.approvalSulTurno.add(where.approvalId);
-        this.transcriptInSospeso.set(where.turnId, transcript);
+        this.approvalSulTurno.add(approvalId);
+        this.transcriptInSospeso.set(turnId, transcript);
         return 'asked';
       }
+      if (began) attempt.reject();
     }
     // La domanda esce come messaggio autonomo: la registrazione di dove si è
     // mostrata è il gancio, con la stessa protezione di quello della
     // trascrizione (una registrazione non rompe una domanda già partita).
-    return approvatoreTelegram(this.deps.api, (mostrata) =>
-      this.notaDomanda(mostrata.approvalId, mostrata.messageId),
+    return approvatoreTelegram(
+      this.deps.api,
+      (mostrata) => this.notaDomanda(mostrata.approvalId, mostrata.messageId),
+      attempt,
+      canAttempt,
     )(request, where);
   }
 
@@ -1926,16 +2241,18 @@ export class TelegramConnector {
       if (!incoming) continue;
       const { principal } = principalFor(incoming, this.deps.config.ownerUserId);
       if (principal.kind !== 'owner') continue;
-      if (
-        sembraComando(incoming.text) &&
-        CONTROLLO.has(comandoPerNoi(incoming.text, this.meUsername))
-      ) {
+      if (CONTROLLO.has(comandoPerNoi(incoming.text, this.meUsername))) {
         this.gestiti.add(incoming.updateId);
         controlli.push(incoming);
       }
     }
 
     for (const incoming of controlli) {
+      if (incoming.isPrivate && this.staleOwnerDM(incoming.chatId, incoming.fromId)) {
+        this.discardPrivateDM(incoming.updateId, this.deps.log ?? (() => {}));
+        this.gestiti.delete(incoming.updateId);
+        continue;
+      }
       try {
         await this.tryCommand(incoming);
       } catch (error) {
@@ -1989,9 +2306,10 @@ export class TelegramConnector {
     for (const update of updates) {
       const incoming = parseUpdate(update, this.meId);
       if (!incoming) continue;
+      if (incoming.isPrivate && this.staleOwnerDM(incoming.chatId, incoming.fromId)) continue;
       const { principal } = principalFor(incoming, this.deps.config.ownerUserId);
       if (principal.kind !== 'owner') continue;
-      if (sembraComando(incoming.text)) continue;
+      if (comandoPerNoi(incoming.text, this.meUsername) !== '') continue;
       await this.avvisa(incoming);
     }
   }
@@ -2138,6 +2456,7 @@ export class TelegramConnector {
       log(`telegram: stop della generazione senza chat numerica — ignorato`);
       return;
     }
+    if (isDirectChat(chatId) && this.staleOwnerDM(chatId)) return;
     const ownerChat = this.deps.config.ownerChatId;
     if (ownerChat !== undefined && chatId !== ownerChat) {
       log(
@@ -2159,6 +2478,7 @@ export class TelegramConnector {
   /** Everything not yet answered, oldest first. Also the crash-recovery path. */
   private async drain(): Promise<void> {
     const log = this.deps.log ?? (() => {});
+    await this.publishQuestions();
     for (const stored of this.deps.inbox.pending()) {
       if (this.gestiti.has(stored.updateId)) continue;
       const update = JSON.parse(stored.payload) as Update;
@@ -2228,7 +2548,13 @@ export class TelegramConnector {
       // `markProcessed`, `markFailed` — che è dove stanno le tabelle
       // (§4 invariante 3).
       try {
+        if (incoming.isPrivate && this.staleOwnerDM(incoming.chatId, incoming.fromId)) {
+          this.discardPrivateDM(stored.updateId, log);
+          continue;
+        }
+        if (this.answerQuestion(stored, incoming, update)) continue;
         await this.resolve(stored, incoming);
+        await this.publishQuestions();
       } catch (error) {
         // Stays pending: it may well work after a restart, and dropping it is
         // the data loss the inbox exists to prevent, arriving by another road.
@@ -2898,6 +3224,8 @@ export class TelegramConnector {
 
     const owner = this.deps.config.ownerUserId;
     if (owner === undefined || query.from.id !== owner) return rispondi();
+    const chat = query.message?.chat;
+    if (chat?.type === 'private' && this.staleOwnerDM(chat.id, query.from.id)) return rispondi();
 
     const parsed = /^(ok|no):([0-9a-f]+)$/.exec(query.data ?? '');
     if (parsed === null || this.deps.approvals === undefined) {
@@ -3017,7 +3345,7 @@ export class TelegramConnector {
    * modello come una frase qualunque, che è quello che è.
    */
   private async tryCommand(incoming: Incoming): Promise<boolean> {
-    if (!this.deps.comandi || !sembraComando(incoming.text)) return false;
+    if (!this.deps.comandi || comandoPerNoi(incoming.text, this.meUsername) === '') return false;
     const { principal, sessionKey } = principalFor(incoming, this.deps.config.ownerUserId);
 
     // Stessa chiave del turno qui sopra, e dalla stessa funzione: `/new` deve

@@ -22,12 +22,10 @@ import { MUTA, type Negotiation, type Place } from '../../core/surface/types.js'
  * ## Il gruppo: nessuna anteprima, e due limiti invece di uno
  *
  * In un gruppo l'anteprima non esiste — non per prudenza ma per grammatica:
- * `assertNegotiable` rifiuta `'draft'` fuori da `'direct'`. Restano gli edit,
- * e i limiti pubblicati della Bot API sono due: circa un messaggio al secondo
- * verso una chat, circa venti al minuto verso un gruppo. Fino al 06/09 il
- * codice ne applicava uno solo (`MIN_EDIT_GROUP_MS = 3000`, cioè la media
- * spalmata sul picco), e il contatore di un passo lungo si muoveva un terzo
- * di quanto poteva.
+ * `assertNegotiable` rifiuta `'draft'` fuori da `'direct'`. La presenza
+ * ordinaria è la digitazione; gli edit sono disponibili per un messaggio
+ * già aperto da un'approvazione (ADR-0111). I limiti pubblicati sono circa
+ * un messaggio al secondo per chat e venti al minuto per gruppo.
  *
  * `'topic'` è il gruppo: un topic non ha limiti suoi, li eredita dalla chat.
  * Ciò che cambia in un topic è *dove* si scrive (`message_thread_id`), che è
@@ -88,7 +86,10 @@ export function negoziazioneTelegram(place: Place): Negotiation {
  * non un inquilino — vedi `IncomingIdentity.threadId`) e due copie di una
  * decisione sono due decisioni.
  */
-export function stanzaDi(incoming: { readonly isPrivate: boolean; readonly threadId?: number | undefined }): Place {
+export function stanzaDi(incoming: {
+  readonly isPrivate: boolean;
+  readonly threadId?: number | undefined;
+}): Place {
   if (incoming.isPrivate) return 'direct';
   return incoming.threadId === undefined ? 'group' : 'topic';
 }
