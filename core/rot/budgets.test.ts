@@ -1,8 +1,31 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  fsyncSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { BUDGET_FLOOR, QUIET_FLOOR, loadSealedBudgets } from './budgets.js';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  BUDGET_FLOOR,
+  detectOwnerTimezone,
+  loadSealedBudgets,
+  QUIET_FLOOR,
+  seedQuietTimezone,
+} from './budgets.js';
+
+vi.mock('node:fs', async (importOriginal) => {
+  const fs = await importOriginal<typeof import('node:fs')>();
+  return { ...fs, fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync) };
+});
 
 /**
  * The sealed file, and the two halves that must not be able to break each other.
@@ -86,7 +109,10 @@ describe('rot/budgets.json', () => {
   });
 
   it('keeps the caps when the quiet hours are the broken half', () => {
-    const home = rot({ ...GOOD, quietHours: { from: '10pm', to: '07:00', timezone: 'Europe/Rome' } });
+    const home = rot({
+      ...GOOD,
+      quietHours: { from: '10pm', to: '07:00', timezone: 'Europe/Rome' },
+    });
     const b = loadSealedBudgets(home);
     expect(b.caps.monthlyUsd).toBe(42);
     expect(b.capsSource).toBe('sealed');
@@ -144,4 +170,76 @@ describe('rot/budgets.json', () => {
     expect(broken.caps).toEqual(BUDGET_FLOOR);
     expect(broken.notes.join(' ')).toContain('illeggibile');
   });
+});
+
+describe('the owner timezone on first startup', () => {
+  const shipped = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    '..',
+    'defaults',
+    'rot',
+    'budgets.json',
+  );
+
+  it('accepts a valid IANA timezone and skips UTC aliases and invalid names', () => {
+    expect(detectOwnerTimezone('Europe/Rome')).toBe('Europe/Rome');
+    expect(detectOwnerTimezone('UTC')).toBeUndefined();
+    expect(detectOwnerTimezone('Etc/UTC')).toBeUndefined();
+    expect(detectOwnerTimezone('Europe/Roma')).toBeUndefined();
+    expect(detectOwnerTimezone('')).toBeUndefined();
+  });
+
+  it('atomically replaces the shipped timezone and preserves all other bytes', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'muffin-seed-tz-'));
+    try {
+      const file = join(dir, 'budgets.json');
+      const before = readFileSync(shipped, 'utf8');
+      writeFileSync(file, before);
+      const reader = openSync(file, 'r');
+      try {
+        expect(seedQuietTimezone(file, 'Europe/Rome')).toBe(true);
+        expect(readFileSync(reader, 'utf8')).toBe(before);
+      } finally {
+        closeSync(reader);
+      }
+      const after = readFileSync(file, 'utf8');
+      expect(after).toBe(before.replace('"timezone": "UTC"', '"timezone": "Europe/Rome"'));
+      expect(JSON.parse(after).quietHours).toEqual({ ...QUIET_FLOOR, timezone: 'Europe/Rome' });
+      // Keep the previously chosen timezone.
+      expect(seedQuietTimezone(file, 'America/New_York')).toBe(false);
+      expect(readFileSync(file, 'utf8')).toBe(after);
+      // Reject invalid timezone names before they enter the sealed file.
+      writeFileSync(file, before);
+      expect(seedQuietTimezone(file, 'Europe/Roma')).toBe(false);
+      expect(readFileSync(file, 'utf8')).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['file sync', vi.mocked(fsyncSync)],
+    ['rename', vi.mocked(renameSync)],
+  ] as const)(
+    'keeps the original file and removes the temporary file on %s failure',
+    (_, operation) => {
+      const dir = mkdtempSync(join(tmpdir(), 'muffin-seed-tz-'));
+      try {
+        const file = join(dir, 'budgets.json');
+        const before = readFileSync(shipped, 'utf8');
+        writeFileSync(file, before);
+        const failure = new Error('Simulated filesystem failure');
+        operation.mockImplementationOnce(() => {
+          throw failure;
+        });
+
+        expect(() => seedQuietTimezone(file, 'Europe/Rome')).toThrow(failure);
+        expect(readFileSync(file, 'utf8')).toBe(before);
+        expect(readdirSync(dir)).toEqual(['budgets.json']);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });
