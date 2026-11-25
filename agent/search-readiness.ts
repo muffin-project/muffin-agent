@@ -1,0 +1,71 @@
+import { ChatGPTConnection } from '../core/config/chatgpt-oauth.js';
+import { type Config, ConfigError, loadConfig } from '../core/config/config.js';
+import { CHATGPT_SEARCH_PROVIDER } from '../core/config/providers.js';
+import { type EgressPolicy, hostAllowed, loadEgress } from '../core/net/egress.js';
+import { OpenAIChatGPTProvider } from './providers/openai-chatgpt.js';
+import { ProviderError } from './providers/types.js';
+import { diagnoseSearch, type SearchBackend, type SearchDiagnosis } from './tools/search.js';
+
+export function chatGPTSearchBackend(config: Config, home: string): SearchBackend {
+  if (config.provider.kind !== 'openai-chatgpt') {
+    throw new ConfigError('ChatGPT is not selected as the main provider', 'muffin model');
+  }
+  const connection = new ChatGPTConnection(home);
+  let connected = false;
+  try {
+    connected = connection.session()?.connected === true;
+  } catch {
+    // The persisted credential or its backing store is unavailable.
+  }
+  if (!connected) {
+    throw new ConfigError('ChatGPT plan permission is unavailable', 'muffin chatgpt login');
+  }
+  const provider = new OpenAIChatGPTProvider(connection);
+  const endpointHost = new URL(CHATGPT_SEARCH_PROVIDER.endpoint).hostname;
+  function selectedRoute() {
+    let current: Config;
+    let egress: EgressPolicy;
+    try {
+      current = loadConfig(home);
+      egress = loadEgress(home);
+    } catch {
+      throw new ProviderError('ChatGPT search configuration is unavailable', false);
+    }
+    if (current.search?.provider !== 'chatgpt' || current.provider.kind !== 'openai-chatgpt') {
+      throw new ProviderError(
+        'ChatGPT search is no longer selected on the active main provider',
+        false,
+      );
+    }
+    if (!hostAllowed(endpointHost, egress)) {
+      throw new ProviderError('ChatGPT search no longer has network permission', false);
+    }
+    return { model: current.models.main, maxResults: current.search.maxResults };
+  }
+  return {
+    ...CHATGPT_SEARCH_PROVIDER,
+    search(query, signal) {
+      const { model, maxResults } = selectedRoute();
+      return provider.searchWeb(model, query, signal, {
+        maxResults,
+        beforeSend: () => {
+          if (selectedRoute().model !== model) {
+            throw new ProviderError(
+              'ChatGPT search model changed before the request started',
+              false,
+            );
+          }
+        },
+      });
+    },
+  };
+}
+
+export function diagnoseConfiguredSearch(
+  config: Config,
+  egress: EgressPolicy,
+  home: string,
+  resolveApiKey?: (ref: string) => string,
+): SearchDiagnosis {
+  return diagnoseSearch(config, egress, resolveApiKey, () => chatGPTSearchBackend(config, home));
+}
