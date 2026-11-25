@@ -146,10 +146,30 @@ export function resolveIdentityLayers(
 }
 
 /**
+ * Any `<preferenze-owner>` / `</preferenze-owner>` tag, in any case, with
+ * whitespace or attributes inside the brackets. Removal repeats until the
+ * text is stable: `</prefere</preferenze-owner>nze-owner>` would otherwise
+ * reassemble a real closing tag after one pass.
+ */
+const FENCE_TAG = /<\s*\/?\s*preferenze-owner\b[^>]*>/gi;
+
+export function stripFenceTags(text: string): string {
+  let current = text;
+  for (;;) {
+    const next = current.replace(FENCE_TAG, '');
+    if (next === current) return current;
+    current = next;
+  }
+}
+
+/**
  * The overlay as the model receives it: a label first, then the owner's
  * lines inside a tag, so the boundary between product and owner text is
- * explicit rather than a matter of string order. A closing tag inside the
- * file is removed so the owner text cannot end the fence early.
+ * explicit rather than a matter of string order. Every opening or closing
+ * fence tag inside the file is removed first (`stripFenceTags`), so the owner
+ * text — often pasted from elsewhere — cannot close the fence early or open
+ * a second one. The fence is a boundary marker for the model, not a security
+ * control: only the owner can write `user.md`, and the kernel follows it.
  */
 export function renderUserOverlay(user: NonNullable<IdentityLayers['user']>): string {
   if (user.text.length === 0) return '';
@@ -160,7 +180,7 @@ export function renderUserOverlay(user: NonNullable<IdentityLayers['user']>): st
       "Se l'owner chiede delle sue preferenze, diglielo: va accorciato."
     );
   }
-  const body = user.text.replaceAll('</preferenze-owner>', '');
+  const body = stripFenceTags(user.text);
   return [
     "## Preferenze dell'owner",
     '',

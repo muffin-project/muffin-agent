@@ -68,7 +68,7 @@ export const memoryProposeSpec: ToolSpec = {
     'review, or was rejected — report that honestly, never claim "lo ricordo" for a mere proposal. ' +
     'Set `standing: true` only for a lasting preference about how to help the owner ("d\'ora in poi usa sempre liste puntate"): ' +
     'it is pinned, so it reaches every future owner turn, only when the owner said it in their own words and you pass them as `instruction`. ' +
-    'A preference you inferred is never pinned: ask the owner whether to keep it, and propose again with their answer. ' +
+    'A preference you inferred is never pinned: ask the owner whether to keep it; it pins only if they restate the preference itself in their own words (a bare "sì" or "ok" does not pin), and you pass that sentence as `instruction`. ' +
     'e.g. memory_propose({subject: "owner", predicate: "accountant", object: "Mario"}).',
   inputSchema: {
     type: 'object',
@@ -396,10 +396,10 @@ function proposalDetail(deps: ProposeDeps, tenant: string, proposalId: number): 
  * cannot announce a pin that did not happen. Read off the fact row, not off
  * the request: `addFact`'s gate may have declined it.
  *
- * A merge into an existing belief pins that belief only under the gate
- * `addFact` applies to a new one — owner tier on both this turn and the row,
- * and `origin = 'said'` — so an older inferred row, or a tainted turn, cannot
- * promote a belief to the pinned core.
+ * A merge into an existing belief pins it through `store.pinIfEligible`,
+ * the same gate `addFact` applies to a new one — owner tier on both this turn
+ * and the row, and `origin = 'said'` — so an older inferred row, or a tainted
+ * turn, cannot promote a belief to the pinned core.
  */
 function standingNote(
   store: MemoryStore,
@@ -412,21 +412,11 @@ function standingNote(
   if (!pinRequested) {
     return (
       " Non appuntato come preferenza: è una tua deduzione, non parole dell'owner. " +
-      'Chiedigli se vuole che diventi una preferenza fissa; solo con le sue parole si appunta.'
+      "Chiedigli se vuole che diventi una preferenza fissa: si appunta solo se la ridice con parole sue (un «sì» da solo non basta). Non dire che l'hai appuntata."
     );
   }
   const id = factIds[0];
-  const fact = id === undefined ? null : store.factById(tenant, id);
-  if (
-    fact &&
-    fact.pinned !== 1 &&
-    status === 'merged' &&
-    tier === 0 &&
-    fact.trustTier === 0 &&
-    fact.origin === 'said'
-  ) {
-    store.setPinned(tenant, fact.id, true);
-  }
+  if (id !== undefined && status === 'merged') store.pinIfEligible(tenant, id, tier);
   const pinned = id !== undefined && store.factById(tenant, id)?.pinned === 1;
   return pinned
     ? ' Appuntato come preferenza dell’owner: entra in ogni suo turno. Diglielo in una frase; si toglie con memory_forget o `muffin memory unpin`.'

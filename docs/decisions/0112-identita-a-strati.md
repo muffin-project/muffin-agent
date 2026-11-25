@@ -5,7 +5,12 @@ testo della fondazione è un cambio di default da recensire nella PR che
 introduce questo ADR. Profilo di verifica **CRITICAL**
 (`docs/development/ORCHESTRATION.md`: identità, Root of Trust, memoria).
 Non dà all'agente nessun nuovo write-path: né su `rot/`, né su `defaults/`,
-né su `user.md`.
+né su `user.md`. Una cosa cambia, ed è detta qui: la fondazione letta a
+runtime vive ora nella cartella d'installazione (`.releases/<sha>/dist/defaults`),
+che non è in `mandatoryGuards.denyWrite`, mentre la copia in `rot/` lo era.
+È la stessa esposizione che ha già il codice compilato in `dist/` accanto a
+lei: nessun buco nuovo in pratica, ma la protezione della fondazione è
+quella dell'installazione, non quella di `rot/`.
 
 Numero: **0112** era il prossimo libero su `dev` al momento della stesura
 (`node docs/decisions/prossimo-numero.mjs`).
@@ -79,7 +84,13 @@ Quattro strati, in quest'ordine di autorità:
    un'etichetta: sono preferenze dell'owner, specializzano stile e modo,
    non scavalcano regole di lavoro, sicurezza e onestà; un conflitto si
    segnala; un'inferenza non scavalca queste righe. Il testo dell'owner sta
-   dentro `<preferenze-owner>`. Nessun comando lo scrive: né init, né
+   dentro `<preferenze-owner>`; prima si tolgono dal file tutti i tag di
+   apertura o chiusura del recinto, in ogni maiuscola e con spazi o
+   attributi, ripetendo finché il testo non cambia più (`stripFenceTags`),
+   così un testo incollato non chiude il recinto prima del tempo né ne apre
+   un secondo. Il recinto è un confine per il modello, non un controllo di
+   sicurezza: `user.md` lo scrive solo l'owner e il kernel viene dopo.
+   Nessun comando lo scrive: né init, né
    update, adopt o migrate.
 4. **Preferenze imparate — memoria del tenant, non un file.**
    `memory_propose` accetta `standing: true`. La preferenza si **appunta**
@@ -90,7 +101,12 @@ Quattro strati, in quest'ordine di autorità:
    appuntata e la risposta del tool dice al modello di chiedere. La
    conferma è l'owner che la dice con parole sue, anche dopo una domanda
    («sì, d'ora in poi usa sempre liste puntate»): in quel caso si appunta
-   la credenza già esistente, solo se anche quella è `said` e a tier 0. Si
+   la credenza già esistente, solo se anche quella è `said` e a tier 0, con
+   `MemoryStore.pinIfEligible`, che applica la stessa regola di `addFact`
+   alla riga già salvata: resta un solo criterio per ciò che il modello può
+   appuntare. Un «sì» da solo non appunta, perché il valore deve stare nelle
+   parole dell'owner; il testo del tool lo dice al modello, che quindi chiede
+   di ripetere la preferenza invece di annunciare un appunto. Si
    toglie con `memory_forget` o `muffin memory unpin`. Nessuno store
    parallelo.
 

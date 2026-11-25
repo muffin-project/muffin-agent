@@ -609,4 +609,10 @@ describe('memory_propose — preferenze standing (ADR-0112)', () => {
     expect(out.content).toContain('Appuntato come preferenza');
     expect(h.store.pinnedFacts('host')).toHaveLength(1);
   });
+
+  it('il testo del tool dice che un «sì» da solo non appunta', async () => {
+    const h = seed();
+    const out = await proposeMemory(h.deps, CTX, { ...preferenza, standing: true });
+    expect(out.content).toContain('un «sì» da solo non basta');
+  });
 });

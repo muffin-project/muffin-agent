@@ -571,7 +571,7 @@ export function buildSystemPromptBlocks(
     safe,
   ];
 
-  // Group. Neither the pact nor `user.md` ships here: nobody else is party to them. The owner's pact does not ship here — nobody else is party to it.
+  // Group. Neither the pact nor `user.md` ships here: nobody else is party to them.
   // The etiquette the room used to receive only because `voice.md` was copied
   // whole now lives in `GROUP_PERSONA`, which is code on purpose: a file the
   // owner is invited to edit would be a knob that turns the guest posture off.
