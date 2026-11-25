@@ -21,7 +21,18 @@ describe('acceptance · fs_edit chirurgico', () => {
     async () => {
       const inst = await install({
         main: [
-          { tool: { name: 'fs_edit', args: { path: 'bersaglio.txt', oldText: 'BETA', newText: 'beta' } } },
+          {
+            tool: {
+              name: 'capability_search',
+              args: { query: 'edit one exact block of text inside a file', max_results: 1 },
+            },
+          },
+          {
+            tool: {
+              name: 'fs_edit',
+              args: { path: 'bersaglio.txt', oldText: 'BETA', newText: 'beta' },
+            },
+          },
           { text: 'sistemato' },
         ],
       });
@@ -45,8 +56,13 @@ describe('acceptance · fs_edit chirurgico', () => {
         // Offerto al modello sul wire, non contrabbandato: la lista tool che
         // la chiamata ha visto contiene sia il nuovo attrezzo che la lettura
         // a finestre da cui doveva partire.
-        const call = inst.provider.main()[0];
-        if (!call) throw new Error('il modello non è mai stato chiamato');
+        const [before, call] = inst.provider.main();
+        if (!before?.tools.includes('capability_search') || before.tools.includes('fs_edit')) {
+          throw new Error(
+            `expected file editing to be deferred initially: ${before?.tools.join(', ')}`,
+          );
+        }
+        if (!call) throw new Error('the model did not receive a tool list after discovery');
         for (const atteso of ['fs_edit', 'fs_read']) {
           if (!call.tools.includes(atteso)) {
             throw new Error(`${atteso} non era nella lista tool offerta: ${call.tools.join(', ')}`);

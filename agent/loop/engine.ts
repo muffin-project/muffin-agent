@@ -16,6 +16,7 @@ import {
   CAPABILITY_DISCOVERY_GUIDANCE,
   CAPABILITY_SEARCH_TOOL_NAME,
   createCapabilityExposure,
+  DEFAULT_CORE_TOOL_NAMES,
   preloadCapabilitiesForTask,
 } from '../capability-exposure.js';
 import { tenantClass, visibleTools } from '../context/assemble.js';
@@ -383,60 +384,81 @@ async function runClaimedTurn(
       },
     },
   );
-  // #469: principal/grant filtering decides which installed capabilities may
-  // even enter discovery. The profile ceiling is applied only to the model
-  // projection, never to catalogue existence.
   const principalVisibleTools = visibleTools(
     deps.tools,
     input.principal,
     deps.capabilities,
     deps.grants?.get(input.tenant),
   );
-  // #469 judge ADJUST: visibleTools' hostOnly/grants projection was designed
-  // for members and deliberately returns the full catalogue for system
-  // principals. That is not the kernel's authority: autonomous principals
-  // also have sealed forbiddenForSystem exclusions (including namespace
-  // patterns). Ask the SAME kernel snapshot for static denial codes BEFORE
-  // any task preload/search; never replicate the sealed list here.
-  //
-  // A dummy no-resource probe is used ONLY to exclude capabilities the kernel
-  // categorically denies to this principal. Resource/taint/budget decisions
-  // still happen at execution with real args. Direct guesses continue to
-  // resolve against deps.tools, outside this model-visible projection.
-  const eligibleTools =
-    input.principal.kind === 'system'
-      ? principalVisibleTools.filter((tool) => {
-          const decision = snapshot.check(tool.capability, { kind: 'none' }, {});
-          return (
-            decision.effect !== 'deny' ||
-            ![
-              'principal_forbidden',
-              'rot_violation',
-              'safe_mode',
-              'no_capability',
-              'tenant_mismatch',
-            ].includes(decision.code)
-          );
-        })
-      : principalVisibleTools;
+  // Use the same kernel for categorical denials before preload, search or
+  // flat projection. The placeholder request only classifies eligibility.
+  // Keep it outside the execution snapshot's cache so real calls are checked
+  // with their own arguments, resource and current taint.
+  const catalogueDecision = (capability: CapabilityId): Decision =>
+    deps.decide({
+      principal: input.principal,
+      tenant: input.tenant,
+      capability,
+      resource: { kind: 'none' },
+      args: {},
+      taint: snapshot.currentTaint(),
+    });
+  const eligibleTools = principalVisibleTools.filter((tool) => {
+    const decision = catalogueDecision(tool.capability);
+    return (
+      decision.effect !== 'deny' ||
+      ![
+        'principal_forbidden',
+        'rot_violation',
+        'safe_mode',
+        'no_capability',
+        'tenant_mismatch',
+      ].includes(decision.code)
+    );
+  });
   const discoveryTool = eligibleTools.find(
     (tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME,
   );
+  const wakeBarrier =
+    options.wokenFromWait === true ? decodeWaitFor(options.waitForAtWake ?? record.waitFor) : null;
+  // After an approval, the model may need to reissue a call discovered in
+  // the suspended turn. The last wait can be for a process, and a claimed
+  // wake that crashed can have no barrier left. Use the durable transcript
+  // and the current eligible catalogue, including only tools this turn used.
+  const resumingApproval =
+    options.resumed === true &&
+    (wakeBarrier?.kind === 'approval' || deps.approvals?.decidedUnconsumed(record.id) === true);
+  const resumedToolNames = resumingApproval
+    ? run.messages.flatMap((message) =>
+        message.role === 'assistant'
+          ? message.content.filter((block) => block.type === 'tool_use').map((call) => call.name)
+          : [],
+      )
+    : [];
   const capabilityExposure = createCapabilityExposure({
     eligible: eligibleTools,
-    maxToolsExposed: deps.profile.maxToolsExposed,
-    ...(discoveryTool === undefined ? {} : { discoveryTool }),
+    ...(resumedToolNames.length === 0
+      ? {}
+      : { coreNames: [...DEFAULT_CORE_TOOL_NAMES, ...resumedToolNames] }),
+    ...(discoveryTool === undefined
+      ? {}
+      : {
+          discoveryTool,
+          // Discovery is a context operation with no resource derived from its
+          // arguments. It must be callable for a partial menu to be useful.
+          canDiscover: () => catalogueDecision(discoveryTool.capability).effect === 'allow',
+        }),
   });
-  const preloaded =
-    capabilityExposure.pressured && deps.profile.maxToolsExposed > 1
-      ? preloadCapabilitiesForTask(capabilityExposure, input.text, 2)
-      : null;
+  const preloaded = capabilityExposure.pressured
+    ? preloadCapabilitiesForTask(capabilityExposure, input.text, 2)
+    : null;
   const exposed = capabilityExposure.exposed;
+  const initialProjection = capabilityExposure.snapshot();
   turn.setAttributes({
     'muffin.context.class': turnClass,
     'muffin.context.tools_exposed': exposed.length,
-    'muffin.context.tools_hidden': capabilityExposure.hiddenCount,
-    'muffin.context.capability_discovery': capabilityExposure.pressured,
+    'muffin.context.tools_hidden': initialProjection.hiddenCount,
+    'muffin.context.capability_discovery': initialProjection.pressured,
     'muffin.context.tools_preloaded': preloaded?.loaded.length ?? 0,
   });
 
@@ -461,6 +483,7 @@ async function runClaimedTurn(
     ...(input.jobId === undefined ? {} : { jobId: input.jobId }),
     sessionId: input.session.id,
     runtimeInfo: deps.runtimeInfo,
+    capabilityExposure: capabilityExposure.snapshot,
     taint: () => snapshot.currentTaint(),
     intrinsicTaint: () => snapshot.intrinsicTaint(),
     suspend: (spec) => {
@@ -604,15 +627,20 @@ async function runClaimedTurn(
         turn,
       );
       try {
-        const result = await recall(deps.memory.recall, input.tenant, input.text, {
+        // Automatic recall is text and vector retrieval only. The model
+        // reranker stays on the deliberate `memory_search` path: in front of
+        // every owner turn it was most of the time before the first answer on
+        // the installed gateway (#942) — a light-lane model call per message,
+        // greetings included — and the paired replay showed no ranking gain
+        // worth that wait. Read at call time, so a hot-swapped reranker is
+        // still excluded here.
+        const { reranker: _deliberateOnly, ...automaticRecall } = deps.memory.recall;
+        const result = await recall(automaticRecall, input.tenant, input.text, {
           excludeTurnIds: turniInContesto,
           // Tenuto accanto al lineage e non sostituito da lui: e la garanzia
           // che non dipende dalla colonna nuova, quindi vale anche su una
           // riga che il lineage non ce l ha.
           ...(currentEpisodeId !== undefined ? { excludeEpisodeId: currentEpisodeId } : {}),
-          // Il job di questo turno, quando c'e': il reranker che questa recall
-          // paga deve finire sul contatore di quel job, non su nessuno.
-          ...(input.jobId === undefined ? {} : { jobId: input.jobId }),
         });
         const inherited = recallTaint(result);
         // Il nome accanto al numero (ADR-0075 punto 4): un fatto che uno
@@ -624,18 +652,6 @@ async function runClaimedTurn(
           'muffin.memory.items': result.items.length,
           'muffin.memory.strategies': result.strategies.join(','),
           [ATTR.taint]: inherited,
-          // Il reranker chiama il modello dentro questo span, e fino a qui non
-          // compariva da nessuna parte: un recall lento si leggeva come un
-          // recall lento, mai come «dentro c'è un giro di modello». Sale col
-          // risultato invece che da un tracer perché `recall()` non ne ha uno,
-          // e darglielo sarebbe plumbing attraverso quattro file per un numero.
-          ...(result.rerankUsage === undefined
-            ? {}
-            : {
-                [ATTR.usageInputTokens]: result.rerankUsage.inputTokens,
-                [ATTR.usageOutputTokens]: result.rerankUsage.outputTokens,
-                [ATTR.cacheReadTokens]: result.rerankUsage.cacheReadTokens,
-              }),
         });
         const rendered = renderForPrompt(result);
         if (rendered !== '') recalled.push({ type: 'text', text: rendered });
@@ -705,7 +721,7 @@ async function runClaimedTurn(
         !deps.memory.store.hasActiveFacts(input.tenant),
     );
 
-    if (capabilityExposure.pressured) {
+    if (initialProjection.pressured) {
       // Local progressive discovery is not provider magic: the model must know
       // that the current schema menu is intentionally partial. Keep that fact
       // in volatile harness context (never owner words), immediately before
@@ -756,7 +772,7 @@ async function runClaimedTurn(
     const lostClaim = await reconcile(scope);
     if (lostClaim !== null) return lostClaim;
     if (options.wokenFromWait === true) {
-      const waitFor = decodeWaitFor(options.waitForAtWake ?? record.waitFor);
+      const waitFor = wakeBarrier;
       // Lo stesso giudizio che dà la lane quando sceglie chi svegliare, con lo
       // stesso registro sotto: senza `answered` una barriera d'approvazione
       // risulterebbe non soddisfatta qui, e il turno si risveglierebbe con
