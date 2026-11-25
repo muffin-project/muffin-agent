@@ -8,14 +8,10 @@
 #
 # Budget: circa 90 s tipici, tetto 3 min. Ogni passo stampa la sua durata.
 #
-# Bypass: MUFFIN_SKIP_HOOKS=1 git push … — solo con il motivo scritto nella
-# PR; gli agenti non lo usano senza un'autorizzazione esplicita dell'owner.
+# Il hook non si salta: niente variabile di bypass, niente `--no-verify`. Se
+# fallisce per una causa estranea alla modifica, si apre una issue e si
+# corregge la causa (o l'etichetta di capacità del test).
 set -euo pipefail
-
-if [ "${MUFFIN_SKIP_HOOKS:-}" = "1" ]; then
-  echo "pre-push: SALTATO (MUFFIN_SKIP_HOOKS=1) — scrivi il motivo nella PR"
-  exit 0
-fi
 
 # Git esporta GIT_DIR e simili agli hook (assoluto, da un worktree collegato).
 # I test che lanciano `git init/config/commit` in una directory temporanea li
@@ -44,7 +40,10 @@ passo() {
   return "$rc"
 }
 
+report_dir=""
 fine() {
+  # Anche su interruzione: la cartella del report non resta in TMPDIR.
+  if [ -n "$report_dir" ]; then rm -rf "$report_dir"; fi
   local totale=$(( ($(ora_ms) - inizio_hook) / 1000 ))
   echo "pre-push: totale ${totale} s (budget: ~90 s tipici, tetto 180 s)"
   if [ "$totale" -gt 180 ]; then
@@ -52,6 +51,7 @@ fine() {
   fi
 }
 trap fine EXIT
+trap 'exit 130' INT TERM
 
 base_ref=""
 for ref in origin/dev origin/main; do
