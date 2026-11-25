@@ -31,9 +31,11 @@ import type { ToolSpec } from '../providers/types.js';
  *   l'intrinseco esclude per costruzione il caso differito) sulla riga;
  * - il giro futuro parte da quel taint, in quel tenant, attribuito al job
  *   (`agent/scheduler-run.ts` legge la riga invece del letterale 0);
- * - delivery requires the originating conversation's `ctx.replyChannel`.
- *   Picking a destination would be a new outward effect inside a context
- *   capability, even if a default surface is configured.
+ * - delivery goes to the originating conversation's `ctx.replyChannel`. An
+ *   owner request from a place that cannot receive a later result (the plain
+ *   terminal, or a terminal command forwarded to the gateway) goes to the
+ *   owner's primary surface: its bare id, which each surface resolves to the
+ *   owner's own room. Never a chat chosen by the model, never another chat.
 + *
 + * Contratto di cardinalità: one accepted durable schedule effect → one Job.
 + * Due chiamate distinte con gli stessi argomenti sono due richieste
@@ -109,7 +111,7 @@ const scheduleSpec: ToolSpec = {
     'Takes a 5-field cron expression and the reminder text, validates both deterministically, and each accepted call persists ' +
     'one durable job on the same store as `muffin jobs add` — the job survives restarts and fires on schedule. ' +
     "`timezone` is an IANA zone and defaults to the owner's own zone; never guess one from the process environment. " +
-    "Delivery goes to this conversation's surface. A terminal command forwarded to the gateway cannot receive later results. " +
+    "Delivery goes to this conversation's surface; from the terminal it goes to the owner's primary messaging surface. " +
     'Not for independent one-shot objectives, dated reminders, or resuming this turn. Use `schedule_once`, `todo` + `due`, or `wait`, respectively. ' +
     'Never emulate this with a shell command: there is no shell path to the scheduler.',
   inputSchema: {
@@ -144,7 +146,7 @@ const onceSpec: ToolSpec = {
   description:
     'Arm an independent background objective once, due on the next gateway tick ("fallo in background una sola volta"). ' +
     'Use it when the owner explicitly asks to delegate one run. The job survives restart and reports back to this conversation. ' +
-    'A terminal command forwarded to the gateway cannot receive later results. ' +
+    "From the terminal, results go to the owner's primary messaging surface. " +
     'Not for a dated reminder or resuming the current turn. Use `todo` + `due` or `wait`, respectively.',
   inputSchema: {
     type: 'object',
@@ -170,6 +172,12 @@ export function makeScheduleTool(
     jobs: JobStore;
     /** La zona dell'owner dal RoT sigillato — mai quella del processo. */
     defaultTimezone: string;
+    /**
+     * The owner's primary surface id (`surfaces.default`, e.g. `telegram`), read
+     * at call time because `muffin surface default` can change it while the
+     * gateway runs. Used only for owner requests with no surviving reply channel.
+     */
+    ownerPrimarySurface?: () => string | undefined;
   },
   mode: 'recurring' | 'once' = 'recurring',
 ): RegisteredTool {
@@ -218,11 +226,11 @@ export function makeScheduleTool(
       // Il canale è dove è nata la conversazione, mai un destinatario scelto
       // dal modello: quello sarebbe un nuovo recipient dentro una capability
       // `context`.
-      const channel = ctx.replyChannel;
-      if (!channel || forwardIdOf(channel) !== null) {
+      const channel = deliveryChannel(ctx.replyChannel, principal.kind, deps.ownerPrimarySurface);
+      if (channel === undefined) {
         return {
           content:
-            'This conversation has no address for a later result. No job was created. Offer to do the work now or ask the owner to start the request from a connected messaging conversation for later delivery.',
+            'This conversation has no address for a later result and no primary messaging surface is connected. No job was created. Offer to do the work now, or ask the owner to connect a messaging surface (`muffin surface enable`).',
           isError: true,
           tier: CLEAN,
         };
@@ -264,4 +272,23 @@ export function makeScheduleTool(
       };
     },
   };
+}
+
+/**
+ * Where a deferred result goes. The conversation's own channel when it can
+ * receive later messages. Otherwise, for the owner only, the bare id of the
+ * owner's primary surface: a surface resolves its bare id to the owner's own
+ * room (for Telegram, the paired private chat), so this fallback can never
+ * name another chat. The terminal is not a destination for later results.
+ */
+export function deliveryChannel(
+  replyChannel: string | null | undefined,
+  principalKind: string,
+  ownerPrimarySurface: (() => string | undefined) | undefined,
+): string | undefined {
+  if (replyChannel && forwardIdOf(replyChannel) === null) return replyChannel;
+  if (principalKind !== 'owner') return undefined;
+  const primary = ownerPrimarySurface?.()?.split(':', 1)[0]?.trim();
+  if (!primary || primary === 'cli' || forwardIdOf(primary) !== null) return undefined;
+  return primary;
 }

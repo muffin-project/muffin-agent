@@ -160,23 +160,55 @@ describe('la richiesta ricorrente crea esattamente un durable job', () => {
     expect(jobs.list()[0]?.channel).toBe('telegram:123');
   });
 
-  it('without a surviving reply channel no job is created', async () => {
+  it.each([
+    { name: 'no reply channel', replyChannel: undefined },
+    { name: 'a forwarded terminal', replyChannel: 'forward:request-id' },
+  ])('an owner request from $name goes to the owner primary surface', async ({ replyChannel }) => {
     const db = new DatabaseCtor(':memory:');
     const jobs = new JobStore(db);
     const tool = makeScheduleTool({
       jobs,
       defaultTimezone: 'Europe/Rome',
+      // A configured address is reduced to the surface: its owner room, never that chat.
+      ownerPrimarySurface: () => 'telegram:999',
     });
     const res = await tool.handler(
       { cron: '0 9 * * *', goal: 'x' },
-      toolContext({ sessionId: 's' }),
+      toolContext({ sessionId: 's', ...(replyChannel === undefined ? {} : { replyChannel }) }),
     );
-    expect(res).toMatchObject({
-      isError: true,
-      content: expect.stringContaining('No job was created.'),
-    });
-    expect(jobs.list()).toEqual([]);
+    expect(res.isError).not.toBe(true);
+    expect(jobs.list()[0]?.channel).toBe('telegram');
   });
+
+  it.each([
+    { name: 'no primary surface', primary: undefined, kind: 'owner' },
+    { name: 'the terminal as primary', primary: 'cli', kind: 'owner' },
+    { name: 'a non-owner principal', primary: 'telegram', kind: 'system' },
+  ] as const)(
+    'without a reply channel and with $name no job is created',
+    async ({ primary, kind }) => {
+      const db = new DatabaseCtor(':memory:');
+      const jobs = new JobStore(db);
+      const tool = makeScheduleTool({
+        jobs,
+        defaultTimezone: 'Europe/Rome',
+        ownerPrimarySurface: () => primary,
+      });
+      const principal =
+        kind === 'owner'
+          ? undefined
+          : ({ kind: 'system', source: 'scheduler', jobId: 'j1' } as const);
+      const res = await tool.handler(
+        { cron: '0 9 * * *', goal: 'x' },
+        toolContext({ sessionId: 's', ...(principal === undefined ? {} : { principal }) }),
+      );
+      expect(res).toMatchObject({
+        isError: true,
+        content: expect.stringContaining('No job was created.'),
+      });
+      expect(jobs.list()).toEqual([]);
+    },
+  );
 });
 
 describe('provenance, principal e taint attraversano il confine del job futuro', () => {

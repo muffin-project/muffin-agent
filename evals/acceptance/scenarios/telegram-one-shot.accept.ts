@@ -25,7 +25,7 @@ async function pairTelegram(inst: Install, telegram: FakeTelegram, ownerId: numb
 }
 
 describe('acceptance · #598 · deferred work delivery', () => {
-  it('refuses deferred delivery over the temporary forwarded CLI connection', async () => {
+  it('refuses deferred delivery from the terminal when no messaging surface is primary', async () => {
     const request =
       'Confronta in background una sola volta 80 più 25 di spedizione con 100 spedizione inclusa. Rimandami il risultato quando è finito.';
     const result = 'Questa conversazione può ricevere il confronto soltanto ora.';
@@ -43,17 +43,21 @@ describe('acceptance · #598 · deferred work delivery', () => {
       expect(inst.db((db) => db.prepare('SELECT * FROM job_fires').all())).toHaveLength(0);
       expect(inst.provider.main()).toHaveLength(2);
       expect(inst.provider.main()[1]?.transcript).toContain('No job was created.');
-      expect(inst.provider.main()[1]?.transcript).toContain('a connected messaging conversation');
+      expect(inst.provider.main()[1]?.transcript).toContain('muffin surface enable');
       await gateway.stop();
     } finally {
       await inst.cleanup();
     }
   }, 60_000);
 
-  it('does not redirect a resumed terminal request to the default Telegram chat', async () => {
+  it('delivers a resumed terminal request to the owner primary surface, only to the owner chat', async () => {
+    // Owner decision 2026-11-25: a terminal request has no channel for later
+    // results, so the owner's primary surface receives them, in the owner's
+    // own chat. The model never names the destination.
     const ownerId = 424242;
     const request = 'Wait for my synthetic dependency, then do the comparison in background.';
-    const result = 'The original conversation cannot receive a later result.';
+    const armed = 'Comparison armed for your primary chat.';
+    const done = 'Comparison done: 100 with shipping included is cheaper.';
     const barrier = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)']);
     try {
       if (barrier.pid === undefined) throw new Error('Could not start the fixture dependency');
@@ -62,7 +66,8 @@ describe('acceptance · #598 · deferred work delivery', () => {
         main: [
           { tool: { name: 'wait', args: { seconds: 60, until_process_exits: barrier.pid } } },
           { tool: { name: 'schedule_once', args: { goal: 'Compare the shipping quotes' } } },
-          { text: result },
+          { text: armed },
+          { text: done },
         ],
       });
       const telegram = await startFakeTelegram();
@@ -77,16 +82,17 @@ describe('acceptance · #598 · deferred work delivery', () => {
         const initial = JSON.parse(reply.out) as { stopped: string; turnId: string };
         expect(initial.stopped).toBe('suspended');
         barrier.kill();
-        await until(
-          () =>
-            inst.db((db) =>
-              db.prepare('SELECT status FROM turns WHERE id = ?').pluck().get(initial.turnId),
-            ) === 'done',
+        await until(() => telegram.messages().some((message) => message.text.includes(done)));
+        const jobs = inst.db((db) => db.prepare('SELECT channel FROM jobs').all()) as {
+          channel: string;
+        }[];
+        expect(jobs).toEqual([{ channel: 'telegram' }]);
+        expect(telegram.messages().map((message) => message.chatId)).toEqual(
+          telegram.messages().map(() => ownerId),
         );
-        expect(inst.db((db) => db.prepare('SELECT * FROM jobs').all())).toHaveLength(0);
-        expect(inst.provider.main()).toHaveLength(3);
-        expect(inst.provider.main()[2]?.transcript).toContain('No job was created.');
-        expect(telegram.messages()).toEqual([]);
+        expect(telegram.messages().filter((message) => message.text.includes(done))).toHaveLength(
+          1,
+        );
         await gateway.stop();
       } finally {
         await inst.cleanup();
