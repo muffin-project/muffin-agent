@@ -152,7 +152,7 @@ describe('the containment suite declares whether it ran', () => {
     }
     if (containmentRequired) {
       throw new Error(
-        `MUFFIN_REQUIRE_SANDBOX=1 and no real containment was executed on this host — ${gate.why}.`,
+        `sandbox required (MUFFIN_REQUIRE_CAPABILITIES) and no real containment was executed on this host — ${gate.why}.`,
       );
     }
     expect(gate.why).not.toBe('');
@@ -312,7 +312,7 @@ describe.runIf(gate.run)(
       if (pty === null) {
         if (containmentRequired) {
           throw new Error(
-            `MUFFIN_REQUIRE_SANDBOX=1 and no pty could be allocated on this host — script(1) not found on ${host}`,
+            `sandbox required (MUFFIN_REQUIRE_CAPABILITIES) and no pty could be allocated on this host — script(1) not found on ${host}`,
           );
         }
         // Declared, never silent: a skipped pty leg that looked like a pass is

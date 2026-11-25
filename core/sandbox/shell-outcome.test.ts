@@ -60,7 +60,7 @@ describe('shell outcome integrity dichiara se è stata provata', () => {
     }
     if (containmentRequired) {
       throw new Error(
-        `MUFFIN_REQUIRE_SANDBOX=1 e nessun contenimento reale è girato su questo host — ${gate.why}.`,
+        `sandbox richiesta (MUFFIN_REQUIRE_CAPABILITIES) e nessun contenimento reale è girato su questo host — ${gate.why}.`,
       );
     }
     console.warn(`[sandbox] shell-outcome NON provato — ${gate.why}`);
@@ -116,7 +116,9 @@ describe.runIf(gate.run)(titolo, () => {
       const probe = await executor.runReadOnly({ command: 'git --version', cwd: workspace });
       if (probe.code !== 0) {
         if (containmentRequired) {
-          throw new Error('MUFFIN_REQUIRE_SANDBOX=1 ma git non è eseguibile nel sandbox.');
+          throw new Error(
+            'sandbox richiesta (MUFFIN_REQUIRE_CAPABILITIES) ma git non è eseguibile nel sandbox.',
+          );
         }
         console.warn('[sandbox] git assente nel sandbox — scenario git non provato');
         return;

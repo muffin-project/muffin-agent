@@ -61,7 +61,7 @@ describe('il falsificatore dichiara se e girato', () => {
     }
     if (containmentRequired && host === 'linux') {
       throw new Error(
-        `MUFFIN_REQUIRE_SANDBOX=1 e il falsificatore del canale non e girato su Linux — ${linuxGate.why}.`,
+        `sandbox richiesta (MUFFIN_REQUIRE_CAPABILITIES) e il falsificatore del canale non e girato su Linux — ${linuxGate.why}.`,
       );
     }
     console.warn(`[sandbox] canale di controllo NON provato live — ${linuxGate.why}`);
