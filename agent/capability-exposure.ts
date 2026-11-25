@@ -2,8 +2,8 @@ export const CAPABILITY_SEARCH_TOOL_NAME = 'capability_search';
 
 /**
  * Volatile harness guidance shown only when the current turn is actually using
- * progressive capability projection. The ordinary under-cap path sees neither
- * this text nor the discovery schema.
+ * progressive capability projection. The full projection needs neither this
+ * text nor the discovery schema.
  */
 export const CAPABILITY_DISCOVERY_GUIDANCE =
   '[Il menu tool di questo turno è una proiezione parziale del catalogo autorizzato. ' +
@@ -13,13 +13,12 @@ export const CAPABILITY_DISCOVERY_GUIDANCE =
 /**
  * The initial always-visible native kernel when catalogue pressure exists.
  *
- * These are retrieval/orientation primitives, not business/domain capabilities.
- * The list is deliberately small; missing entries are filled from the existing
- * eligible registration order so a custom runtime is not left with an empty
- * kernel merely because it does not ship Muffin's built-ins.
+ * Keep common workspace read and write operations and orientation tools visible.
+ * The list only selects from the catalogue already filtered by authority.
  */
 export const DEFAULT_CORE_TOOL_NAMES = [
   'fs_read',
+  'fs_write',
   'fs_list',
   'fs_search',
   'memory_search',
@@ -42,6 +41,7 @@ export type CapabilityLoadResult = {
 
 export type CapabilityExposureSnapshot = {
   readonly visible: readonly string[];
+  readonly eligibleCount: number;
   readonly pressured: boolean;
   readonly hiddenCount: number;
 };
@@ -60,17 +60,16 @@ export type CapabilityDiscoveryPort = {
     maxResults: number,
     firstName?: string,
   ) => CapabilityLoadResult;
-  /** Apply the last staged selection at the next round boundary. */
-  readonly activatePending: () => void;
-  /** Current model-visible projection, for truthful runtime inspection. */
-  readonly snapshot: () => CapabilityExposureSnapshot;
+  /** Apply the batch at the model boundary and return whether discovery remains available. */
+  readonly activatePending: () => boolean;
 };
 
 export type CapabilityExposure<T extends CapabilityTool> = {
   /** Mutable only at round boundaries; runTool receives this same array. */
   readonly exposed: T[];
   readonly pressured: boolean;
-  readonly hiddenCount: number;
+  /** Current schema menu in both selective and flat mode. */
+  readonly snapshot: () => CapabilityExposureSnapshot;
   readonly discovery?: CapabilityDiscoveryPort | undefined;
 };
 
@@ -147,60 +146,49 @@ function takeCore<T extends CapabilityTool>(
  * Build one turn's model-visible tool projection from an already authority-
  * filtered catalogue.
  *
- * Under the cap, the old fast path is byte-for-byte in the same order and no
- * discovery schema is added. Under pressure, a small retrieval kernel stays
- * visible, capability_search occupies one slot, and the remaining slots are a
- * replaceable task-local projection loaded by deterministic lexical search.
+ * There is no numeric cap. Tools named in the core stay visible. Every other
+ * eligible tool stays reachable: when a discovery tool exists it is not in
+ * the first schema list and loads by deterministic lexical search. The
+ * eligible catalogue is shown whole when discovery is absent or the turn
+ * cannot use it.
  *
  * eligible must already be principal/grant filtered. Execution remains on the
  * normal tool path and therefore gets the kernel's full policy re-check.
  */
 export function createCapabilityExposure<T extends CapabilityTool>(input: {
   readonly eligible: readonly T[];
-  readonly maxToolsExposed: number;
   readonly discoveryTool?: T | undefined;
+  readonly canDiscover?: (() => boolean) | undefined;
   readonly coreNames?: readonly string[] | undefined;
 }): CapabilityExposure<T> {
-  const max = input.maxToolsExposed;
-  if (!Number.isInteger(max) || max <= 0) {
-    throw new Error('maxToolsExposed must be a positive integer');
-  }
-
   const discoveryName = input.discoveryTool?.spec.name;
   const catalog =
     discoveryName === undefined
       ? [...input.eligible]
       : input.eligible.filter((tool) => tool.spec.name !== discoveryName);
 
-  if (catalog.length <= max) {
-    return {
-      exposed: [...catalog],
-      pressured: false,
-      hiddenCount: 0,
-    };
-  }
-
-  if (input.discoveryTool === undefined) {
-    throw new Error(
-      'capability_search is required when the authorized catalogue exceeds maxToolsExposed',
-    );
-  }
-  const discoveryTool = input.discoveryTool;
-
   const preferred = input.coreNames ?? DEFAULT_CORE_TOOL_NAMES;
-  // Reserve one slot for discovery and, where possible, at least one slot for
-  // a task-local schema. Five is only the preferred maximum core, never a
-  // reason to violate the profile ceiling.
-  const coreTarget =
-    max === 1 ? 0 : Math.min(preferred.length, catalog.length, Math.max(0, max - 2));
-  const core = takeCore(catalog, coreTarget, preferred);
-  const fixed = [...core, discoveryTool];
-  const exposed = [...fixed];
+  const core = takeCore(catalog, preferred.length, preferred).filter((tool) =>
+    preferred.includes(tool.spec.name),
+  );
   const coreNames = new Set(core.map((tool) => tool.spec.name));
   const searchable = catalog.filter((tool) => !coreNames.has(tool.spec.name));
-  const dynamicCapacity = Math.max(0, max - fixed.length);
 
-  let pending: T[] | null = null;
+  const discoveryTool = searchable.length === 0 ? undefined : input.discoveryTool;
+  const fixed = discoveryTool === undefined ? catalog : [...core, discoveryTool];
+  const exposed = [...fixed];
+  let discoveryAvailable = discoveryTool !== undefined;
+  const snapshot = (): CapabilityExposureSnapshot => ({
+    visible: exposed.map((tool) => tool.spec.name),
+    eligibleCount: input.eligible.length,
+    pressured: discoveryAvailable,
+    hiddenCount: discoveryAvailable ? searchable.length : 0,
+  });
+
+  if (discoveryTool === undefined) return { exposed, pressured: false, snapshot };
+
+  let pending: Map<string, T> | null = null;
+  let loaded: T[] = [];
 
   const discovery: CapabilityDiscoveryPort = {
     searchAndLoad(query, maxResults, firstName) {
@@ -214,21 +202,9 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
         .filter((row) => row.score > 0)
         .sort((left, right) => right.score - left.score || left.index - right.index);
 
-      const matches = ranked.slice(0, limit);
-      const selected =
-        max === 1
-          ? matches.slice(0, 1).map((row) => row.tool)
-          : matches.slice(0, dynamicCapacity).map((row) => row.tool);
-
-      if (max === 1) {
-        // With a one-schema custom profile the search door temporarily swaps
-        // with the selected schema. On a miss it stays in place, but a miss is
-        // still reported as a miss rather than pretending discovery loaded
-        // itself.
-        pending = selected.length > 0 ? selected : [discoveryTool];
-      } else {
-        pending = selected;
-      }
+      const selected = ranked.slice(0, limit).map((row) => row.tool);
+      pending ??= new Map();
+      for (const tool of selected) pending.set(tool.spec.name, tool);
 
       const loaded = selected.map((tool) => ({
         name: tool.spec.name,
@@ -243,29 +219,24 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
     },
 
     activatePending() {
-      if (pending === null) return;
-      if (max === 1) {
-        exposed.splice(0, exposed.length, ...pending);
-      } else {
-        exposed.splice(fixed.length);
-        exposed.push(...pending);
+      const available = input.canDiscover?.() ?? true;
+      const selectionChanged = pending !== null;
+      if (pending !== null) {
+        loaded = [...pending.values()];
+        pending = null;
       }
-      pending = null;
-    },
-
-    snapshot() {
-      return {
-        visible: exposed.map((tool) => tool.spec.name),
-        pressured: true,
-        hiddenCount: searchable.length,
-      };
+      if (available !== discoveryAvailable || (available && selectionChanged)) {
+        discoveryAvailable = available;
+        exposed.splice(0, exposed.length, ...(available ? [...fixed, ...loaded] : catalog));
+      }
+      return discoveryAvailable;
     },
   };
 
   return {
     exposed,
     pressured: true,
-    hiddenCount: searchable.length,
+    snapshot,
     discovery,
   };
 }
@@ -275,8 +246,8 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
  * round from the task text. This is the provider-neutral fallback for models
  * that do not reliably decide to invoke the discovery meta-tool themselves.
  *
- * The search door remains visible (except on the intentionally tiny one-slot
- * profile), so a later need can still replace the task-local selection.
+ * The search door remains visible, so a later need can still replace the
+ * task-local selection.
  */
 export function preloadCapabilitiesForTask<T extends CapabilityTool>(
   exposure: CapabilityExposure<T>,
@@ -286,6 +257,5 @@ export function preloadCapabilitiesForTask<T extends CapabilityTool>(
 ): CapabilityLoadResult | null {
   if (!exposure.pressured || exposure.discovery === undefined) return null;
   const result = exposure.discovery.searchAndLoad(query, maxResults, firstName);
-  exposure.discovery.activatePending();
-  return result;
+  return exposure.discovery.activatePending() ? result : null;
 }

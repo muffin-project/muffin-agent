@@ -1,9 +1,16 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { paths } from '../config/config.js';
 
 const esegui = promisify(execFile);
 
@@ -90,7 +97,8 @@ const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
  * non nostra. Chi vuole `small` cambia una riga di config; chi non vuole
  * scaricare niente non trascrive, e Muffin glielo dice invece di provarci.
  */
-export const MODELLO_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin';
+export const MODELLO_URL =
+  'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin';
 export const MODELLO_MANCANTE = [
   'curl -L --create-dirs -o ~/.muffin/models/ggml-base.bin \\',
   `  ${MODELLO_URL}`,
@@ -103,7 +111,8 @@ export const MODELLO_MANCANTE = [
  * `doctor` sarebbe quella non provata.
  */
 export const RIMEDIO_FFMPEG = 'brew install ffmpeg   # su Linux: apt install ffmpeg';
-export const RIMEDIO_WHISPER = 'brew install whisper-cpp   # su Linux: github.com/ggml-org/whisper.cpp';
+export const RIMEDIO_WHISPER =
+  'brew install whisper-cpp   # su Linux: github.com/ggml-org/whisper.cpp';
 
 /** La frase di `manca()` per un `ENOENT`, e la stessa che `doctor` stampa in anticipo. */
 function nonInstallato(nome: string, bin: string): string {
@@ -156,16 +165,36 @@ export function prerequisitiTrascrizione(
   const modello = deps.whisperModel;
   return [
     ffmpeg === null
-      ? { cosa: 'ffmpeg', ok: false, why: nonInstallato('ffmpeg', ffmpegBin), rimedio: RIMEDIO_FFMPEG }
+      ? {
+          cosa: 'ffmpeg',
+          ok: false,
+          why: nonInstallato('ffmpeg', ffmpegBin),
+          rimedio: RIMEDIO_FFMPEG,
+        }
       : { cosa: 'ffmpeg', ok: true, dove: ffmpeg },
     whisper === null
-      ? { cosa: 'whisper.cpp', ok: false, why: nonInstallato('whisper.cpp', whisperBin), rimedio: RIMEDIO_WHISPER }
+      ? {
+          cosa: 'whisper.cpp',
+          ok: false,
+          why: nonInstallato('whisper.cpp', whisperBin),
+          rimedio: RIMEDIO_WHISPER,
+        }
       : { cosa: 'whisper.cpp', ok: true, dove: whisper },
     modello === undefined || modello === ''
-      ? { cosa: 'modello whisper', ok: false, why: 'nessun modello whisper configurato', rimedio: MODELLO_MANCANTE }
+      ? {
+          cosa: 'modello whisper',
+          ok: false,
+          why: 'nessun modello whisper configurato',
+          rimedio: MODELLO_MANCANTE,
+        }
       : existsSync(modello)
         ? { cosa: 'modello whisper', ok: true, dove: modello }
-        : { cosa: 'modello whisper', ok: false, why: `il modello whisper configurato non c'è: ${modello}`, rimedio: MODELLO_MANCANTE },
+        : {
+            cosa: 'modello whisper',
+            ok: false,
+            why: `il modello whisper configurato non c'è: ${modello}`,
+            rimedio: MODELLO_MANCANTE,
+          },
   ];
 }
 
@@ -178,7 +207,10 @@ export function prerequisitiTrascrizione(
  * davvero inaccettabile: una nota vocale ricevuta e non trascritta di cui
  * nessuno dice niente è un pezzo di conversazione perso senza traccia.
  */
-export async function trascrivi(percorsoAudio: string, deps: TrascriviDeps = {}): Promise<Trascrizione> {
+export async function trascrivi(
+  percorsoAudio: string,
+  deps: TrascriviDeps = {},
+): Promise<Trascrizione> {
   const whisperBin = deps.whisperBin ?? 'whisper-cli';
   const ffmpegBin = deps.ffmpegBin ?? 'ffmpeg';
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -197,10 +229,8 @@ export async function trascrivi(percorsoAudio: string, deps: TrascriviDeps = {})
     };
   }
   if (!existsSync(deps.whisperModel)) {
-    // Ultima spiaggia, non prima strada: `init`, `surface enable` e `update`
-    // lo assicurano in anticipo quando possono; qui si prova comunque, perché
-    // un file cancellato a mano non deve rompere le note vocali per sempre.
-    // Se fallisce, sotto si ritrova il rimedio di sempre — invariato.
+    // The live fallback prepares its model when an attachment needs it.
+    // Checking the file again also handles a failed download without losing the remedy.
     if (deps.provisiona === true) {
       await assicuraModello(deps.whisperModel, {
         ...(deps.fetch === undefined ? {} : { fetch: deps.fetch }),
@@ -225,7 +255,25 @@ export async function trascrivi(percorsoAudio: string, deps: TrascriviDeps = {})
     try {
       // 16 kHz, mono, PCM 16 bit: è la forma che `whisper-cli` sa leggere, ed è
       // scritta così nel README di whisper.cpp.
-      await run(ffmpegBin, ['-nostdin', '-loglevel', 'error', '-i', percorsoAudio, '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', '-y', wav], timeoutMs);
+      await run(
+        ffmpegBin,
+        [
+          '-nostdin',
+          '-loglevel',
+          'error',
+          '-i',
+          percorsoAudio,
+          '-ar',
+          '16000',
+          '-ac',
+          '1',
+          '-c:a',
+          'pcm_s16le',
+          '-y',
+          wav,
+        ],
+        timeoutMs,
+      );
     } catch (error) {
       return manca(ffmpegBin, error, 'ffmpeg', RIMEDIO_FFMPEG);
     }
@@ -237,7 +285,18 @@ export async function trascrivi(percorsoAudio: string, deps: TrascriviDeps = {})
       // ma inchiodarla vorrebbe dire trascrivere male ogni nota in un'altra.
       const res = await run(
         whisperBin,
-        ['-m', deps.whisperModel, '-f', wav, '-nt', '-l', 'auto', '--output-txt', '-of', join(lavoro, 'out')],
+        [
+          '-m',
+          deps.whisperModel,
+          '-f',
+          wav,
+          '-nt',
+          '-l',
+          'auto',
+          '--output-txt',
+          '-of',
+          join(lavoro, 'out'),
+        ],
         timeoutMs,
       );
       stdout = res.stdout;
@@ -250,7 +309,8 @@ export async function trascrivi(percorsoAudio: string, deps: TrascriviDeps = {})
     // su stdout solo se non è stato scritto.
     const file = `${join(lavoro, 'out')}.txt`;
     const testo = (existsSync(file) ? readFileSync(file, 'utf8') : stdout).trim();
-    if (testo === '') return { ok: false, why: 'whisper non ha prodotto testo: forse la nota è silenziosa' };
+    if (testo === '')
+      return { ok: false, why: 'whisper non ha prodotto testo: forse la nota è silenziosa' };
     return { ok: true, testo };
   } finally {
     rmSync(lavoro, { recursive: true, force: true });
@@ -290,11 +350,8 @@ export type AssicuraModelloDeps = {
 /**
  * Il modello whisper c'è, o arriva adesso.
  *
- * Decisione dell'owner: whisper è il fallback delle note vocali, e un
- * fallback che tocca procurarsi a mano il giorno che serve non è un fallback
- * — è un rimedio stampato a cose fatte. Quindi `init`, `surface enable` e
- * `update` lo assicurano quando una superficie vocale è accesa; questa
- * funzione è il pezzo condiviso, senza sapere chi la chiama.
+ * Whisper remains the automatic fallback for attachments that require
+ * local transcription. Setup does not need the model to connect the surface.
  *
  * Non lancia mai, non sovrascrive mai un file esistente, e su fallimento non
  * lascia pezzi (`.part` rimosso): la casa resta esattamente com'era, e il
@@ -311,13 +368,17 @@ export async function assicuraModello(
   try {
     risposta = await fetchFn(MODELLO_URL, { signal: AbortSignal.timeout(timeoutMs) });
   } catch (error) {
-    return { esito: 'fallito', why: `modello whisper non scaricato: ${error instanceof Error ? error.message : String(error)}` };
+    return {
+      esito: 'fallito',
+      why: `modello whisper non scaricato: ${error instanceof Error ? error.message : String(error)}`,
+    };
   }
   if (!risposta.ok) {
     return { esito: 'fallito', why: `modello whisper non scaricato: HTTP ${risposta.status}` };
   }
   const byte = Buffer.from(await risposta.arrayBuffer());
-  if (byte.byteLength === 0) return { esito: 'fallito', why: 'modello whisper non scaricato: risposta vuota' };
+  if (byte.byteLength === 0)
+    return { esito: 'fallito', why: 'modello whisper non scaricato: risposta vuota' };
   try {
     mkdirSync(dirname(percorso), { recursive: true });
     const parte = `${percorso}.part`;
@@ -329,33 +390,10 @@ export async function assicuraModello(
       throw new Error('rinomina fallita');
     }
   } catch (error) {
-    return { esito: 'fallito', why: `modello whisper non scaricato: ${error instanceof Error ? error.message : String(error)}` };
+    return {
+      esito: 'fallito',
+      why: `modello whisper non scaricato: ${error instanceof Error ? error.message : String(error)}`,
+    };
   }
   return { esito: 'scaricato', byte: byte.byteLength };
-}
-
-/**
- * Whisper c'è quando serve: una riga da stampare, o `null` quando non c'è
- * niente da fare.
- *
- * Un posto solo per i tre momenti che lo assicurano (`init`, `surface
- * enable`, e il primo uso via `provisiona`): la domanda "serve?" è sempre la
- * stessa — superficie vocale accesa — e il percorso del modello si risolve
- * con la stessa regola di `voceFor`. I binari (`whisper-cli`, `ffmpeg`) restano
- * fuori di qui di proposito: installare pacchetti di sistema in silenzio non
- * si fa, e `doctor` li controlla già col rimedio.
- */
-export async function assicuraVoce(
-  home: string,
-  config: { surfaces: { enabled: readonly string[] }; audio?: { whisperModel?: string | undefined } | undefined },
-  deps: AssicuraModelloDeps = {},
-): Promise<string | null> {
-  if (!config.surfaces.enabled.some((s) => s === 'telegram' || s === 'discord')) return null;
-  const modello = config.audio?.whisperModel ?? paths(home).whisperModel;
-  const esito = await assicuraModello(modello, deps);
-  if (esito.esito === 'presente') return 'voce: modello whisper presente';
-  if (esito.esito === 'scaricato') {
-    return `voce: modello whisper scaricato (${(esito.byte / 1048576).toFixed(0)} MiB)`;
-  }
-  return `voce: ${esito.why} — la prima nota vocale dirà come prenderlo`;
 }

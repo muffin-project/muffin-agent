@@ -12,11 +12,13 @@ const usage = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteT
 
 class Scripted implements Provider {
   readonly kind = 'openai-compat' as const;
+  readonly seen: ChatCall[] = [];
   private index = 0;
 
   constructor(private readonly answers: ChatResult[]) {}
 
-  async chat(_call: ChatCall): Promise<ChatResult> {
+  async chat(call: ChatCall): Promise<ChatResult> {
+    this.seen.push(call);
     const answer = this.answers[this.index++];
     if (answer === undefined) throw new Error('unexpected provider call');
     return answer;
@@ -57,7 +59,7 @@ function readTraceRows(home: string): TraceRow[] {
 }
 
 describe('fs_write draft preflight distinguishes outside-scope rejection', () => {
-  it('records typed containment rejection before intent while a generic snapshot failure stays generic', async () => {
+  it('tells the model when a path is refused and distinguishes a real snapshot failure', async () => {
     const home = mkdtempSync(join(tmpdir(), 'muffin-fs-preflight-home-'));
     const workspace = mkdtempSync(join(tmpdir(), 'muffin-fs-preflight-workspace-'));
     const outside = mkdtempSync(join(tmpdir(), 'muffin-fs-preflight-outside-'));
@@ -102,6 +104,23 @@ describe('fs_write draft preflight distinguishes outside-scope rejection', () =>
         text: 'scrivi nel file richiesto',
       });
 
+      const toolResult = (callId: string) =>
+        provider.seen
+          .flatMap((request) => request.messages)
+          .flatMap((message) => message.content)
+          .find((block) => block.type === 'tool_result' && block.toolCallId === callId);
+      expect(toolResult(outsideCallId)).toMatchObject({
+        isError: true,
+        content: expect.stringContaining('fuori dalla cartella di lavoro'),
+      });
+      expect(toolResult(outsideCallId)).toMatchObject({
+        content: expect.stringContaining('chiedi una destinazione nella cartella di lavoro'),
+      });
+      expect(toolResult(snapshotFailureCallId)).toMatchObject({
+        isError: true,
+        content: expect.stringContaining('synthetic undo snapshot unavailable'),
+      });
+
       const rows = readTraceRows(home);
       const toolSpan = (callId: string) =>
         rows.find(
@@ -109,7 +128,7 @@ describe('fs_write draft preflight distinguishes outside-scope rejection', () =>
             row.name === 'muffin.tool_call' && row.attributes['gen_ai.tool.call.id'] === callId,
         );
       const outsideSpan = toolSpan(outsideCallId);
-      expect(outsideSpan).toMatchObject({ status: 'error', error: 'draft_snapshot_failed' });
+      expect(outsideSpan).toMatchObject({ status: 'error', error: 'outside_scope' });
       expect(outsideSpan?.attributes['muffin.effect.preflight_rejection']).toBe('outside_scope');
       const outsideDecision = rows.find(
         (row) => row.name === 'muffin.policy_decision' && row.parentSpanId === outsideSpan?.spanId,

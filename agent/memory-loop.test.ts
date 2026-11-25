@@ -1,27 +1,26 @@
-import DatabaseCtor from 'better-sqlite3';
-import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
+import type { Embedder } from '../core/memory/embed.js';
+import type { RecallDeps } from '../core/memory/recall.js';
+import { LlmReranker, RERANK_MIN_CANDIDATES, type Reranker } from '../core/memory/rerank.js';
+import { MemoryStore } from '../core/memory/store.js';
+import { VectorIndex } from '../core/memory/vectors.js';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
-import type { Embedder } from '../core/memory/embed.js';
-import { MemoryStore } from '../core/memory/store.js';
-import type { RecallDeps } from '../core/memory/recall.js';
-import { LlmReranker, RERANK_MIN_CANDIDATES, type Reranker } from '../core/memory/rerank.js';
-import { BudgetEngine } from '../core/budget/budget.js';
-import { VectorIndex } from '../core/memory/vectors.js';
 import { SessionStore } from '../core/session/store.js';
+import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { TurnStore } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
-import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
-import { runTurn, type LoopDeps, type RegisteredTool } from './loop.js';
+import { type LoopDeps, type RegisteredTool, runTurn } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
-import { lightLane, type LightSpend } from './providers/light-lane.js';
+import { type LightSpend, lightLane } from './providers/light-lane.js';
 import type { ChatResult, Provider } from './providers/types.js';
-import { memoryCapability, memorySearchSpec, searchMemory } from './tools/memory.js';
 import { fsCapabilities } from './tools/fs.js';
+import { memoryCapability, memorySearchSpec, searchMemory } from './tools/memory.js';
 
 /**
  * A deterministic embedder, same shape as `core/memory/recall.test.ts`'s own —
@@ -34,10 +33,22 @@ class FakeEmbedder implements Embedder {
   readonly id = 'fake:v1';
   readonly dimensions = 16;
   private readonly vocab = [
-    'commercialista', 'fiscale', 'tasse', 'contabile',
-    'vela', 'barca', 'mare', 'regata',
-    'cagliari', 'sardegna', 'casa', 'città',
-    'marco', 'lucia', 'anna', 'riunione',
+    'commercialista',
+    'fiscale',
+    'tasse',
+    'contabile',
+    'vela',
+    'barca',
+    'mare',
+    'regata',
+    'cagliari',
+    'sardegna',
+    'casa',
+    'città',
+    'marco',
+    'lucia',
+    'anna',
+    'riunione',
   ];
   async embed(texts: string[]): Promise<Float32Array[]> {
     return texts.map((text) => {
@@ -89,7 +100,17 @@ const decls: CapabilityDecl[] = [
   ...fsCapabilities,
   memoryCapability,
   // era il default della classe: la riga 'context' non lo eredita più
-  { id: 'demo.write', effect: 'context', maxTaint: 1, risk: 'medium', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: false },
+  {
+    id: 'demo.write',
+    effect: 'context',
+    maxTaint: 1,
+    risk: 'medium',
+    reversible: 'no',
+    rerunnable: false,
+    resourceKind: 'none',
+    policyArgs: [],
+    hostOnly: false,
+  },
 ];
 
 function harness(script: ChatResult[], over: { reranker?: Reranker } = {}) {
@@ -102,7 +123,11 @@ function harness(script: ChatResult[], over: { reranker?: Reranker } = {}) {
   // under test would simply never run. Nothing is indexed by default, so every
   // test that does not call `vectors.index(...)` behaves exactly as before.
   const vectors = new VectorIndex(db, new FakeEmbedder());
-  const recallDeps: RecallDeps = { store, vectors, ...(over.reranker === undefined ? {} : { reranker: over.reranker }) };
+  const recallDeps: RecallDeps = {
+    store,
+    vectors,
+    ...(over.reranker === undefined ? {} : { reranker: over.reranker }),
+  };
   const writes: string[] = [];
   const provider = new Scripted(script);
 
@@ -120,7 +145,11 @@ function harness(script: ChatResult[], over: { reranker?: Reranker } = {}) {
     },
     {
       capability: 'demo.write',
-      spec: { name: 'demo_write', description: 'w', inputSchema: { type: 'object', properties: {} } },
+      spec: {
+        name: 'demo_write',
+        description: 'w',
+        inputSchema: { type: 'object', properties: {} },
+      },
       throwTier: 0,
       handler: () => {
         writes.push('demo_write');
@@ -222,8 +251,13 @@ describe('memory wired into the loop', () => {
   it('lets the model search on purpose, and the result still carries its tier', async () => {
     const h = harness([callTool('memory_search', { query: 'deposito' }), answer('trovato')]);
     h.store.addEpisode({
-      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
-      kind: 'message', content: 'il codice del deposito è ZK-4417', trustTier: 0,
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 't',
+      role: 'user',
+      kind: 'message',
+      content: 'il codice del deposito è ZK-4417',
+      trustTier: 0,
       createdAt: '2026-08-01T10:00:00Z',
     });
 
@@ -235,7 +269,10 @@ describe('memory wired into the loop', () => {
   });
 
   it('says nothing found instead of returning silence', async () => {
-    const h = harness([callTool('memory_search', { query: 'una cosa mai detta' }), answer('non ne so nulla')]);
+    const h = harness([
+      callTool('memory_search', { query: 'una cosa mai detta' }),
+      answer('non ne so nulla'),
+    ]);
     await runTurn(h.deps, turn(h, 'cerca'));
     expect(h.provider.seen.join('\n')).toContain('Nessun ricordo');
   });
@@ -246,15 +283,23 @@ describe('memory wired into the loop', () => {
     // assertion could not fail — while production had the tenant hardcoded to
     // 'host' and would have handed the secret over.
     const member: Principal = {
-      kind: 'member', connector: 'telegram', tenantId: 'group:telegram:9', externalId: 'u9',
+      kind: 'member',
+      connector: 'telegram',
+      tenantId: 'group:telegram:9',
+      externalId: 'u9',
     };
     const h = harness([
       callTool('memory_search', { query: 'codice del deposito' }),
       answer('non trovo niente'),
     ]);
     h.store.addEpisode({
-      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
-      kind: 'message', content: 'il codice del deposito è ZK-4417', trustTier: 0,
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 't',
+      role: 'user',
+      kind: 'message',
+      content: 'il codice del deposito è ZK-4417',
+      trustTier: 0,
       createdAt: '2026-08-01T10:00:00Z',
     });
 
@@ -264,15 +309,20 @@ describe('memory wired into the loop', () => {
 
   it('still reaches its own tenant memory — the fix must not deafen the tool', async () => {
     const member: Principal = {
-      kind: 'member', connector: 'telegram', tenantId: 'group:telegram:9', externalId: 'u9',
+      kind: 'member',
+      connector: 'telegram',
+      tenantId: 'group:telegram:9',
+      externalId: 'u9',
     };
-    const h = harness([
-      callTool('memory_search', { query: 'ritrovo' }),
-      answer('ecco'),
-    ]);
+    const h = harness([callTool('memory_search', { query: 'ritrovo' }), answer('ecco')]);
     h.store.addEpisode({
-      tenantId: 'group:telegram:9', connector: 'telegram', threadKey: 't', role: 'user',
-      kind: 'message', content: 'il ritrovo è alle otto al porto', trustTier: 2,
+      tenantId: 'group:telegram:9',
+      connector: 'telegram',
+      threadKey: 't',
+      role: 'user',
+      kind: 'message',
+      content: 'il ritrovo è alle otto al porto',
+      trustTier: 2,
       createdAt: '2026-08-01T10:00:00Z',
     });
 
@@ -290,29 +340,55 @@ describe('memory wired into the loop', () => {
     async function seedAccountantHistory(h: ReturnType<typeof harness>) {
       const me = h.store.upsertEntity('host', 'Giusto', 'person', '2026-06-01T10:00:00Z');
       const ep = h.store.addEpisode({
-        tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
-        kind: 'message', content: 'note sul commercialista', trustTier: 0, createdAt: '2026-06-01T10:00:00Z',
+        tenantId: 'host',
+        connector: 'cli',
+        threadKey: 't',
+        role: 'user',
+        kind: 'message',
+        content: 'note sul commercialista',
+        trustTier: 0,
+        createdAt: '2026-06-01T10:00:00Z',
       });
       const base = {
-        tenantId: 'host', subjectId: me, predicate: 'accountant', episodeId: ep,
-        trustTier: 0 as const, confidence: 0.9, extractionV: 1,
+        tenantId: 'host',
+        subjectId: me,
+        predicate: 'accountant',
+        episodeId: ep,
+        trustTier: 0 as const,
+        confidence: 0.9,
+        extractionV: 1,
       };
-      const marco = h.store.addFact({ ...base, objectValue: 'Marco', recordedAt: '2026-06-01T10:00:00Z' });
-      const lucia = h.store.addFact({ ...base, objectValue: 'Lucia', recordedAt: '2026-08-01T10:00:00Z' });
+      const marco = h.store.addFact({
+        ...base,
+        objectValue: 'Marco',
+        recordedAt: '2026-06-01T10:00:00Z',
+      });
+      const lucia = h.store.addFact({
+        ...base,
+        objectValue: 'Lucia',
+        recordedAt: '2026-08-01T10:00:00Z',
+      });
       h.store.supersede('host', marco, lucia, '2026-08-01T10:00:00Z');
       // Indexed the way ingest indexes it, so the semantic half — not only the
       // graph hop — can find both. Without this the vector half in the harness
       // above has nothing to embed and D1's regression stays unreachable: the
       // bug is specifically that the *semantic* branch never consulted `asOf`.
-      await h.vectors.index('host', [
-        { kind: 'fact', sourceId: marco, text: 'Giusto accountant Marco' },
-        { kind: 'fact', sourceId: lucia, text: 'Giusto accountant Lucia' },
-      ], '2026-08-01T10:00:00Z');
+      await h.vectors.index(
+        'host',
+        [
+          { kind: 'fact', sourceId: marco, text: 'Giusto accountant Marco' },
+          { kind: 'fact', sourceId: lucia, text: 'Giusto accountant Lucia' },
+        ],
+        '2026-08-01T10:00:00Z',
+      );
       return { marco, lucia };
     }
 
     it('reaches a retired belief when the model asks for history, marked with its successor', async () => {
-      const h = harness([callTool('memory_search', { query: 'Giusto commercialista', history: true }), answer('era Marco, ora è Lucia')]);
+      const h = harness([
+        callTool('memory_search', { query: 'Giusto commercialista', history: true }),
+        answer('era Marco, ora è Lucia'),
+      ]);
       await seedAccountantHistory(h);
 
       const result = await runTurn(h.deps, turn(h, 'chi era il mio commercialista prima?'));
@@ -324,7 +400,10 @@ describe('memory wired into the loop', () => {
     });
 
     it('reaches the belief that held at a past date, not the current one — "chi era X a giugno"', async () => {
-      const h = harness([callTool('memory_search', { query: 'Giusto commercialista', as_of: '2026-06-15' }), answer('era Marco')]);
+      const h = harness([
+        callTool('memory_search', { query: 'Giusto commercialista', as_of: '2026-06-15' }),
+        answer('era Marco'),
+      ]);
       await seedAccountantHistory(h);
 
       const result = await runTurn(h.deps, turn(h, 'chi era il mio commercialista a giugno?'));
@@ -352,14 +431,29 @@ describe('memory wired into the loop', () => {
     });
 
     it('filters by surface', async () => {
-      const h = harness([callTool('memory_search', { query: 'promemoria', surface: 'telegram' }), answer('trovato')]);
+      const h = harness([
+        callTool('memory_search', { query: 'promemoria', surface: 'telegram' }),
+        answer('trovato'),
+      ]);
       h.store.addEpisode({
-        tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
-        kind: 'message', content: 'promemoria dal terminale', trustTier: 0, createdAt: '2026-08-01T10:00:00Z',
+        tenantId: 'host',
+        connector: 'cli',
+        threadKey: 't',
+        role: 'user',
+        kind: 'message',
+        content: 'promemoria dal terminale',
+        trustTier: 0,
+        createdAt: '2026-08-01T10:00:00Z',
       });
       h.store.addEpisode({
-        tenantId: 'host', connector: 'telegram', threadKey: 'g', role: 'user',
-        kind: 'message', content: 'promemoria da telegram', trustTier: 0, createdAt: '2026-08-01T10:00:00Z',
+        tenantId: 'host',
+        connector: 'telegram',
+        threadKey: 'g',
+        role: 'user',
+        kind: 'message',
+        content: 'promemoria da telegram',
+        trustTier: 0,
+        createdAt: '2026-08-01T10:00:00Z',
       });
 
       await runTurn(h.deps, turn(h, 'cerca promemoria'));
@@ -374,34 +468,52 @@ describe('memory wired into the loop', () => {
     });
 
     it('tells the model a malformed as_of is unreadable, instead of silently searching without it', async () => {
-      const h = harness([callTool('memory_search', { query: 'qualcosa', as_of: 'non-una-data' }), answer('capito')]);
+      const h = harness([
+        callTool('memory_search', { query: 'qualcosa', as_of: 'non-una-data' }),
+        answer('capito'),
+      ]);
       await runTurn(h.deps, turn(h, 'prova'));
       expect(h.provider.seen.join('\n')).toContain('non è una data leggibile');
     });
 
     it('refuses an as_of that has not happened yet, instead of predicting it', async () => {
-      const h = harness([callTool('memory_search', { query: 'qualcosa', as_of: '2099-01-01' }), answer('capito')]);
+      const h = harness([
+        callTool('memory_search', { query: 'qualcosa', as_of: '2099-01-01' }),
+        answer('capito'),
+      ]);
       await runTurn(h.deps, turn(h, 'prova'));
       expect(h.provider.seen.join('\n')).toContain('nel futuro');
     });
 
     it('refuses a since that is after until — a window that cannot contain anything', async () => {
-      const h = harness([callTool('memory_search', { query: 'qualcosa', since: '2026-08-01', until: '2026-01-01' }), answer('capito')]);
+      const h = harness([
+        callTool('memory_search', { query: 'qualcosa', since: '2026-08-01', until: '2026-01-01' }),
+        answer('capito'),
+      ]);
       await runTurn(h.deps, turn(h, 'prova'));
       expect(h.provider.seen.join('\n')).toContain('non può contenere niente');
     });
 
     it('refuses a wrongly-typed argument instead of coercing it silently', async () => {
-      const h = harness([callTool('memory_search', { query: 'qualcosa', history: 'yes' }), answer('capito')]);
+      const h = harness([
+        callTool('memory_search', { query: 'qualcosa', history: 'yes' }),
+        answer('capito'),
+      ]);
       await runTurn(h.deps, turn(h, 'prova'));
       expect(h.provider.seen.join('\n')).toContain('booleano');
     });
 
     it('history mode does not let a second tenant reach another tenant’s retired belief either', async () => {
       const member: Principal = {
-        kind: 'member', connector: 'telegram', tenantId: 'group:telegram:9', externalId: 'u9',
+        kind: 'member',
+        connector: 'telegram',
+        tenantId: 'group:telegram:9',
+        externalId: 'u9',
       };
-      const h = harness([callTool('memory_search', { query: 'Giusto commercialista', history: true }), answer('non trovo niente')]);
+      const h = harness([
+        callTool('memory_search', { query: 'Giusto commercialista', history: true }),
+        answer('non trovo niente'),
+      ]);
       await seedAccountantHistory(h);
 
       await runTurn(h.deps, turn(h, 'chi era il commercialista?', member));
@@ -413,124 +525,82 @@ describe('memory wired into the loop', () => {
 });
 
 /**
- * La cucitura: il costo del reranker sale davvero sullo span del recall.
+ * The automatic pre-turn recall never pays a model call.
  *
- * `recall()` lo restituisce col risultato — non ha un tracer, e dargliene uno
- * sarebbe plumbing attraverso quattro file per un numero. Ma restituirlo e non
- * attaccarlo è lo stesso guasto di non calcolarlo: era l'ultima chiamata al
- * modello invisibile, e sarebbe rimasta invisibile.
+ * Measured on the owner's installed gateway (#942): the light-lane reranker
+ * inside the automatic recall was most of the time before the first visible
+ * answer — 18.6s of a 30.3s greeting, 38.9s of a 60.3s arming turn — and in
+ * the paired replay it added 4–30s per case while losing an implicit
+ * preference from the top eight. Automatic recall now keeps the fused text and
+ * vector order; ranking with a model stays on the deliberate `memory_search`
+ * path, where the model asked for it.
  */
-describe('lo span del recall porta il costo del reranker', () => {
-  it("i token della chiamata finiscono sullo span che la contiene", async () => {
-    const usato = { inputTokens: 812, outputTokens: 19, cacheReadTokens: 5 };
+describe('automatic recall does not call the reranker', () => {
+  it('a turn with enough candidates to rerank still makes no reranker call', async () => {
+    let calls = 0;
     const h = harness([answer('ok')], {
       reranker: {
-        id: 'finto',
-        rerank: async (_q, candidates, topK) => ({ items: candidates.slice(0, topK), reordered: true, usage: usato }),
+        id: 'counting',
+        rerank: async (_q, candidates, topK) => {
+          calls += 1;
+          return { items: candidates.slice(0, topK), reordered: true };
+        },
       },
     });
-    // Sopra `RERANK_MIN_CANDIDATES`, altrimenti `recall` non chiama affatto.
+    // Above `RERANK_MIN_CANDIDATES`: before this change, recall paid the
+    // reranker exactly here.
     for (let i = 0; i < RERANK_MIN_CANDIDATES + 4; i++) {
       h.store.addEpisode({
-        tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
-        kind: 'message', content: `commercialista numero ${i}`, trustTier: 0,
+        tenantId: 'host',
+        connector: 'cli',
+        threadKey: 't',
+        role: 'user',
+        kind: 'message',
+        content: `commercialista numero ${i}`,
+        trustTier: 0,
         createdAt: '2026-08-04T11:00:00Z',
       });
     }
     await runTurn(h.deps, turn(h, 'commercialista'));
 
+    expect(calls).toBe(0);
+    // Recall itself still ran and still reached the prompt.
+    expect(h.provider.seen.join('\n')).toContain('commercialista numero');
     const spans = readdirSync(join(h.home, 'traces'))
       .filter((f) => f.endsWith('.jsonl'))
-      .flatMap((f) => readFileSync(join(h.home, 'traces', f), 'utf8').trim().split('\n'))
+      .flatMap((f) =>
+        readFileSync(join(h.home, 'traces', f), 'utf8')
+          .trim()
+          .split('\n'),
+      )
       .filter((l) => l.trim() !== '')
       .map((l) => JSON.parse(l) as { attributes: Record<string, unknown> })
       .filter((x) => x.attributes['gen_ai.operation.name'] === 'memory.recall');
-
     expect(spans).toHaveLength(1);
-    expect(spans[0]?.attributes).toMatchObject({
-      'gen_ai.usage.input_tokens': 812,
-      'gen_ai.usage.output_tokens': 19,
-      'muffin.usage.cache_read_tokens': 5,
-    });
+    expect(spans[0]?.attributes['gen_ai.usage.input_tokens']).toBeUndefined();
+    expect(String(spans[0]?.attributes['muffin.memory.strategies'])).not.toContain('rerank');
   });
 });
 
 /**
- * E1, l'altra metà trovata dal judge: la spesa del reranker dentro il turno di
- * un job deve finire sul contatore di quel job.
+ * E1: light-lane spend inside a job's turn is attributed to that job.
  *
- * Il difetto, tracciato: `recall()` chiama `deps.reranker` durante il turno, il
- * reranker usa la corsia light, e la corsia light registrava la riga di spesa
- * **senza `job_id`** (`LightSpend` non lo portava). `BudgetEngine.jobMonthUsd`
- * filtra su `job_id`, quindi la riga era invisibile al tetto per-job: un job
- * poteva passare il proprio cap pur pagando il reranker dei suoi turni. Questo
- * test lo rende impossibile — la riga light, e solo quella, deve portare il job.
+ * Automatic recall no longer reaches the light lane, so a job turn that only
+ * answers spends nothing there; the deliberate `memory_search` the model calls
+ * inside a job turn is the in-turn reranker caller, and its row carries the job.
  */
-describe('E1: la spesa del reranker è attribuita al job che l\'ha causata', () => {
-  it('il turno di un job spende la chiamata del reranker sul job, non su nessuno', async () => {
-    // La risposta del reranker è JSON e porta un model diverso da quello main,
-    // così la riga light è distinguibile da quella del turno.
-    const rerankReply: ChatResult = {
-      text: '{"order":[0,1,2]}',
-      toolCalls: [],
-      stopReason: 'end',
-      usage: { inputTokens: 40, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 },
-      model: 'light-served',
-    };
-    const h = harness([rerankReply, answer('fatto')]);
-    // Sopra `RERANK_MIN_CANDIDATES`, o `recall` non chiama affatto il reranker.
+describe('E1: in-turn light spend is attributed to the job that caused it', () => {
+  it('a job turn without memory_search makes no light-lane call', async () => {
+    const h = harness([answer('fatto')]);
     for (let i = 0; i < RERANK_MIN_CANDIDATES + 4; i++) {
       h.store.addEpisode({
-        tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
-        kind: 'message', content: `commercialista numero ${i}`, trustTier: 0,
-        createdAt: '2026-08-04T11:00:00Z',
-      });
-    }
-
-    // La stessa forma di produzione: la corsia light avvolge il provider e
-    // fattura ogni chiamata; il loop fattura la propria con `recordSpend`. La
-    // riga light è quella che questo test interroga.
-    const budget = new BudgetEngine(new DatabaseCtor(':memory:'), { monthlyUsd: 100, perTenantDailyUsd: 100 });
-    const righeLight: Array<{ model: string; jobId: string | null }> = [];
-    h.deps.memory!.recall.reranker = new LlmReranker(
-      lightLane(h.provider, {
-        profile: CONSERVATIVE,
-        record: (entry: LightSpend) => {
-          budget.record({ ...entry, tenant: 'host', capability: 'consolidation', usd: 0.01 });
-          righeLight.push({ model: entry.model, jobId: entry.jobId ?? null });
-        },
-      }),
-      'light-model',
-    );
-    h.deps.recordSpend = (entry) => {
-      budget.record({ ...entry, usd: 0.02 });
-      return 0.02;
-    };
-
-    await runTurn(h.deps, { ...turn(h, 'commercialista'), jobId: 'job-1' });
-
-    // La riga della corsia light porta il job. Senza il threading di `jobId`
-    // questa lista è `[{ model: 'light-served', jobId: null }]` e il tetto
-    // per-job non vede la spesa.
-    expect(righeLight).toEqual([{ model: 'light-served', jobId: 'job-1' }]);
-    // E il contatore che il tetto legge la include: 0.01 del reranker + 0.02 del
-    // turno.
-    expect(budget.jobMonthUsd('job-1')).toBeCloseTo(0.03, 10);
-  });
-
-  it('un turno senza job non attribuisce la spesa del reranker a nessuno', async () => {
-    const rerankReply: ChatResult = {
-      text: '{"order":[0,1,2]}',
-      toolCalls: [],
-      stopReason: 'end',
-      usage: { inputTokens: 40, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 },
-      model: 'light-served',
-    };
-    const h = harness([rerankReply, answer('fatto')]);
-    for (let i = 0; i < RERANK_MIN_CANDIDATES + 4; i++) {
-      h.store.addEpisode({
-        tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
-        kind: 'message', content: `commercialista numero ${i}`, trustTier: 0,
+        tenantId: 'host',
+        connector: 'cli',
+        threadKey: 't',
+        role: 'user',
+        kind: 'message',
+        content: `commercialista numero ${i}`,
+        trustTier: 0,
         createdAt: '2026-08-04T11:00:00Z',
       });
     }
@@ -543,9 +613,9 @@ describe('E1: la spesa del reranker è attribuita al job che l\'ha causata', () 
       'light-model',
     );
 
-    await runTurn(h.deps, turn(h, 'commercialista'));
+    await runTurn(h.deps, { ...turn(h, 'commercialista'), jobId: 'job-1' });
 
-    expect(righeLight).toEqual([null]);
+    expect(righeLight).toEqual([]);
   });
 
   it('anche il memory_search che il modello chiama dentro un turno-job è speso sul job', async () => {
@@ -560,11 +630,20 @@ describe('E1: la spesa del reranker è attribuita al job che l\'ha causata', () 
     // quindi la recall automatica NON paga il reranker: l'unica chiamata light
     // di questo turno è quella che il tool provoca. Senza il `ctx.jobId` nel
     // cablaggio del tool, questa riga resterebbe `null`.
-    const h = harness([callTool('memory_search', { query: 'commercialista' }), rerankReply, answer('trovato')]);
+    const h = harness([
+      callTool('memory_search', { query: 'commercialista' }),
+      rerankReply,
+      answer('trovato'),
+    ]);
     for (let i = 0; i < RERANK_MIN_CANDIDATES + 4; i++) {
       h.store.addEpisode({
-        tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
-        kind: 'message', content: `commercialista numero ${i}`, trustTier: 0,
+        tenantId: 'host',
+        connector: 'cli',
+        threadKey: 't',
+        role: 'user',
+        kind: 'message',
+        content: `commercialista numero ${i}`,
+        trustTier: 0,
         createdAt: '2026-08-04T11:00:00Z',
       });
     }

@@ -227,31 +227,15 @@ export function positiveOracle({
   canonicalWorkspace = workspace,
 }) {
   const requests = events.filter((event) => event.kind === 'request');
-  const first = requests[0];
-  const names = (request) => request?.toolNames ?? [];
-  const searchIndex = events.findIndex(
-    (event) =>
-      event.kind === 'response' &&
-      event.toolCalls?.some((call) => call.name === 'capability_search'),
-  );
-  const writeSchemaIndex = requests.findIndex(
-    (request, index) => index > 0 && names(request).includes('fs_write'),
-  );
-  const selectedSearch = searchIndex >= 0;
-  const laterWriteSchema =
-    writeSchemaIndex > 0 &&
-    (searchIndex < 0 ||
-      searchIndex <
-        events.findIndex((event) => event.kind === 'request' && names(event).includes('fs_write')));
-  const schemaEventIndex = events.findIndex(
-    (event) => event.kind === 'request' && names(event).includes('fs_write'),
-  );
+  const offersWriter = (request) => request?.toolNames?.includes('fs_write') ?? false;
+  const writerRequests = new Set(requests.filter(offersWriter).map((request) => request.index));
+  const responses = events.filter((event) => event.kind === 'response');
   const target = join(canonicalWorkspace, REAL_AGENT_EXPECTED.outputPath);
   const requestedPath = join(workspace, REAL_AGENT_EXPECTED.outputPath);
-  const callsForTarget = (wireEvents) =>
-    wireEvents
-      .filter((event) => event.kind === 'response')
-      .flatMap((event) => event.toolCalls ?? [])
+  const callIds = new Set(
+    responses
+      .filter((response) => Number.isInteger(response.index) && writerRequests.has(response.index))
+      .flatMap((response) => response.toolCalls ?? [])
       .filter(
         (call) =>
           call.id &&
@@ -262,24 +246,19 @@ export function positiveOracle({
             REAL_AGENT_EXPECTED.outputPath,
             `./${REAL_AGENT_EXPECTED.outputPath}`,
           ].includes(parseArgs(call.arguments)?.path),
-      );
-  const callIds = new Set(callsForTarget(events).map((call) => call.id));
-  const advertisedCalls = new Set(
-    (schemaEventIndex >= 0 ? callsForTarget(events.slice(schemaEventIndex + 1)) : []).map(
-      (call) => call.id,
-    ),
+      )
+      .map((call) => call.id),
   );
-  const completedWrites = rows.filter(
+  const effect = rows.find(
     (row) =>
       row.tool === 'fs_write' &&
       callIds.has(row.call_id) &&
+      row.effect_row === 'host' &&
       ['allow', 'draft'].includes(row.decision) &&
       row.is_error === 0 &&
       typeof row.ended_at === 'string' &&
       [target, requestedPath].includes(row.resource),
   );
-  const effect = completedWrites.find((row) => advertisedCalls.has(row.call_id));
-  const taskEffect = effect ?? completedWrites[0];
   const exactArtifact =
     typeof artifact === 'string' &&
     (artifact === REAL_AGENT_EXPECTED.sharedDecision ||
@@ -288,23 +267,18 @@ export function positiveOracle({
     typeof artifact === 'string' &&
     REAL_AGENT_EXPECTED.mustNotRepeat.every((detail) => !artifact.includes(detail));
   const artifactValid = exactArtifact && forbiddenDetailsAbsent;
-  const checks = {
-    fsWriteHiddenInitially: !names(first).includes('fs_write'),
-    discoveryExposed: names(first).includes('capability_search'),
-    modelSelectedSearch: selectedSearch,
-    fsWriteLoadedLater: laterWriteSchema,
-    modelSelectedWrite: advertisedCalls.size > 0,
-    authorizedEffectRecorded: Boolean(effect),
-    independentArtifactOracle: artifactValid,
-    forbiddenDetailsAbsent,
-  };
-  const applicable =
-    first !== undefined && checks.fsWriteHiddenInitially && checks.discoveryExposed;
   return {
-    status: !applicable ? 'NOT_RUN' : Object.values(checks).every(Boolean) ? 'PASS' : 'FAIL',
-    taskStatus: artifactValid && taskEffect ? 'PASS' : 'FAIL',
-    taskEffect: taskEffect ?? null,
-    checks,
+    status: effect && artifactValid ? 'PASS' : 'FAIL',
+    checks: {
+      writerVisibleInitially: offersWriter(requests[0]),
+      modelSelectedDiscovery: responses.some((response) =>
+        response.toolCalls?.some((call) => call.name === 'capability_search'),
+      ),
+      modelSelectedWrite: callIds.size > 0,
+      authorizedEffectRecorded: Boolean(effect),
+      independentArtifactOracle: artifactValid,
+      forbiddenDetailsAbsent,
+    },
     artifactSha256:
       typeof artifact === 'string' ? createHash('sha256').update(artifact).digest('hex') : null,
     effect: effect ?? null,
@@ -392,7 +366,6 @@ export async function startRecorder({
   target = OPENROUTER_BASE_URL,
   upstreamPrefix = OPENROUTER_API_PREFIX,
   wirePath,
-  guardFirstWrite,
   modelId,
   catalog,
   apiKey,
@@ -481,8 +454,6 @@ export async function startRecorder({
       );
       events.push(request);
       appendFileSync(wirePath, `${JSON.stringify(request)}\n`, { mode: 0o600 });
-      if (forwarded === 0 && guardFirstWrite && toolNames.includes('fs_write'))
-        violation = 'fs_write present in first provider request';
       const unsafeRouting =
         body?.models !== undefined ||
         body?.provider !== undefined ||
