@@ -225,6 +225,49 @@ describe('OpenAI ChatGPT plan Responses provider', () => {
     expect(String(failure)).not.toContain('private quota payload');
   });
 
+  it('records a plan refusal without changing the error the caller gets', async () => {
+    const recorded: boolean[] = [];
+    const refuse = new OpenAIChatGPTProvider(
+      {
+        accessToken: async () => 'synthetic-token',
+        listModels: async () => [],
+        recordPlanUsage: async (limited) => {
+          recorded.push(limited);
+        },
+      },
+      {
+        fetch: async () =>
+          Response.json(
+            { error: { code: 'subscription_sharing_usage_limit_exceeded', message: 'quota' } },
+            { status: 429 },
+          ),
+      },
+    );
+    await expect(refuse.chat(CALL)).rejects.toMatchObject({ details: { quota: 'chatgpt-plan' } });
+    expect(recorded).toEqual([true]);
+
+    const failingRecorder = new OpenAIChatGPTProvider(
+      {
+        accessToken: async () => 'synthetic-token',
+        listModels: async () => [],
+        recordPlanUsage: async () => {
+          throw new Error('disk full');
+        },
+      },
+      {
+        fetch: async () =>
+          Response.json(
+            { error: { code: 'subscription_sharing_usage_limit_exceeded', message: 'quota' } },
+            { status: 429 },
+          ),
+      },
+    );
+    // Recording is diagnostics: the caller still gets the quota error.
+    await expect(failingRecorder.chat(CALL)).rejects.toMatchObject({
+      details: { quota: 'chatgpt-plan' },
+    });
+  });
+
   it('sends full semantic history to the public streaming endpoint and maps a completed response and usage', async () => {
     const output = [
       {

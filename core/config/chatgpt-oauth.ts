@@ -86,6 +86,11 @@ type Profile = {
   tokens: TokenSet | null;
   /** Non-secret result of the last refresh. Tokens themselves stay in `tokens`. */
   lastRefresh?: { at: number; outcome: RefreshOutcome };
+  /**
+   * Non-secret: when the plan last refused inference for its usage limit.
+   * Cleared by the next successful reply, so it describes the account, not a token.
+   */
+  planLimit?: { at: number };
 };
 
 type Store = {
@@ -107,6 +112,9 @@ export type ChatGPTSession = {
   accessExpired: boolean;
   needsLogin: boolean;
   refreshOutcome?: RefreshOutcome;
+  /** The plan refused the last inference for its usage limit; replies fail until it resets. */
+  planLimited: boolean;
+  planLimitedAt?: number;
   scopes: string[];
   expiresAt?: number;
 };
@@ -299,15 +307,19 @@ function safeSession(profile: Profile, active = false, now = Date.now()): ChatGP
   const expiresAt = tokens?.expiresAt ?? 0;
   const accessExpired = !Number.isFinite(expiresAt) || expiresAt <= now + ACCESS_REFRESH_SKEW_MS;
   const needsLogin = profile.lastRefresh?.outcome === 'reauth';
+  const planLimited = profile.planLimit !== undefined;
   return {
     profileId: profile.id,
     ...(profile.email ? { email: profile.email } : {}),
     connected,
-    usable: connected && safeString(tokens.accessToken) && !accessExpired && !needsLogin,
+    usable:
+      connected && safeString(tokens.accessToken) && !accessExpired && !needsLogin && !planLimited,
     renewable: connected && safeString(tokens.refreshToken) && !needsLogin,
     accessExpired,
     needsLogin,
     ...(profile.lastRefresh ? { refreshOutcome: profile.lastRefresh.outcome } : {}),
+    planLimited,
+    ...(profile.planLimit ? { planLimitedAt: profile.planLimit.at } : {}),
     scopes: [...scopes],
     ...(tokens ? { expiresAt: tokens.expiresAt } : {}),
     active,
@@ -542,6 +554,29 @@ export class ChatGPTConnection {
     } finally {
       await pending.close();
     }
+  }
+
+  /**
+   * Record whether the plan accepted inference. A refusal for the usage limit
+   * is kept until a reply succeeds, so `doctor` and `chatgpt status` stop
+   * calling an exhausted plan usable. Success only writes when a limit was
+   * recorded, so ordinary replies never take the lock.
+   */
+  async recordPlanUsage(limited: boolean): Promise<void> {
+    if (!limited) {
+      const store = this.readStore();
+      const active = store.profiles.find((item) => item.id === store.activeProfileId);
+      if (active?.planLimit === undefined) return;
+    }
+    await this.withRefreshLock(async () => {
+      const store = this.readStore();
+      const profile = store.profiles.find((item) => item.id === store.activeProfileId);
+      if (!profile) return;
+      if (limited) profile.planLimit = { at: Date.now() };
+      else if (profile.planLimit === undefined) return;
+      else delete profile.planLimit;
+      this.writeStore(store);
+    });
   }
 
   async accessToken(signal?: AbortSignal): Promise<string> {

@@ -204,6 +204,7 @@ describe('ChatGPT account and fixed model command', () => {
       renewable: true,
       accessExpired: false,
       needsLogin: false,
+      planLimited: false,
       scopes: ['chatgpt.tokens.use.direct'],
     });
     expect(
@@ -224,6 +225,7 @@ describe('ChatGPT account and fixed model command', () => {
       renewable: true,
       accessExpired: false,
       needsLogin: false,
+      planLimited: false,
       scopes: ['chatgpt.tokens.use.direct'],
     });
     expect(
