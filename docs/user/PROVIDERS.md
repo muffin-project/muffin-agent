@@ -24,7 +24,9 @@ lanes that already use that provider.
 
 Anthropic is a Console API key, including Max, Ultra, and Team API credits.
 Muffin does not start a claude.ai or Claude Code login and does not read
-`~/.claude`. xAI/Grok OAuth is not part of this client.
+`~/.claude`. xAI/Grok connects with a console.x.ai API key, billed per token
+(`muffin secret set xai_api_key`); a SuperGrok or X Premium subscription login
+is not part of this client (ADR-0110).
 
 The key is saved before the capability probe. The probe uses the same
 inference check as `muffin doctor --online`. Muffin reports the route as
@@ -71,9 +73,32 @@ opts into model probes, which may consume provider quota or API credit.
 Model catalogs are availability evidence. Generic endpoints may accept models
 absent from their catalog; selections reported as unverified require an online
 probe or a real turn. ChatGPT selection verifies its actual model route first.
-Muffin never switches to another paid provider automatically. ChatGPT-plan usage
-is managed in [ChatGPT Settings](https://chatgpt.com/settings/usage), separately
-from Muffin's API-dollar estimates.
+Muffin never switches to another paid provider unless you listed it as a
+fallback. ChatGPT-plan usage is managed in
+[ChatGPT Settings](https://chatgpt.com/settings/usage), separately from Muffin's
+API-dollar estimates.
+
+## Fallbacks
+
+Each lane can list up to four fallbacks, tried in order when the lane's own
+connection is out of quota, signed out, rate limited or down (ADR-0110). Errors
+caused by the request itself, including a moderation or guardrail block (a bare
+403), never move to another provider and never pause a link.
+
+```sh
+muffin fallback                                  # chains, active link, pauses
+muffin fallback add xai grok-4.7                 # main lane, second link
+muffin fallback add openrouter openrouter/free   # third link
+muffin fallback add openrouter some/model --account work --light
+muffin fallback remove xai                       # or by position: remove 3
+muffin fallback reset                            # lift every pause now
+```
+
+A paused link is retried first when the provider's declared reset time (or a
+short default) passes, or right away when you save a new key or sign in again
+for it (or run `muffin fallback reset`). `muffin doctor` shows which link
+answered last and why the lane's own connection is paused.
+Spending on a fallback counts against the same budget caps.
 
 ## Embedding selection
 

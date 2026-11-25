@@ -205,7 +205,17 @@ export class OpenAIChatGPTProvider implements Provider {
       if (error instanceof ChatGPTReauthenticationRequired) throw reauthenticationError(error);
       // Credential acquisition is not an inference-stream failure. Preserve
       // its non-retryable boundary without exposing OAuth error details.
-      throw new ProviderError('ChatGPT access token unavailable', false);
+      throw new ProviderError(
+        'ChatGPT access token unavailable',
+        false,
+        undefined,
+        'transport',
+        undefined,
+        false,
+        {
+          credentials: 'unavailable',
+        },
+      );
     }
 
     try {
@@ -680,15 +690,42 @@ function responseFailure(error: unknown, requestId: string | undefined): Provide
   const safeRequestId =
     requestId !== undefined && /^[a-zA-Z0-9_-]{1,100}$/.test(requestId) ? requestId : undefined;
   const message = `ChatGPT Responses failed (${code})${safeRequestId ? ` [${safeRequestId}]` : ''}`;
-  if (code === PLAN_USAGE_LIMIT_CODE)
+  if (code === PLAN_USAGE_LIMIT_CODE) {
+    const retryAt = declaredResetAt(detail);
     return new ProviderError(message, false, undefined, 'transport', undefined, false, {
       quota: 'chatgpt-plan',
+      ...(retryAt === undefined ? {} : { retryAt }),
     });
+  }
   const retryable =
     /^(rate_limit_exceeded|server_error|temporarily_unavailable|timeout|internal_error)$/i.test(
       code,
     );
   return new ProviderError(message, retryable);
+}
+
+/**
+ * The reset instant a usage-limit body declares, in epoch ms. Codex-style
+ * bodies carry `resets_at` (epoch seconds) or `resets_in_seconds`; anything
+ * else, or a value that is not a plausible future instant, is undeclared.
+ */
+export function declaredResetAt(body: unknown, now = Date.now()): number | undefined {
+  if (body === null || typeof body !== 'object') return undefined;
+  const record = body as { resets_at?: unknown; resets_in_seconds?: unknown; error?: unknown };
+  if (typeof record.resets_at === 'number' && Number.isFinite(record.resets_at)) {
+    const at = record.resets_at * 1000;
+    return at > now ? at : undefined;
+  }
+  if (
+    typeof record.resets_in_seconds === 'number' &&
+    Number.isFinite(record.resets_in_seconds) &&
+    record.resets_in_seconds > 0
+  ) {
+    return now + record.resets_in_seconds * 1000;
+  }
+  if (record.error !== undefined && record.error !== body)
+    return declaredResetAt(record.error, now);
+  return undefined;
 }
 
 function apiProviderError(error: APIError): ProviderError {
@@ -698,7 +735,8 @@ function apiProviderError(error: APIError): ProviderError {
   // The plan limit arrives either as HTTP 429 or inside an already open
   // stream, where the SDK raises an APIError with no status. Both are the
   // same quota, and neither is helped by retrying soon.
-  if ((status === 429 || status === undefined) && error.code === PLAN_USAGE_LIMIT_CODE)
+  if ((status === 429 || status === undefined) && error.code === PLAN_USAGE_LIMIT_CODE) {
+    const retryAt = declaredResetAt(error.error);
     return new ProviderError(
       'ChatGPT plan usage limit exceeded',
       false,
@@ -709,8 +747,10 @@ function apiProviderError(error: APIError): ProviderError {
       {
         quota: 'chatgpt-plan',
         ...(requestId === undefined ? {} : { requestId }),
+        ...(retryAt === undefined ? {} : { retryAt }),
       },
     );
+  }
   const retryable =
     error instanceof APIConnectionError ||
     status === 408 ||
@@ -723,5 +763,7 @@ function apiProviderError(error: APIError): ProviderError {
     status,
     'transport',
     parseRetryAfterMs(error.headers),
+    false,
+    error instanceof APIConnectionError ? { connection: true } : undefined,
   );
 }
