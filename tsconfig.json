@@ -1,9 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2023",
-    "lib": [
-      "ES2023"
-    ],
+    "lib": ["ES2023"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
@@ -14,9 +12,7 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": [
-      "node"
-    ]
+    "types": ["node"]
   },
   "include": [
     "core/**/*.ts",
@@ -24,6 +20,8 @@
     "cli/**/*.ts",
     "evals/**/*.ts",
     "scripts/**/*.ts",
+    "test-support/**/*.ts",
+    "vitest.capabilities.ts",
     "**/*.test.ts",
     ".claude/hooks/**/*.ts"
   ]
