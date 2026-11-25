@@ -1011,7 +1011,7 @@ export type TurnEvent =
    * frase in italiano vive in `cli/repl.ts` e non su `ToolSpec`. Chi li stampa
    * li tratta come non fidati: dentro c'è testo scritto dal modello.
    */
-  | { type: 'tool_start'; name: string; capability: string; args?: unknown }
+  | { type: 'tool_start'; name: string; capability: string; callId?: string; args?: unknown }
   /**
    * La chiamata non è finita e non è fallita: **è ferma su di te**.
    *
@@ -1021,7 +1021,7 @@ export type TurnEvent =
    * non si è rotto. Chi guarda lo schermo in quel momento sta cercando di
    * capire se deve fare qualcosa lui — ed è esattamente quello che deve fare.
    */
-  | { type: 'ask'; name: string; capability: string }
+  | { type: 'ask'; name: string; capability: string; callId?: string }
   /**
    * Un tentativo transitorio è andato male e se ne fa un altro.
    *
