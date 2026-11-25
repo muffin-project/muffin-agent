@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runInit } from '../../cli/init.js';
 import { paths } from './config.js';
-import { listConfigKnobs, type ConfigKnob } from './inventory.js';
+import { type ConfigKnob, listConfigKnobs } from './inventory.js';
 import { PROVIDERS } from './providers.js';
 
 /**
@@ -31,6 +31,7 @@ function home(): string {
     apiKey: 'sk-or-v1-fixture',
     provider: 'openai-compat',
     baseUrl: 'https://openrouter.ai/api/v1',
+    timeZone: 'UTC',
   });
   return dir;
 }
@@ -68,7 +69,10 @@ describe('every knob the mandate names as a minimum shows up', () => {
     expect(find(knobs, 'budgets.perTenantDailyUsd')).toMatchObject({ value: '2', sealed: true });
     expect(find(knobs, 'budgets.quietHours.from')).toMatchObject({ value: '23:00', sealed: true });
     expect(find(knobs, 'budgets.quietHours.to')).toMatchObject({ value: '08:00', sealed: true });
-    expect(find(knobs, 'budgets.quietHours.timezone')).toMatchObject({ value: 'UTC', sealed: true });
+    expect(find(knobs, 'budgets.quietHours.timezone')).toMatchObject({
+      value: 'UTC',
+      sealed: true,
+    });
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -85,7 +89,10 @@ describe('every knob the mandate names as a minimum shows up', () => {
     const dir = home();
     const knobs = listConfigKnobs(dir);
     expect(find(knobs, 'policy.defaultMaxTaint.low')).toMatchObject({ value: '3', sealed: true });
-    expect(find(knobs, 'policy.defaultMaxTaint.medium')).toMatchObject({ value: '1', sealed: true });
+    expect(find(knobs, 'policy.defaultMaxTaint.medium')).toMatchObject({
+      value: '1',
+      sealed: true,
+    });
     expect(find(knobs, 'policy.defaultMaxTaint.high')).toMatchObject({ value: '1', sealed: true });
     expect(find(knobs, 'policy.neverAtRuntime')?.value).toContain('rot.write');
     expect(find(knobs, 'policy.forbiddenForSystem')?.value).toContain('outward.send');
@@ -254,7 +261,7 @@ describe('the value shown is a live read, not a snapshot', () => {
   });
 });
 
-describe('identity and evals/voice — the remaining two of ADR-0036\'s five sealed files', () => {
+describe("identity and evals/voice — the remaining two of ADR-0036's five sealed files", () => {
   it('both show up, sealed, without printing their content', () => {
     const dir = home();
     const knobs = listConfigKnobs(dir);

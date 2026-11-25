@@ -4,6 +4,7 @@ import type { CapabilityId, Decision, DecisionRequest } from '../../core/policy/
 import { redactText, scrubResourceEchoes } from '../../core/tracing/redact.js';
 import { ATTR, type AttributeValue } from '../../core/tracing/types.js';
 import type { ContinuableClass } from '../../core/turns/store.js';
+import { CAPABILITY_DISCOVERY_GUIDANCE } from '../capability-exposure.js';
 import { checkCompletion } from '../completion.js';
 import { minimalSystemPrompt, type TenantClass } from '../context/assemble.js';
 import { placeCacheBreakpoints } from '../context/cache-breakpoints.js';
@@ -38,6 +39,7 @@ import type {
 } from './execution-budget.js';
 import {
   harnessMessage,
+  isHarnessMessage,
   isPartialMessage,
   ownerMessage,
   partialMessage,
@@ -536,11 +538,21 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       });
     }
 
-    // #469: a capability search stages schemas during a tool batch and changes
-    // the provider-visible projection only at the following model boundary.
-    // Execution authority is deliberately unchanged: a directly named
-    // registered tool still goes through runTool + the kernel.
-    toolContext.capabilityDiscovery?.activatePending();
+    // A tool result can raise the taint enough to close discovery this round.
+    // Project the full eligible catalogue and drop only the lease's now-stale
+    // guidance when the model cannot use discovery to expand a partial menu.
+    const discovering = toolContext.capabilityDiscovery?.activatePending() === true;
+    const messages = discovering
+      ? compacted.messages
+      : compacted.messages.filter((message) => {
+          const [block] = message.content;
+          return !(
+            isHarnessMessage(message) &&
+            message.content.length === 1 &&
+            block?.type === 'text' &&
+            block.text === CAPABILITY_DISCOVERY_GUIDANCE
+          );
+        });
 
     const reasoning = reasoningFromLegacyThinking(deps.profile.thinking);
     // Interactive is the conversation. Minimal is a task: a job, or a future
@@ -564,7 +576,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     // never more than four. Copies: the session transcript is not a cache map.
     const placed = placeCacheBreakpoints(
       [{ type: 'text', text: systemText + jobContext }],
-      compacted.messages,
+      messages,
     );
     const call: ChatCall = {
       model: deps.model,

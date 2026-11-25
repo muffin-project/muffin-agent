@@ -136,11 +136,12 @@ const SPEC_DESCRIPTION =
   'Read-only: come è configurata QUESTA istanza adesso — build, provider e modello in uso, ' +
   'profilo attivo, root of trust, stato dei check di salute, capability esposte a questo turno, ' +
   'blocchi del system prompt con la loro provenienza, turni aperti, job. ' +
-  'Usalo quando ti si chiede come funzioni o cosa stai usando (che modello ti esegue, quanti tool vedi, ' +
-  'se il RoT è integro): è il tool per questo, non un comando di sistema — la risposta è misurata, non ricordata. ' +
+  'Usalo quando ti si chiede come funzioni o cosa stai usando oltre a quello che «Questo turno» dice già ' +
+  '(il modello configurato è lì: non serve chiamarlo per quello) — quanti tool vedi, se il RoT è integro, quali check falliscono: ' +
+  'è il tool per questo, non un comando di sistema — la risposta è misurata, non ricordata. ' +
   "Non per l'architettura del progetto in teoria (quella sta nei documenti), solo per lo stato vivo di questo processo. " +
   'Ritorna un report testuale a sezioni: istanza, turno corrente, capacità spente, salute, system prompt, turni, job. ' +
-  'e.g. sys_inspect({}) risponde a "che modello ti sta eseguendo, di preciso?" senza lanciare nulla in shell_run.';
+  'e.g. sys_inspect({}) risponde a "quali tool vedi adesso e il RoT è integro?" senza lanciare nulla in shell_run.';
 
 /**
  * Una riga di check, senza il testo di terze parti.
@@ -203,27 +204,20 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
             ? ' · conservativo (nessun profilo matcha)'
             : ` · ${profileSource.origin} (${profileSource.file.split('/').pop()})`;
       const [report, build] = await Promise.all([sources.doctor(), sources.build()]);
-      // Same authority filter and same #469 projection as the live loop.
-      // Under the cap capability_search disappears entirely (ordinary fast
-      // path). Under pressure the cap bounds only the currently loaded schemas:
-      // the remaining authorized tools stay reachable through discovery.
-      const filtrati = visibleTools(
-        [...sources.tools],
-        principal,
-        sources.capabilities,
-        sources.grants?.get(ctx.tenant),
-      );
-      const discoveryTool = filtrati.find((tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME);
-      const initialProjection = createCapabilityExposure({
-        eligible: filtrati,
-        maxToolsExposed: profile.maxToolsExposed,
-        ...(discoveryTool === undefined ? {} : { discoveryTool }),
-      });
-      const exposure = ctx.capabilityDiscovery?.snapshot() ?? {
-        visible: initialProjection.exposed.map((tool) => tool.spec.name),
-        pressured: initialProjection.pressured,
-        hiddenCount: initialProjection.hiddenCount,
-      };
+      let exposure = ctx.capabilityExposure?.();
+      if (exposure === undefined) {
+        // Standalone inspection has no model turn to report.
+        const eligible = visibleTools(
+          [...sources.tools],
+          principal,
+          sources.capabilities,
+          sources.grants?.get(ctx.tenant),
+        );
+        const discoveryTool = eligible.find(
+          (tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME,
+        );
+        exposure = createCapabilityExposure({ eligible, discoveryTool }).snapshot();
+      }
       const esposti = [...exposure.visible];
       const spente = sources.capabilityGaps.filter((g) => g.kind === 'disabled');
       const blocchi = sources.promptBlocks[cls] ?? [];
@@ -243,9 +237,7 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
         // in generale, che è la domanda a cui risponde `muffin doctor`. Stessa
         // fonte di `Runtime.workspace`: mai una seconda cartella calcolata qui.
         `cartella di lavoro: ${sources.workspace}`,
-        // Il profilo non è cosmetico: decide quanti tool vede il modello e se
-        // il reasoning viene chiesto spento (#167).
-        `profilo: ${profile.name}${profiloOrigine} — max ${profile.maxToolsExposed} tool esposti, ${profile.maxToolCallsPerTurn === null ? 'nessun tetto numerico di tool call' : `${profile.maxToolCallsPerTurn} call/turno`}, thinking ${profile.thinking}`,
+        `profilo: ${profile.name}${profiloOrigine} — tool caricati per pertinenza quando la ricerca è disponibile, ${profile.maxToolCallsPerTurn === null ? 'nessun tetto numerico di tool call' : `${profile.maxToolCallsPerTurn} call/turno`}, thinking ${profile.thinking}`,
         `root of trust: ${sources.safeMode ? `SAFE MODE (${sources.safeMode.reason}: ${sources.safeMode.diverged.join(', ')}) — capability sopra 'low' negate` : `${sources.config.rot.mode}, integro`}`,
         ...(sources.judgment === undefined
           ? []
@@ -268,11 +260,11 @@ export function makeInspectTool(sources: InspectSources): RegisteredTool {
           return `auto — chiede finché il giudizio non è calibrato${d.dal === null ? '' : ` (attiva dal ${d.dal})`}`;
         })()}`,
         `capability esposte: ${esposti.sort().join(', ')}`,
-        sources.tools.length === filtrati.length
+        sources.tools.length === exposure.eligibleCount
           ? ''
-          : `  (${sources.tools.length - filtrati.length} registrate ma non esposte a questo principal)`,
+          : `  (${sources.tools.length - exposure.eligibleCount} registrate ma non esposte a questo principal)`,
         exposure.pressured
-          ? `  (catalogo discoverable: ${exposure.hiddenCount} tool autorizzati non-core; maxToolsExposed limita gli schema caricati, non la raggiungibilità)`
+          ? `  (catalogo discoverable: ${exposure.hiddenCount} tool autorizzati non nel nucleo; si caricano con capability_search)`
           : '',
         '',
         // Distinto da quanto sopra apposta: qui non è «non visto da questo
