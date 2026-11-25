@@ -260,8 +260,7 @@ things until 2026-09-06:
   budget gate, and the fail-safe that *queues* a high-risk request from an
   autonomous `system`/`agent` principal instead of auto-approving it.
 - **`hardened` no longer skips one.** The `hardened && owner && taint === 0`
-  auto-allow is gone: `muffin rot harden` answers "who may rewrite the rules",
-  not "can this command be undone".
+  auto-allow is gone. OS hardening and effect approval are separate questions.
 
 Egress is a separate authority and is untouched by this: model-composed bytes
 riding out in a URL's query or fragment still ask the owner and refuse every
@@ -939,23 +938,20 @@ after `started` but before outcome must remain uncertain; it must not become
 
 ## 12. Root of Trust
 
-**In two questions, before the formal prose** — because "root of trust",
-"seal", "safe mode" and "harden" are really the answer to only two questions,
-and `muffin doctor` (`cli/doctor.ts`) has to say it in these terms, not the
-four below, before it says anything else:
+**In two questions:**
 
 1. *Has anything touched these files?* If yes, and nobody confirmed it, Muffin
    restricts itself rather than trust a file it cannot vouch for — that is
    "safe mode". `reseal` is the owner saying "I changed that file on purpose;
    take the new version as true" — only he can say it, because that is exactly
    what distinguishes his edit from an intrusion.
-2. *Can anything touch these files?* Today, in `single-user`, Muffin
-   *detects* tampering but cannot *prevent* it, because a process running as
-   the owner can undo the read-only bits by itself. `rot harden` prints the OS
-   commands that make prevention real — it needs `sudo`, which is why it
-   prints them instead of running them. The consequence the owner feels every
-   day: without real prevention, no capability that cannot be undone can ever
-   become a silent allow — `sys.shell` always asks.
+2. *Can anything touch these files?* In `single-user`, another process running
+   as the same user can replace both rules and seal. For an existing `hardened`
+   deployment, `muffin doctor` reports the OS ownership and write-permission
+   checks separately from seal integrity. The manual `rot harden` recipe was
+   retired: it did not verify that the service could still read the seal or
+   boot after transferring ownership. The supported diagnostics are `muffin
+   doctor` and `muffin rot verify`. OS hardening does not reduce approvals.
 
 **A capability-setup verb (`muffin search <provider>`, `muffin mcp add
 --host`) may widen `rot/egress.json` and reseal, and that is the same act as
@@ -1018,8 +1014,9 @@ the unsealed copy, so a fallback would make the seal a suggestion.
 The seal is a detection boundary, not a prevention one: in `single-user` mode
 the sealed files share the owner's OS user and permissions, so a process that
 can rewrite `config.json` can also reseal a consistent chain, and that state is
-indistinguishable from a legitimate pairing. Only `hardened` mode (`muffin rot
-harden`) puts the seal out of that process's reach.
+indistinguishable from a legitimate pairing. A `hardened` deployment needs OS
+permissions that let its runtime identity read the seal without being able to
+replace it. A config flag alone cannot provide those permissions.
 
 A detected divergence moves the runtime toward conservative behaviour until the
 owner deliberately reseals/restarts as required by the implementation.

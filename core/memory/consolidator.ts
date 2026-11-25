@@ -1,7 +1,12 @@
 import type Database from 'better-sqlite3';
 import { ensureColumn } from '../lock/durable.js';
 import type { TenantId } from '../policy/types.js';
-import { CONSOLIDATION_PRINCIPAL, formatConsolidationLines, IngestFailed, type IngestReport } from './ingest.js';
+import {
+  CONSOLIDATION_PRINCIPAL,
+  formatConsolidationLines,
+  IngestFailed,
+  type IngestReport,
+} from './ingest.js';
 
 /**
  * What makes consolidation start by itself.
@@ -418,10 +423,7 @@ function rowFrom(
     superseded: report.superseded,
     indexed: report.indexed,
     review: report.needsReview.length,
-    // Entrambi i conteggi: un giudice non raggiungibile è un problema di questo
-    // giro esattamente quanto una voce di `errors`, e `nothingGotThrough` in
-    // `cli/doctor.ts` confronta questo numero con `episodes` per distinguere
-    // una corsia che si sta curando da una ferma — le serve il totale, non metà.
+    // Batch error total across stages, not a count of failed episodes.
     errors: report.errors.length + report.judgeUnavailable.length,
     ms,
   };
@@ -588,7 +590,10 @@ export class Consolidator {
    * automatic lane takes one bounded page per trailing edge, the CLI loops to
    * drain a backlog the owner asked it to drain.
    */
-  async runNow(trigger: ConsolidationTrigger = 'manual', limit = this.batch): Promise<ConsolidationResult> {
+  async runNow(
+    trigger: ConsolidationTrigger = 'manual',
+    limit = this.batch,
+  ): Promise<ConsolidationResult> {
     await this.settled();
     return this.start(trigger, limit);
   }
@@ -663,7 +668,10 @@ export class Consolidator {
     return run;
   }
 
-  private async execute(trigger: ConsolidationTrigger, limit: number): Promise<ConsolidationResult> {
+  private async execute(
+    trigger: ConsolidationTrigger,
+    limit: number,
+  ): Promise<ConsolidationResult> {
     const started = Date.now();
     // Counted as spent before the batch, not after: a turn arriving mid-batch
     // has to start a fresh count toward the ceiling, or a long conversation
@@ -769,7 +777,8 @@ export class Consolidator {
     // explicitly relies on one of them having already said which, and never
     // reaches this far to duplicate them (both return with `report: null`).
     if (trigger !== 'manual') {
-      for (const line of formatConsolidationLines(report)) this.deps.log?.(`consolidamento: ${line}`);
+      for (const line of formatConsolidationLines(report))
+        this.deps.log?.(`consolidamento: ${line}`);
     }
 
     // The drain follows progress, not the sweep outcome. Episode progress is

@@ -264,36 +264,14 @@ describe('doctor nomina il workspace di ADR-0059, mai la casa', () => {
   });
 });
 
-describe('doctor names the everyday consequence of single-user, and the remedy for it', () => {
-  it('names sys.shell asking every time, and points at `muffin rot harden`', async () => {
-    // `runInit` without `--hardened` seals `single-user` (cli/init.ts) — the
-    // mode every fresh install actually has. Before this slice the line named
-    // the mechanism (detection, not prevention) but not what the owner feels
-    // from it: every high-risk capability asking, always, with no command
-    // that gets them out of it.
+describe('doctor distinguishes seal checking from OS write protection', () => {
+  it('describes the default without directing the owner to change it', async () => {
     const dir = home();
     const c = await check(dir, 'root of trust mode');
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('single-user');
-    expect(c?.detail).toContain('sys.shell');
-    expect(c?.remedy).toContain('muffin rot harden');
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  it('leads with what happens to him, and only names the mode afterwards — 03/09/2026 UX pass', async () => {
-    // The owner's own complaint, read against real `muffin doctor` output:
-    // the line named "root of trust", "single-user", "seal" before it ever
-    // said what he should expect or do. This locks the order so a future
-    // edit cannot quietly put the vocabulary back in front.
-    const dir = home();
-    const c = await check(dir, 'root of trust mode');
-    const consequenceAt = c!.detail.indexOf('sys.shell');
-    const modeNameAt = c!.detail.indexOf('single-user');
-    expect(consequenceAt).toBeGreaterThan(-1);
-    expect(modeNameAt).toBeGreaterThan(-1);
-    expect(consequenceAt).toBeLessThan(modeNameAt);
-    // Every warning names something the owner can actually type.
-    expect(c?.remedy).toMatch(/`muffin [^`]+`/);
+    expect(c?.detail).toContain('does not change approvals');
+    expect(c?.remedy).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -1061,19 +1039,8 @@ describe('doctor names continuable leases awaiting the owner', () => {
 });
 
 describe('doctor tells the four consolidation outcomes apart', () => {
-  /**
-   * The four outcomes are four different facts about the lane, and for a long
-   * time three of them printed the same green line. `budget` had its own branch;
-   * `ran`, `busy` and `error` all fell through to one `ok` that named episodes,
-   * facts and the run count — and never `errors`. So a batch that threw wrote a
-   * blank row and read like a quiet week, and a batch where a third of the
-   * episodes failed to extract read like one where none did.
-   *
-   * `errors` is the count of per-episode failures inside a batch that otherwise
-   * finished (`consolidator.ts`, the `outcome: report.busy ? 'busy' : 'ran'`
-   * write). It is comparable to `episodes` because `episodes` counts *attempts*
-   * (`ingest.ts` §`marked`).
-   */
+  // Seed persisted summaries: they record the outcome and counts, not the stage
+  // that produced an error.
   const seedRun = (
     dir: string,
     outcome: ConsolidationOutcome,
@@ -1104,102 +1071,73 @@ describe('doctor tells the four consolidation outcomes apart', () => {
     const report = await runDoctor(dir);
     const c = report.checks.find((x) => x.name === 'consolidamento');
     expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('/ran');
     expect(c?.detail).toContain('12 episodi');
     expect(c?.detail).toContain('3 fatti');
-    expect(c?.detail).not.toContain('falliti');
+    expect(c?.detail).toContain('4 indicizzati');
+    expect(c?.detail).not.toContain('nel batch');
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('names the failed episodes even when it stays green', async () => {
-    // The defect, at the size it actually shipped: a third of the batch failed
-    // to extract and the line carried nothing but the successes. Still `ok` on
-    // purpose — a failed extraction is left unmarked and retried next fire, so a
-    // minority of them is the lane healing itself, and an exit 1 over that is
-    // how a line stops being read. The count has to be *there*; it does not have
-    // to be an alarm.
+  it('warns with the aggregate error count', async () => {
     const dir = home();
     seedRun(dir, 'ran', 4);
     const report = await runDoctor(dir);
     const c = report.checks.find((x) => x.name === 'consolidamento');
-    expect(c?.level).toBe('ok');
-    expect(c?.detail).toContain('4 falliti');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('4 errori nel batch (fase non registrata)');
     expect(c?.detail).toContain('12 episodi');
 
-    // Against a clean seed rather than against a literal: a fresh install warns
-    // about three unrelated things (sandbox mode, empty vector index, no
-    // gateway), so pinning `exitCode` to a number here would be asserting facts
-    // about checks this block does not test. The claim is the comparison — four
-    // failed episodes move nothing.
-    const clean = home();
-    seedRun(clean, 'ran');
-    expect(report.exitCode).toBe((await runDoctor(clean)).exitCode);
-
-    rmSync(dir, { recursive: true, force: true });
-    rmSync(clean, { recursive: true, force: true });
-  });
-
-  it('warns when the whole batch went nowhere, because those episodes come back', async () => {
-    // What does not heal on its own: every attempted episode failed and nothing
-    // was added, so the same rows fail again next run, and again.
-    const dir = home();
-    seedRun(dir, 'ran', 12, { episodes: 12, facts: 0 });
-    const report = await runDoctor(dir);
-    const c = report.checks.find((x) => x.name === 'consolidamento');
-    expect(c?.level).toBe('warn');
-    expect(c?.detail).toContain('12 errori su 12 episodi');
-    expect(c?.remedy).toContain('muffin memory extract');
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('un episodio che non lancia non salva un giro andato a vuoto — 13 errori su 14, zero fatti', async () => {
-    // Lo stato vero dell'installazione dell'owner il 27/08, letto da
-    // `consolidation_runs`: dopo il cambio di modello del 25/08 i tre giri sono
-    // stati 3/3, 10/11 e 13/14 errori, sempre con zero fatti. Il primo avvisava,
-    // gli altri due erano **verdi** — bastava un episodio che non avesse
-    // lanciato perché `errors >= episodes` fallisse per uno, e la corsia morta
-    // si leggeva come una settimana tranquilla. Che è esattamente l'unica
-    // confusione che questo check esiste per togliere.
-    const dir = home();
-    seedRun(dir, 'ran', 13, { episodes: 14, facts: 0 });
-    const c = await check(dir, 'consolidamento');
-    expect(c?.level).toBe('warn');
-    expect(c?.detail).toContain('13 errori su 14 episodi');
-    rmSync(dir, { recursive: true, force: true });
-  });
+  it.each([0, 2])(
+    'reports a batch error without diagnosing a failed extraction (%i indexed)',
+    async (indexed) => {
+      // Indexing alone can fail after an extraction that yields no facts, even
+      // after some of the backlog has already been indexed.
+      const dir = home();
+      seedRun(dir, 'ran', 1, { episodes: 1, facts: 0, indexed });
+      const c = await check(dir, 'consolidamento');
+      expect(c?.level).toBe('warn');
+      expect(c?.detail).toContain('1 episodio');
+      expect(c?.detail).toContain('0 fatti');
+      expect(c?.detail).toContain(`${indexed} indicizzati`);
+      expect(c?.detail).toContain('1 errore nel batch (fase non registrata)');
+      expect(c?.detail).not.toMatch(/fallit|riprov|andato a vuoto/);
+      expect(c?.remedy).toBeUndefined();
+      rmSync(dir, { recursive: true, force: true });
+    },
+  );
 
-  it('stays green when the sweep threw but the batch worked', async () => {
-    // `errors >= episodes` alone is not the condition. The maintenance sweep
-    // pushes its own failure into `report.errors`, so a one-episode run that
-    // extracted a fact and then tripped the sweep arrives here as 1 error over 1
-    // episode — and it is not a lane going nowhere.
+  it('reports a batch error without hiding a stored fact', async () => {
+    // A sweep error can be recorded after a new fact has already been stored.
     const dir = home();
     seedRun(dir, 'ran', 1, { episodes: 1, facts: 1 });
     const c = await check(dir, 'consolidamento');
-    expect(c?.level).toBe('ok');
-    expect(c?.detail).toContain('1 falliti');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('1 fatto');
+    expect(c?.detail).toContain('1 errore nel batch');
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('fails on a run that threw, instead of printing its blank row as green', async () => {
-    // The bigger half of the same defect: `execute` writes zero episodi and zero
-    // fatti when `ingest` throws, which through `ok` is indistinguishable from a
-    // quiet week — the exact confusion this check exists to remove.
+  it('fails on a run that threw and points to its logs', async () => {
     const dir = home();
-    seedRun(dir, 'error', 1, { episodes: 0, facts: 0 });
+    seedRun(dir, 'error', 1, { episodes: 0, facts: 0, indexed: 0 });
     const report = await runDoctor(dir);
     const c = report.checks.find((x) => x.name === 'consolidamento');
     expect(c?.level).toBe('fail');
     expect(c?.detail).toContain('fallito');
-    // The row does not keep the message, so the remedy has to be the command
-    // that reproduces it in the foreground.
-    expect(c?.remedy).toContain('muffin memory extract');
+    expect(c?.detail).toContain('1 errore nel batch');
+    expect(c?.remedy).toContain('log');
+    expect(c?.remedy).not.toContain('memory extract');
     expect(report.exitCode).toBe(2);
     rmSync(dir, { recursive: true, force: true });
   });
 
   it('warns, naming the cap, when the budget stopped the lane', async () => {
     const dir = home();
-    seedRun(dir, 'budget', 0, { episodes: 0, facts: 0 });
+    seedRun(dir, 'budget', 0, { episodes: 0, facts: 0, indexed: 0 });
     const c = await check(dir, 'consolidamento');
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('budget mensile esaurito');
@@ -1208,24 +1146,13 @@ describe('doctor tells the four consolidation outcomes apart', () => {
   });
 
   it('is ok on a lock refusal, and says so — it is the guarantee working', async () => {
-    // `busy` is the lane lock refusing a second extraction, which is the
-    // opposite of a failure. Green, but the word has to appear: zero episodi and
-    // zero fatti with no explanation is the shape this whole block distrusts.
-    //
-    // `errors: 1`, not 0: in production a lock refusal always carries one row
-    // in `report.errors` — `ingest.ts`'s `acquireIngestLock` rejection pushes
-    // its own message there so the caller can see why nothing ran
-    // (`core/memory/ingest.ts` §busy) — and `consolidator.ts` writes that count
-    // straight into `errors` regardless of outcome. Seeding 0 here hid the
-    // defect: a lock refusal is not a per-episode extraction failure, so it
-    // must never earn the "N falliti, riprovati al prossimo giro" suffix that
-    // means exactly that on a `ran` row.
+    // The lock refusal itself contributes an error before any work is attempted.
     const dir = home();
-    seedRun(dir, 'busy', 1, { episodes: 0, facts: 0 });
+    seedRun(dir, 'busy', 1, { episodes: 0, facts: 0, indexed: 0 });
     const c = await check(dir, 'consolidamento');
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('busy');
-    expect(c?.detail).not.toContain('falliti');
+    expect(c?.detail).not.toContain('nel batch');
     rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -2389,6 +2316,20 @@ describe('doctor says whether a voice note would be understood, before the first
     expect(c?.level).toBe('ok');
     expect(c?.detail).toMatch(/si trascrive in casa/);
     expect(c?.detail).toContain(join(dir, 'models', 'ggml-base.bin'));
+  });
+
+  it('describes the first-use download when only the local model is missing', async () => {
+    const dir = conTelegram(home());
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'ffmpeg'), '');
+    writeFileSync(join(bin, 'whisper-cli'), '');
+    const c = await checkWith(dir, 'note vocali', {
+      voce: { accettaAudio: async () => false, path: bin },
+    });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toMatch(/scaricare il modello locale alla prima nota da trascrivere/);
+    expect(c?.remedy).toBeUndefined();
   });
 
   it('takes the transcription branch when the probe fails, like the runtime does', async () => {

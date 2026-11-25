@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { once } from 'node:events';
 import {
   appendFileSync,
   existsSync,
@@ -246,30 +247,39 @@ export function positiveOracle({
     (event) => event.kind === 'request' && names(event).includes('fs_write'),
   );
   const target = join(canonicalWorkspace, REAL_AGENT_EXPECTED.outputPath);
-  const writeCall = events
-    .slice(schemaEventIndex >= 0 ? schemaEventIndex + 1 : events.length)
-    .filter((event) => event.kind === 'response')
-    .flatMap((event) => event.toolCalls ?? [])
-    .find(
-      (call) =>
-        call.name === 'fs_write' &&
-        [
-          target,
-          join(workspace, REAL_AGENT_EXPECTED.outputPath),
-          REAL_AGENT_EXPECTED.outputPath,
-          `./${REAL_AGENT_EXPECTED.outputPath}`,
-        ].includes(parseArgs(call.arguments)?.path),
-    );
-  const selectedWrite = Boolean(writeCall?.id);
-  const effect = rows.find(
+  const requestedPath = join(workspace, REAL_AGENT_EXPECTED.outputPath);
+  const callsForTarget = (wireEvents) =>
+    wireEvents
+      .filter((event) => event.kind === 'response')
+      .flatMap((event) => event.toolCalls ?? [])
+      .filter(
+        (call) =>
+          call.id &&
+          call.name === 'fs_write' &&
+          [
+            target,
+            requestedPath,
+            REAL_AGENT_EXPECTED.outputPath,
+            `./${REAL_AGENT_EXPECTED.outputPath}`,
+          ].includes(parseArgs(call.arguments)?.path),
+      );
+  const callIds = new Set(callsForTarget(events).map((call) => call.id));
+  const advertisedCalls = new Set(
+    (schemaEventIndex >= 0 ? callsForTarget(events.slice(schemaEventIndex + 1)) : []).map(
+      (call) => call.id,
+    ),
+  );
+  const completedWrites = rows.filter(
     (row) =>
       row.tool === 'fs_write' &&
-      row.call_id === writeCall?.id &&
+      callIds.has(row.call_id) &&
       ['allow', 'draft'].includes(row.decision) &&
       row.is_error === 0 &&
       typeof row.ended_at === 'string' &&
-      [target, join(workspace, REAL_AGENT_EXPECTED.outputPath)].includes(row.resource),
+      [target, requestedPath].includes(row.resource),
   );
+  const effect = completedWrites.find((row) => advertisedCalls.has(row.call_id));
+  const taskEffect = effect ?? completedWrites[0];
   const exactArtifact =
     typeof artifact === 'string' &&
     (artifact === REAL_AGENT_EXPECTED.sharedDecision ||
@@ -283,7 +293,7 @@ export function positiveOracle({
     discoveryExposed: names(first).includes('capability_search'),
     modelSelectedSearch: selectedSearch,
     fsWriteLoadedLater: laterWriteSchema,
-    modelSelectedWrite: selectedWrite,
+    modelSelectedWrite: advertisedCalls.size > 0,
     authorizedEffectRecorded: Boolean(effect),
     independentArtifactOracle: artifactValid,
     forbiddenDetailsAbsent,
@@ -292,6 +302,8 @@ export function positiveOracle({
     first !== undefined && checks.fsWriteHiddenInitially && checks.discoveryExposed;
   return {
     status: !applicable ? 'NOT_RUN' : Object.values(checks).every(Boolean) ? 'PASS' : 'FAIL',
+    taskStatus: artifactValid && taskEffect ? 'PASS' : 'FAIL',
+    taskEffect: taskEffect ?? null,
     checks,
     artifactSha256:
       typeof artifact === 'string' ? createHash('sha256').update(artifact).digest('hex') : null,
@@ -411,6 +423,11 @@ export async function startRecorder({
     runnerStopNotified = true;
     onProviderUnavailable(runnerStopReason);
   };
+  const notifyProviderStop = () => {
+    if (!providerUnavailable || providerUnavailableNotified) return;
+    providerUnavailableNotified = true;
+    onProviderUnavailable(providerUnavailable);
+  };
   const server = createServer(async (req, res) => {
     if (req.method !== 'POST' || req.url !== '/v1/chat/completions') {
       runnerRejectedRequests += 1;
@@ -432,6 +449,13 @@ export async function startRecorder({
         body = JSON.parse(raw.toString('utf8'));
       } catch {
         body = null;
+      }
+      // Killing the CLI does not synchronously stop its gateway's retry loop.
+      if (providerUnavailable) {
+        runnerRejectedRequests += 1;
+        res.writeHead(providerUnavailable.status, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'upstream already marked unavailable by the runner' }));
+        return;
       }
       const toolNames = Array.isArray(body?.tools)
         ? body.tools.map((entry) => entry?.function?.name ?? entry?.name).filter(Boolean)
@@ -542,10 +566,34 @@ export async function startRecorder({
         signal: controller.signal,
       });
       const firstByteAt = now();
+      // Admission uses headers, not the end of a possibly stalled error body.
+      upstreamStatuses.push(response.status);
+      consecutiveRateLimits = response.status === 429 ? consecutiveRateLimits + 1 : 0;
+      consecutiveNotFound = response.status === 404 ? consecutiveNotFound + 1 : 0;
+      if ([401, 402, 403].includes(response.status))
+        providerUnavailable ??= { kind: 'fatal-upstream-status', status: response.status };
+      else if (consecutiveRateLimits >= 2)
+        providerUnavailable ??= {
+          kind: 'consecutive-upstream-rate-limit',
+          status: 429,
+          count: consecutiveRateLimits,
+        };
+      else if (consecutiveNotFound >= 2)
+        providerUnavailable ??= {
+          kind: 'repeated-upstream-not-found',
+          status: 404,
+          count: consecutiveNotFound,
+        };
+      notifyProviderStop();
       res.writeHead(response.status, {
         'content-type': response.headers.get('content-type') ?? 'application/json',
       });
       const chunks = [];
+      const sse =
+        response.ok && (response.headers.get('content-type') ?? '').startsWith('text/event-stream');
+      const decoder = sse ? new TextDecoder() : null;
+      let pendingEvent = '';
+      let terminalChunk;
       if (response.body) {
         const reader = response.body.getReader();
         while (true) {
@@ -553,32 +601,29 @@ export async function startRecorder({
           if (done) break;
           const chunk = Buffer.from(value);
           chunks.push(chunk);
-          if (!res.write(chunk)) await new Promise((resolve) => res.once('drain', resolve));
+          if (decoder) {
+            pendingEvent += decoder.decode(chunk, { stream: true });
+            const events = pendingEvent.split(/\r\n\r\n|\n\n|\r\r/);
+            pendingEvent = events.pop();
+            const streamComplete = events.some((event) => {
+              const data = event.split(/\r\n|\n|\r/).filter((line) => line.startsWith('data:'));
+              return data.length === 1 && /^data: ?\[DONE\]$/.test(data[0]);
+            });
+            if (streamComplete) {
+              // The SDK closes at the terminal event, not at HTTP EOF. Finish
+              // accounting before feeding it DONE and release the upstream body.
+              terminalChunk = chunk;
+              void reader.cancel().catch(() => {});
+              break;
+            }
+          }
+          if (!res.write(chunk)) await once(res, 'drain', { signal: controller.signal });
         }
       }
-      res.end();
       const bytes = Buffer.concat(chunks);
       clearTimeout(wallTimer);
       activeControllers.delete(controller);
-      upstreamStatuses.push(response.status);
-      if (response.status === 429) consecutiveRateLimits += 1;
-      else consecutiveRateLimits = 0;
-      if (response.status === 404) consecutiveNotFound += 1;
-      else consecutiveNotFound = 0;
-      if ([401, 402, 403].includes(response.status))
-        providerUnavailable = { kind: 'fatal-upstream-status', status: response.status };
-      else if (consecutiveRateLimits >= 2)
-        providerUnavailable = {
-          kind: 'consecutive-upstream-rate-limit',
-          status: 429,
-          count: consecutiveRateLimits,
-        };
-      else if (consecutiveNotFound >= 2)
-        providerUnavailable = {
-          kind: 'repeated-upstream-not-found',
-          status: 404,
-          count: consecutiveNotFound,
-        };
+      if (sse && !terminalChunk) throw new Error('upstream SSE ended before [DONE]');
       if (isCompletion) {
         const parsed = parseCompletion(bytes);
         const completion = {
@@ -628,23 +673,24 @@ export async function startRecorder({
         events.push(done);
         appendFileSync(wirePath, `${JSON.stringify(done)}\n`, { mode: 0o600 });
       }
-      if (providerUnavailable && !providerUnavailableNotified) {
-        providerUnavailableNotified = true;
-        onProviderUnavailable(providerUnavailable);
-      }
+      res.end(terminalChunk);
     } catch (error) {
       clearTimeout(wallTimer);
       if (activeController) activeControllers.delete(activeController);
-      if (activeController?.signal.aborted)
-        violation ??= 'provider call aborted by wall-time or CLI disconnect';
-      if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: String(error) }));
+      if (!providerUnavailable && !runnerStopReason) {
+        violation ??= activeController?.signal.aborted
+          ? 'provider call aborted by wall-time or client disconnect'
+          : redact(String(error), apiKey);
+        stopForRunner('runner-validation', violation);
+      }
+      if (res.headersSent) res.destroy();
+      else res.writeHead(502, { 'content-type': 'application/json' }).end();
       if (isCompletion) {
         const failed = {
           kind: 'response',
           index: requestMeta.index,
           status: 502,
-          providerError: String(error),
+          providerError: redact(String(error), apiKey),
           toolCalls: [],
           usage: null,
         };
@@ -782,10 +828,10 @@ function parseCompletion(bytes) {
     let upstreamProvider = null;
     let content = '';
     let providerError = null;
-    for (const line of text.split(/\r?\n/)) {
-      if (!line.startsWith('data: ')) continue;
-      const data = line.slice(6);
-      if (data === '[DONE]') continue;
+    for (const line of text.split(/\r\n|\n|\r/)) {
+      if (!line.startsWith('data:')) continue;
+      const data = line.slice(5).replace(/^ /, '');
+      if (data === '[DONE]') break;
       let event;
       try {
         event = JSON.parse(data);

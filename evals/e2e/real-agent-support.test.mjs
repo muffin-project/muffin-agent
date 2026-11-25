@@ -129,6 +129,8 @@ test('positive oracle requires hidden schema, model-selected discovery, authoriz
         : event,
   );
   assert.equal(positiveOracle({ ...args, events: premature }).status, 'FAIL');
+  assert.equal(positiveOracle({ ...args, events: premature }).taskStatus, 'PASS');
+  assert.equal(positiveOracle({ ...args, rows: [] }).taskStatus, 'FAIL');
   assert.equal(positiveOracle({ ...args, rows: [{ ...rows[0], ended_at: null }] }).status, 'FAIL');
   assert.equal(
     positiveOracle({ ...args, rows: [{ ...rows[0], ended_at: undefined }] }).status,
@@ -492,6 +494,110 @@ test('OpenRouter recorder maps /v1, forwards only the explicit credential, pins 
   }
 });
 
+test('an SDK ending at SSE DONE does not poison the next model call', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'muffin-recorder-sse-'));
+  const key = 'synthetic-private-key';
+  let upstreamCalls = 0;
+  const upstream = createServer((_req, res) => {
+    upstreamCalls += 1;
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(
+      `data: ${JSON.stringify({
+        model: DEFAULT_FREE_MODEL,
+        choices: [{ index: 0, delta: { content: 'ready' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 9, completion_tokens: 1, cost: 0 },
+      })}\r\n\r\ndata: [DO`,
+    );
+    setImmediate(() => res.write('NE]\r\n\r\n'));
+    // Intentionally leave the HTTP body open after the complete SSE event.
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const recorder = await startRecorder({
+    target: `http://127.0.0.1:${upstream.address().port}`,
+    wirePath: join(root, 'wire.jsonl'),
+    modelId: DEFAULT_FREE_MODEL,
+    apiKey: key,
+  });
+  try {
+    const { default: OpenAI } = await import('openai');
+    const client = new OpenAI({ apiKey: key, baseURL: recorder.baseUrl, maxRetries: 0 });
+    for (let index = 0; index < 2; index += 1) {
+      const stream = await client.chat.completions.create(
+        { model: DEFAULT_FREE_MODEL, max_tokens: 32, messages: [], stream: true },
+        { signal: AbortSignal.timeout(3_000) },
+      );
+      const output = [];
+      for await (const chunk of stream) output.push(chunk.choices[0].delta.content);
+      assert.deepEqual(output, ['ready']);
+      assert.equal(recorder.events.filter((event) => event.kind === 'response').length, index + 1);
+      assert.equal(recorder.violation(), null);
+    }
+    assert.equal(upstreamCalls, 2);
+    assert.deepEqual(recorder.metrics().upstreamStatuses, [200, 200]);
+    assert.equal(recorder.metrics().reportedOutputTokens, 2);
+  } finally {
+    await recorder.close();
+    upstream.closeAllConnections();
+    await new Promise((resolve) => upstream.close(resolve));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test.each(['upstream EOF', 'client cancellation'])(
+  'an incomplete SSE response is not evidence of model completion (%s)',
+  async (ending) => {
+    const root = mkdtempSync(join(tmpdir(), 'muffin-recorder-incomplete-'));
+    const key = 'synthetic-private-key';
+    const upstream = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(`data: ${JSON.stringify({ model: DEFAULT_FREE_MODEL, choices: [] })}\n\n`);
+      if (ending === 'upstream EOF') res.end();
+    });
+    await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    let notify;
+    const stopped = new Promise((resolve) => {
+      notify = resolve;
+    });
+    const recorder = await startRecorder({
+      target: `http://127.0.0.1:${upstream.address().port}`,
+      wirePath: join(root, 'wire.jsonl'),
+      modelId: DEFAULT_FREE_MODEL,
+      apiKey: key,
+      onProviderUnavailable: notify,
+    });
+    try {
+      const response = await fetch(`${recorder.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: DEFAULT_FREE_MODEL,
+          max_tokens: 32,
+          messages: [],
+          stream: true,
+        }),
+        signal: AbortSignal.timeout(3_000),
+      }).catch(() => null);
+      if (ending === 'client cancellation') {
+        assert.equal(response.status, 200);
+        await response.body.cancel();
+      } else if (response) {
+        await response.arrayBuffer().catch(() => {});
+      }
+      assert.equal((await stopped).kind, 'runner-validation');
+      assert.equal(
+        recorder.events.filter((e) => e.kind === 'response' && e.status === 200).length,
+        0,
+      );
+      assert.deepEqual(recorder.metrics().servedModels, []);
+    } finally {
+      await recorder.close();
+      upstream.closeAllConnections();
+      await new Promise((resolve) => upstream.close(resolve));
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
+
 test('recorder rejects an unbounded completion before any upstream request', async () => {
   const root = mkdtempSync(join(tmpdir(), 'muffin-recorder-bound-'));
   const key = 'synthetic-private-key';
@@ -522,6 +628,9 @@ test('two consecutive upstream 429 responses preserve error metadata and stop as
   let upstreamCalls = 0;
   let stopped = null;
   const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  const exited = new Promise((resolve) =>
+    child.once('close', (code, signal) => resolve({ code, signal })),
+  );
   await new Promise((resolve, reject) => {
     child.once('spawn', resolve);
     child.once('error', reject);
@@ -573,9 +682,14 @@ test('two consecutive upstream 429 responses preserve error metadata and stop as
     assert.equal(upstreamCalls, 2);
     assert.deepEqual(stopped, { kind: 'consecutive-upstream-rate-limit', status: 429, count: 2 });
     assert.deepEqual(recorder.metrics().upstreamStatuses, [429, 429]);
-    const childExit = await new Promise((resolve) =>
-      child.once('close', (code, signal) => resolve({ code, signal })),
-    );
+    const afterStop = await fetch(`${recorder.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body,
+    });
+    await afterStop.arrayBuffer();
+    assert.equal(upstreamCalls, 2, 'a retry must not reach an upstream already marked unavailable');
+    const childExit = await exited;
     assert.equal(childExit.signal, 'SIGTERM');
     assert.ok(
       Date.now() - childStoppedAt < 2_000,
@@ -594,6 +708,55 @@ test('two consecutive upstream 429 responses preserve error metadata and stop as
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     await recorder.close();
+    await new Promise((resolve) => upstream.close(resolve));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a stalled second 429 still stops the run and blocks a third upstream request', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'muffin-recorder-stalled-429-'));
+  const key = 'synthetic-private-key';
+  let upstreamCalls = 0;
+  const upstream = createServer((_req, res) => {
+    upstreamCalls += 1;
+    res.writeHead(429, { 'content-type': 'application/json' });
+    if (upstreamCalls === 2) res.flushHeaders();
+    else res.end('{}');
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  let notify;
+  const stopped = new Promise((resolve) => {
+    notify = resolve;
+  });
+  const recorder = await startRecorder({
+    target: `http://127.0.0.1:${upstream.address().port}`,
+    wirePath: join(root, 'wire.jsonl'),
+    modelId: DEFAULT_FREE_MODEL,
+    apiKey: key,
+    onProviderUnavailable: notify,
+  });
+  const post = () =>
+    fetch(`${recorder.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: DEFAULT_FREE_MODEL, max_tokens: 32, messages: [] }),
+      signal: AbortSignal.timeout(1_000),
+    });
+  try {
+    await (await post()).arrayBuffer();
+    const second = post().catch(() => null);
+    const timer = AbortSignal.timeout(2_000);
+    const stop = await Promise.race([
+      stopped,
+      new Promise((_, reject) => timer.addEventListener('abort', () => reject(timer.reason))),
+    ]);
+    assert.deepEqual(stop, { kind: 'consecutive-upstream-rate-limit', status: 429, count: 2 });
+    await (await post()).arrayBuffer();
+    assert.equal(upstreamCalls, 2);
+    await second;
+  } finally {
+    await recorder.close();
+    upstream.closeAllConnections();
     await new Promise((resolve) => upstream.close(resolve));
     rmSync(root, { recursive: true, force: true });
   }
