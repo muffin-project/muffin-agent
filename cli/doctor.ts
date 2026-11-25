@@ -750,7 +750,13 @@ export async function runDoctor(
     if (connection.kind === 'openai-chatgpt') {
       try {
         const session = new ChatGPTConnection(home).session();
-        if (session?.usable)
+        if (session?.planLimited)
+          credentialFail(
+            'ChatGPT',
+            `Plan usage limit reached${session.planLimitedAt === undefined ? '' : ` (last refusal ${new Date(session.planLimitedAt).toLocaleString('it-IT')})`}: replies fail until it resets. Cleared by the next successful reply.`,
+            'check https://chatgpt.com/settings/usage',
+          );
+        else if (session?.usable)
           credentialOk(
             'ChatGPT',
             'Account connected; plan quota and credits are managed at https://chatgpt.com/settings/usage',
