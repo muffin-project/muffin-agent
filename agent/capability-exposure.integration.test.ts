@@ -391,7 +391,14 @@ describe('#469 production-path capability discovery', () => {
       expect(provider.seen.map((request) => request.tools?.map(({ name }) => name))).toEqual([
         ['fs_read', 'capability_search'],
         ['fs_read', 'capability_search', 'inventory_lookup', 'translate_document'],
-        ['fs_read', 'capability_search', 'calibrate_sensor'],
+        // A later discovery adds to what the turn already loaded.
+        [
+          'fs_read',
+          'capability_search',
+          'inventory_lookup',
+          'translate_document',
+          'calibrate_sensor',
+        ],
       ]);
     } finally {
       db.close();
