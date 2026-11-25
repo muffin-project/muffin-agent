@@ -8,7 +8,7 @@ This document owns two questions:
 
 It does **not** own live status, DAY-1 row classification, architecture, or the SHA of current work. Version membership and progress are GitHub milestones and issues. This file holds the reasoning and the exit criteria. A dated note below is a snapshot; `scripts/agent/repo-state.mjs` is the current SHA.
 
-- The [Muffin roadmap project](https://github.com/orgs/muffin-project/projects/2) is the existing board (Now / Next / Later / Exploring). Version status belongs on that board, grouped by milestone. Do not create a second project. On 2026-11-20 the integration could read the project and could not add items (`addProjectV2ItemById` returned FORBIDDEN). The permission to request is organization Projects write, then a roadmap view grouped by the Milestone field.
+- The [Muffin roadmap project](https://github.com/orgs/muffin-project/projects/2) is the existing board (Now / Next / Later / Exploring). Version status belongs on that board, grouped by milestone. Do not create a second project. The version issues were added to it on 2026-11-21; a roadmap view grouped by the Milestone field is still to be created in the project UI.
 - DAY-1 status belongs to `docs/status/day1/requirements-status.md`.
 - Remaining DAY-1 order belongs to `docs/status/day1/critical-path.md`.
 - Current work belongs to observed Git/GitHub state.
@@ -47,7 +47,7 @@ Capabilities already on `dev` are not re-specified here. The exit is an observat
 
 **Peers, used to place capabilities, not to copy products.** ChatGPT Dot keeps a continuous personal responsibility and asks to reconnect an expired connection ([Dot](https://help.openai.com/en/articles/20001530-getting-started-with-your-dot), as used for #963). Claude Duet separates conversation, background work, results and decisions ([Duet](https://support.claude.com/en/articles/17631495-get-started-with-claude-duet)). Grok Bot saves a skill only after a task has worked, and a routine is a separate decision about when that work runs; a missing source is reported instead of reused as if it were current ([skills and routines](https://docs.x.ai/grok-bot/skills-routines-and-automations), page dated 2026-11-13). Hermes builds one system prompt per session and loads skills as documents (`docs/evidence/divergenza-per-connector-nei-peer.md`); useful automation there does not require a second agent loop (`docs/evidence/automation-605-acceptance-2026-10-07.md`).
 
-**Milestone creation, 2026-11-20: BLOCKED.** `POST /repos/muffin-project/muffin-agent/milestones` returned HTTP 403. The response asked for `issues=write` on the integration. Issues and sub-issue links could be created; milestone create, issue edit, comments, labels and project-item add could not. Until that permission exists, the issues below name their version in the body and are not assigned. Do not invent a parallel label scheme. When creation works, open one milestone per version, titled as the heading, with that version's Objective and Exit as the description, and with no due date: none of these exits is a calendar promise. Link each milestone back to its heading.
+**Milestones.** Each version has one GitHub milestone, titled as its heading, with that version's Objective and Exit as the description and no due date: none of these exits is a calendar promise. They were created on 2026-11-21 and the issues named under each version were assigned to them. Do not invent a parallel label scheme.
 
 ### v0 Daily use can start
 
@@ -83,11 +83,11 @@ Capabilities already on `dev` are not re-specified here. The exit is an observat
 
 **In.** Computer and browser execution as Work, not new core plumbing (#853), with the browser spike limited to the existing MCP lane (#873, sub-issue of #853). The connection state as a general fact (#968). #963 remains the ChatGPT instance of "failed".
 
-**Out.** A package or tool named after a household device or a single vendor. Guest mode. Writes on a machine other than the Home before [#972](https://github.com/muffin-project/muffin-agent/issues/972) D3 is decided.
+**Out.** A package or tool named after a household device or a single vendor. Guest mode. Writes on a machine other than the Home before the [#972](https://github.com/muffin-project/muffin-agent/issues/972) D3 approval is implemented.
 
 **Exit.** One real infrastructure change is done with shell and files on the machine that should run it, including when the request arrived on Telegram. A connection that job needs is shown in one of the three states, and the failed state does not look healthy and then stay silent. Removing the shared reporting path fails the fixture.
 
-**Depends on.** v1 if the job runs unattended. The fence in D3 before any non-Home write.
+**Depends on.** v1 if the job runs unattended. The D3 per-effect approval, implemented, before any non-Home write.
 
 **Risk.** A tainted Telegram turn reaching another computer's disk. That risk is why D3 blocks the write.
 
@@ -113,7 +113,7 @@ Capabilities already on `dev` are not re-specified here. The exit is an observat
 
 **Out.** Self-merge of a CRITICAL claim, weakening branch protection, and authority, privacy, or durable-data changes. Governed edits to persona (#667) are a different act and are not part of v4.
 
-**Exit.** One pull request from a Muffin run, with profile and falsifier written down, and the required checks green. Owner decision D4, 2026-11-21: Muffin may merge that pull request to `dev` when those checks are green and the profile is not CRITICAL. `main`, a CRITICAL claim, and any change to authority, privacy, or the owner's durable data stay with the owner.
+**Exit.** One pull request from a Muffin run, with profile and falsifier written down, and the required checks green. Owner decision D4, 2026-11-21: Muffin may merge that pull request to `dev` when those checks are green and the profile is not CRITICAL. `main`, a CRITICAL claim, and any change to authority, privacy, or the owner's durable data stay with the owner. Since 2026-11-25 CRITICAL merges to `dev` are owned by Muffin Coder under the same gates (see D4, amended).
 
 **Depends on.** v2 for a computer that can edit and test the tree. Not on a GitHub-named product tool.
 
@@ -135,17 +135,19 @@ Capabilities already on `dev` are not re-specified here. The exit is an observat
 
 ### Decisions from the owner, 2026-11-21
 
-[#972](https://github.com/muffin-project/muffin-agent/issues/972) collected these. Comments on that issue are blocked for this integration (HTTP 403), so this section is the record. Nothing here was applied by being written, except where a decision says the implementation is authorized.
+[#972](https://github.com/muffin-project/muffin-agent/issues/972) collected these. This section is the record. Nothing here was applied by being written, except where a decision says the implementation is authorized.
 
-**D1, still open.** `WORK_RULES` and `WORK_RULES_V2` both stay. The recommendation, not a decision: keep v2 as the single operating text. v1 is the default and does not state what to do on failure, uncertainty, or when to stop; v2 does, and those rules are the ones the assembler cites as measured. No character eval shows that v2 is the better voice. Do not delete either copy until the owner chooses.
+**D1, decided.** `WORK_RULES_V2` is the single operating text. v1 does not state what to do on failure, uncertainty, or when to stop; v2 does, and those rules are the ones the assembler cites as measured. No character eval shows that v2 is the better voice, so there is no V3 written up front: v2 changes only with evidence from the fourteen-day owner window, each change carried by an eval that shows it. Making v2 the only operating text in `agent/context/assemble.ts` follows from this decision and was not yet done when it was recorded.
 
 **D2, decided.** The numeric tool cap is not the design. Authorized, installed tools are reached by selective load: a small core stays visible, and the rest load when the task needs them. An authorized tool is not dropped because of registration order or a count. #469 is that reachability. The October challenge already rejected raising the count and rejected dumping every schema into every turn.
 
-**D3, still open.** A Telegram message must not gain a write on another computer as a side effect. No such write is enabled. The recommendation, not a decision: a write on a paired computer is an owner approval of that effect (machine, path, action), shown with the ingress taint, and it does not become a standing grant. A different path asks again. Proof, when implemented: a tainted fixture is denied until that approval exists, and removing the check fails the fixture.
+**D3, decided.** A Telegram message must not gain a write on another computer as a side effect. A write on a paired computer requested from Telegram needs an owner approval of that single effect, showing machine, path, action and provenance (the ingress taint). It never becomes a standing grant; a different path or action asks again. No such write is enabled yet. Proof, when implemented: a tainted fixture is denied until that approval exists, and removing the check fails the fixture.
 
 **D4, decided.** Muffin may merge to `dev` when the required checks are green and the verification profile is not CRITICAL. `main`, a CRITICAL claim, and changes to authority, privacy, or the owner's durable data stay with the owner.
 
-**D5, decided.** #914, #915, #924 and #925 are not in this train. Closing them from this integration returned HTTP 403, so they stay open until a token that can close a pull request does it, with a pointer back here and to #972.
+**D4, amended 2026-11-25.** The owner delegated every merge to `dev`, CRITICAL included, to Muffin Coder, the orchestrator of this repository. Each merge still needs all required checks green on the exact head and an independent review with no verified blocker. A CRITICAL review is posted on the pull request as a summary of findings. No merge bypasses checks, branch protection or reviews. `main`, and changes to the owner's durable data outside a merged pull request, stay with the owner.
+
+**D5, decided.** #914, #915, #924 and #925 are not in this train. They were closed on 2026-11-21 with a pointer back here and to #972.
 
 Root of trust, the effect journal, and owner approval are not on this list.
 
