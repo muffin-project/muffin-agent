@@ -17,7 +17,7 @@ import {
 import { ALL_API_KEY_NAMES, LEGACY_API_KEY_NAME } from '../core/config/providers.js';
 import { checkTemporalWindow, EVERY_INSTANT, normaliseDate } from '../core/memory/recall.js';
 import type { TrustTier } from '../core/policy/types.js';
-import { seal, verify } from '../core/rot/verify.js';
+import { verify } from '../core/rot/verify.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { cmdAdopt } from './adopt.js';
 import { cmdAuth } from './auth.js';
@@ -87,6 +87,7 @@ import { cmdOrientamento } from './orientamento.js';
 import { promptLine, promptSecret, resolveSecretInput, secretStoreHint } from './prompt.js';
 import { cmdPromptShow, cmdPromptVersion, PROMPT_USAGE } from './prompt-show.js';
 import { runRepl } from './repl.js';
+import { runRotMigrate } from './rot-migrate.js';
 import { runHeadless } from './run.js';
 import { cmdSearch } from './search-setup.js';
 import {
@@ -971,47 +972,30 @@ function cmdRot(argv: string[]): number {
   if (sub === 'verify') {
     const outcome = verify(paths().home, mode);
     if (outcome.ok) {
-      process.stdout.write(
-        `root of trust intact: ${outcome.fileCount} files, mode ${outcome.mode}\n`,
-      );
+      process.stdout.write(`rot/: ${outcome.fileCount} files, mode ${outcome.mode}\n`);
       return 0;
     }
-    process.stderr.write(
-      `root of trust diverged (${outcome.reason}):\n` +
+    process.stdout.write(
+      `rot/ diagnostic (${outcome.reason}), mode ${outcome.mode} — not an incident (ADR-0108):\n` +
         outcome.diverged.map((f) => `  ${f}\n`).join('') +
-        `→ ${outcome.remedy}\n`,
+        'Edits take effect without a seal. `muffin rot migrate` applies additive shipped fields and keeps timezone and identity.\n',
     );
-    return outcome.action === 'refuse' ? 2 : 1;
+    return 0;
   }
 
   if (sub === 'reseal') {
-    // The one failure this command was built to produce, and the only one it
-    // used to answer with a Node stack trace.
-    //
-    // An existing deployment may keep the seal under a separate OS identity.
-    try {
-      const manifest = seal(paths().home, '1', new Date());
-      process.stdout.write(
-        `resealed ${manifest.files.length} files — the change is now yours and declared\n`,
-      );
-      return 0;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === 'EACCES' || code === 'EPERM') {
-        process.stderr.write(
-          `non posso riscrivere il sigillo in ${paths().home}/rot: permesso negato.\n` +
-            'Se hai reso vera la modalità hardened, il RoT non è più tuo ed è voluto: ' +
-            'rifai questo comando con il privilegio che serve (es. `sudo`).\n',
-        );
-        return 77; // EX_NOPERM
-      }
-      process.stderr.write(`reseal fallito: ${(error as Error).message}\n`);
-      return 74; // EX_IOERR
-    }
+    process.stderr.write(
+      'The data-tier seal ceremony is retired (ADR-0108). Edits to rot/ take effect on the next load. There is nothing to reseal.\n' +
+        'Use `muffin rot migrate` to apply additive shipped fields without overwriting timezone or identity.\n',
+    );
+    return 78;
+  }
+
+  if (sub === 'migrate') {
+    return runRotMigrate(paths().home);
   }
 
   if (sub === 'harden') {
-    // Actionable response for old bookmarks; there is no hardening recipe.
     process.stderr.write(
       'The manual hardening recipe is retired. OS hardening does not change approvals. ' +
         'Use `muffin doctor` to inspect this installation.\n',
@@ -1019,7 +1003,7 @@ function cmdRot(argv: string[]): number {
     return 78;
   }
 
-  process.stderr.write(`usage: muffin rot verify | reseal\n`);
+  process.stderr.write(`usage: muffin rot verify | migrate\n`);
   return 78;
 }
 
