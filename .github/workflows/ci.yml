@@ -207,7 +207,18 @@ jobs:
       - name: suite
         env:
           MUFFIN_REQUIRE_CAPABILITIES: 'sandbox,shell-boundary,systemd-analyze'
-        run: npx vitest run --reporter=dot --exclude 'docs/collegamenti*.test.ts' --exclude '**/.claude/**/*.test.ts'
+        run: npx vitest run --reporter=dot --reporter=json --outputFile.json=${{ runner.temp }}/suite.json --exclude 'docs/collegamenti*.test.ts' --exclude '**/.claude/**/*.test.ts'
+
+      # La seconda cintura. Il globalSetup ferma la run se una capacità
+      # richiesta manca; questo step legge il report JSON e controlla che i
+      # test marcati `[richiede <capacità>]` abbiano girato davvero: nessun
+      # salto di una capacità richiesta, e almeno quanti ne registra
+      # `test-support/capability-minimums.json`. Un'etichetta tolta o un test
+      # sparito senza dirlo diventano rossi qui, non un conteggio da leggere.
+      - name: test marcati per capacità (nessun salto, minimi rispettati)
+        env:
+          MUFFIN_REQUIRE_CAPABILITIES: 'sandbox,shell-boundary,systemd-analyze'
+        run: npx tsx scripts/test-capability-report.ts --ci "${{ runner.temp }}/suite.json"
 
       # Mutation proof for the AppArmor hook rules: remove the shared
       # profile's hook policy, then run the same production-path test. Its

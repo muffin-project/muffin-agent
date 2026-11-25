@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { capability } from '../../test-support/requires.js';
+import { capability, withReason } from '../../test-support/requires.js';
 import { SandboxExecutor } from './executor.js';
 
 /**
@@ -68,7 +68,9 @@ describe('shell outcome integrity dichiara se è stata provata', () => {
   });
 });
 
-describe.runIf(gate.run)(`shell outcome integrity (real containment — ${gate.why})`, () => {
+const titolo = withReason('shell outcome integrity (real containment)', sandboxCap);
+
+describe.runIf(gate.run)(titolo, () => {
   const base = mkdtempSync(join(tmpdir(), 'muffin-shell-outcome-'));
   const workspace = join(base, 'workspace');
   mkdirSync(workspace, { recursive: true });
