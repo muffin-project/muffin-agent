@@ -25,6 +25,8 @@ export default defineConfig({
     // il file lì. Vedi `core/config/home-guard.ts` per le due volte in cui è
     // successo davvero.
     globalSetup: ['./vitest.home-guard.ts'],
+    // Never run Git fixtures against the caller's repository (vitest.git-env.ts).
+    setupFiles: ['./vitest.git-env.ts'],
     include: ['evals/acceptance/**/*.accept.ts'],
     // `.gate-linux/` per la stessa ragione di `vitest.config.ts`: il gate
     // Linux lascia un clone del repo qui dentro, e senza questa riga la suite
