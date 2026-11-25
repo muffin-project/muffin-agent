@@ -84,16 +84,16 @@ does not delay the MVP.
 
 ## Proof scorecard
 
-Statuses are honest as of 2026-10-21: *journey exists* means an acceptance file
-drives the real binary; *mutation-proven* means the wiring-removal falsifier is
-recorded. A row is closed only when both are true.
+*Journey exists* means an acceptance file drives the real binary.
+*Mutation-proven* means the wiring-removal falsifier is recorded. A row is
+closed only when both are true. The baseline below is historical.
 
 | Family | Journey | Status | Falsifier / gap |
 |---|---|---|---|
 | Filesystem read/write/edit | `d-capability` D1–D3, `fs-edit-chirurgico` | journey exists | remove scope guard / undo wiring → journey must fail; mutation run not yet recorded |
 | Shell | `d-capability` D4, `d-approved-shell` | mutation-proven on compiled `10ce2bbe` | The Telegram fixture verifies no effect before approval, a single consumed approval, actual file contents and a settled stdout record under native macOS containment. Replacing the executor with a successful reply fails on the missing file. See [#874](https://github.com/muffin-project/muffin-agent/issues/874). |
 | Web search + fetch | `d-capability` D7/D9, `b-retry` | journey exists | key/endpoint resolution, SSRF/retry guards; no real-provider search+fetch turn |
-| Memory search/propose/recall | `c-memory`, `c-consolidamento`, `c-tempo` | journey exists | mutation run not yet recorded |
+| Memory search/propose/recall | `c-memory`, `c-memory-propose`, `c-consolidamento`, `c-tempo` | mutation-proven on compiled `10ce2bbe` | Remove prompt recall, consolidation wiring, historical or temporal routing, or the proposal tools. Misattributing a model-added value also fails. See [#874](https://github.com/muffin-project/muffin-agent/issues/874). Installed Telegram evidence remains part of #937. |
 | Schedule / wait / todo / event | `job-fires`, `b-continuity`, `c-tempo` | partial | no single turn exercising schedule → occurrence → completion |
 | Surfaces both ways | `b-telegram-journey` (B1/B13/B14/D12), `b-una-conversazione`, `b-parita-superfici` | journey exists; B14 re-proven 2026-10-21 | delivery/record removal → red |
 | Input while working | `b-busy` + G3 slice 1 | partial | busy enqueue proven at work/router level; foreground/preemption not implemented |
