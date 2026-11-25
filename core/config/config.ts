@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 import { ensurePrivateDir, tightenPrivateFile } from './private-fs.js';
+import { clearChainPauses } from './provider-chain.js';
 import { SEARCH_PROVIDER_IDS } from './providers.js';
 import { REASONING_DIALECTS, THINKING_VALUES } from './thinking.js';
 
@@ -165,11 +166,37 @@ export const InferenceProviderSchema = z
     }
   });
 
+/**
+ * One extra link of a lane's provider chain (ADR-0110): a connection and the
+ * model to ask it for. The model travels with the link because a slug is only
+ * meaningful on its own endpoint (`gpt-6.2-sol` does not exist on OpenRouter).
+ */
+export const FallbackLinkSchema = z.object({
+  provider: InferenceProviderSchema,
+  model: z.string().min(1),
+});
+
+/** At most a handful of links: each failed link costs one round trip. */
+const FALLBACK_CHAIN_MAX = 4;
+
 export const ConfigSchema = z.object({
   schemaVersion: z.number().int().positive(),
   /** Main inference connection; light is independent after legacy normalization. */
   provider: InferenceProviderSchema,
   lightProvider: InferenceProviderSchema.optional(),
+  /**
+   * Ordered fallback links per lane, tried after the lane's own connection
+   * when it is out of quota, signed out, rate limited or down (ADR-0110).
+   * Absent or empty = the lane has one link, exactly as before. Written by
+   * `muffin fallback`, never by a conversational command: a link names an
+   * endpoint and a secret reference, the same trust as `provider`.
+   */
+  fallbacks: z
+    .object({
+      main: z.array(FallbackLinkSchema).max(FALLBACK_CHAIN_MAX).optional(),
+      light: z.array(FallbackLinkSchema).max(FALLBACK_CHAIN_MAX).optional(),
+    })
+    .optional(),
   models: z.object({
     main: z.string().min(1),
     light: z.string().min(1),
@@ -461,6 +488,22 @@ export function inferenceProvider(
   lane: InferenceLane = 'main',
 ): InferenceProviderConfig {
   return lane === 'light' ? (config.lightProvider ?? config.provider) : config.provider;
+}
+
+export type FallbackLink = z.infer<typeof FallbackLinkSchema>;
+
+/**
+ * A lane's links in priority order: its own connection and model first, then
+ * the configured fallbacks. Always at least one element.
+ */
+export function inferenceChain(
+  config: Config,
+  lane: InferenceLane = 'main',
+): [FallbackLink, ...FallbackLink[]] {
+  return [
+    { provider: inferenceProvider(config, lane), model: config.models[lane] },
+    ...(config.fallbacks?.[lane] ?? []),
+  ];
 }
 
 /** Capture both connections before changing one, so the other cannot follow an inherited default. */
@@ -801,6 +844,13 @@ export function writeAuthoritativeSecret(name: string, value: string, home = muf
   // acquires a replacement. Once it does, keeping a shadow would make the
   // winner depend on precedence instead of the owner's latest action.
   rmSync(join(secretDir('home', home), name), { force: true });
+  // A new credential is the owner fixing an account: its paused chain links
+  // are used again at once, not after the cooldown (ADR-0110).
+  try {
+    clearChainPauses(home, { apiKeyRef: `secret://${name}` });
+  } catch {
+    // advisory state; the secret is what the owner asked for
+  }
   return persistent;
 }
 

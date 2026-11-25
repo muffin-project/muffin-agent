@@ -69,6 +69,7 @@ import { assessShellBoundary } from '../core/sandbox/shell-boundary.js';
 import type { StatoSuperficie } from '../core/surface/salute.js';
 import { describeInterrupted, readTurnHealth, readUndelivered } from '../core/turns/store.js';
 import { Vault, type VaultAudit, type VaultStore } from '../core/vault/vault.js';
+import { credentialRemedy, describeChain } from './fallback.js';
 import { secretStoreHint } from './prompt.js';
 import { PLAIN, type Style } from './ui.js';
 import { type BuildStamp, describeBuild, findCheckoutRoot } from './update.js';
@@ -465,6 +466,29 @@ export async function runDoctor(
       `${profileProblems.join(' · ')} — ${config.models.main} risolve comunque su "${resolvedProfile.name}" · ${provenienza}`,
       `ripara o rimuovi il profilo scartato sopra, sotto ${cartelleCadute}`,
     );
+  }
+
+  // The provider chains (ADR-0110): which link is serving and why the
+  // others are not. Silent when a lane has no fallbacks — nothing to say.
+  for (const lane of ['main', 'light'] as const) {
+    if (!config.fallbacks?.[lane]?.length) continue;
+    const chain = describeChain(config, lane, home);
+    const detail = chain.lines.join(' | ');
+    if (chain.degraded) {
+      warn(
+        `provider chain ${lane}`,
+        `${detail} — la connessione principale è in pausa: i messaggi vanno ai ripieghi`,
+        'si riprova da sola allo scadere della pausa; se hai già sistemato l’account: `muffin fallback reset`',
+      );
+    } else if (chain.missing.length > 0) {
+      warn(
+        `provider chain ${lane}`,
+        detail,
+        chain.missing.map((link) => credentialRemedy(link)).join(' · '),
+      );
+    } else {
+      ok(`provider chain ${lane}`, detail);
+    }
   }
 
   // I pin di routing che derivano da un'altra era del modello (issue #501):
