@@ -272,7 +272,11 @@ describe('the owner-class prompt does not move', () => {
     // Ri-fissato 2026-11-25 (ADR-0112): la fondazione spedita cambia testo
     // (tratti di compagno) e si legge dal prodotto. Cold-start deliberato.
     // Pin precedente: `d8fe9c32d83762c8e6936fd912ffc091670bc70970be7dcf2555a8d95c6d454f`.
-    'ff3e02e84c4d4081029e0157a799d965de0012e7d834ba25d1180ea78fb59959';
+    // Ri-fissato 2026-11-26 (ADR-0112 §Decisioni dell'owner): la fondazione
+    // rimette i pavimenti minimi («la memoria non è consenso», le decisioni
+    // restano sue) e la regola delle preferenze. Cold-start deliberato.
+    // Pin precedente: `ff3e02e84c4d4081029e0157a799d965de0012e7d834ba25d1180ea78fb59959`.
+    '1c76b3e287fe7a7e07edf699828142b11325968f410be472641253db8a43af27';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un

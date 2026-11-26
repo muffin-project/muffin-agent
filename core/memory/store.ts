@@ -585,20 +585,6 @@ export class MemoryStore {
   }
 
   /**
-   * The CLI's own channel, always honoured — no trust-tier gate, because
-   * typing `muffin memory pin <id>` at a terminal on the owner's own machine
-   * is what `addFact`'s gate is checking *for*: there is no more-trusted
-   * source than that to defer to. Also how a pinned fact's status is meant to
-   * carry forward onto its successor when the owner corrects a pinned belief
-   * (`ingest.ts`'s `reconcile`, gated there on the *new* fact's own trust tier
-   * before calling this — this method itself does not re-check, the same
-   * division of labour `supersede` already has with its callers).
-   *
-   * Returns whether a row actually changed, the same `changes`-based shape
-   * `JobStore.disable` uses, so a caller can tell "no such fact for this
-   * tenant" from "already in that state".
-   */
-  /**
    * Pins an *existing* belief under the same gate `addFact` applies to a new
    * one: owner-tier evidence on the request (`contextTier === 0`), and a row
    * that is itself owner-tier and `origin = 'said'`. The model-facing path
@@ -615,6 +601,20 @@ export class MemoryStore {
     return this.setPinned(tenantId, factId, true);
   }
 
+  /**
+   * The CLI's own channel, always honoured — no trust-tier gate, because
+   * typing `muffin memory pin <id>` at a terminal on the owner's own machine
+   * is what `addFact`'s gate is checking *for*: there is no more-trusted
+   * source than that to defer to. Also how a pinned fact's status is meant to
+   * carry forward onto its successor when the owner corrects a pinned belief
+   * (`ingest.ts`'s `reconcile`, gated there on the *new* fact's own trust tier
+   * before calling this — this method itself does not re-check, the same
+   * division of labour `supersede` already has with its callers).
+   *
+   * Returns whether a row actually changed, the same `changes`-based shape
+   * `JobStore.disable` uses, so a caller can tell "no such fact for this
+   * tenant" from "already in that state".
+   */
   setPinned(tenantId: string, factId: number, pinned: boolean): boolean {
     const info = this.db
       .prepare(`UPDATE facts SET pinned = ? WHERE id = ? AND tenant_id = ?`)

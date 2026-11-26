@@ -68,6 +68,7 @@ export const memoryProposeSpec: ToolSpec = {
     'review, or was rejected — report that honestly, never claim "lo ricordo" for a mere proposal. ' +
     'Set `standing: true` only for a lasting preference about how to help the owner ("d\'ora in poi usa sempre liste puntate"): ' +
     'it is pinned, so it reaches every future owner turn, only when the owner said it in their own words and you pass them as `instruction`. ' +
+    'When the owner states the preference explicitly, save it right away in that same turn: do not ask them to confirm first. ' +
     'A preference you inferred is never pinned: ask the owner whether to keep it; it pins only if they restate the preference itself in their own words (a bare "sì" or "ok" does not pin), and you pass that sentence as `instruction`. ' +
     'e.g. memory_propose({subject: "owner", predicate: "accountant", object: "Mario"}).',
   inputSchema: {
@@ -94,7 +95,7 @@ export const memoryProposeSpec: ToolSpec = {
       standing: {
         type: 'boolean',
         description:
-          'True for a lasting preference about how to help the owner. Pinned only when owner-stated (see `instruction`); never for an inference.',
+          'True for a lasting preference about how to help the owner. Explicitly stated by the owner: save it now, no confirmation question, and it is pinned (see `instruction`). Inferred: never pinned; ask first.',
       },
       instruction: {
         type: 'string',

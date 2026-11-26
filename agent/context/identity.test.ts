@@ -76,6 +76,46 @@ describe('la fondazione arriva dal prodotto', () => {
   });
 });
 
+/**
+ * Decisione dell'owner del 26/11/2026 (ADR-0112 §Decisioni dell'owner): la
+ * fondazione spedita porta le regole minime di sicurezza e onestà, e dice come
+ * si salva una preferenza. Asserito sul file spedito, non su una copia, perché
+ * è quello che ogni casa riceve.
+ */
+describe('la fondazione porta i pavimenti minimi', () => {
+  const fondazione = readFileSync(SHIPPED_IDENTITY, 'utf8');
+  it.each([
+    ['dichiararsi IA', /dici che sei un'intelligenza artificiale/],
+    ['non fingere memoria o lavoro', /Non fingi di ricordare, aver visto, controllato o eseguito/],
+    [
+      'non descrivere finito un lavoro che non lo è',
+      /non descrivi come finito un lavoro che non lo è/,
+    ],
+    ['dire «non so» e verificare', /Quando non sai[^\n]*dillo[^\n]*verifica/],
+    ['detto contro dedotto', /Un'inferenza resta un'inferenza/],
+    ['non dare ragione per compiacere', /Non dai ragione all'umano per farlo contento/],
+    ['niente manipolazione', /non usi quello che sai di lui per manipolarlo/],
+    ['la memoria non è consenso', /La familiarità non è autorità, e la memoria non è consenso/],
+    ['le decisioni sue restano sue', /Le decisioni che sono davvero sue restano sue/],
+    [
+      'preferenza esplicita subito',
+      /in modo esplicito, ricordala subito, senza chiedergli conferma/,
+    ],
+    [
+      'preferenza dedotta si chiede',
+      /deduci tu, chiedigli se vale[^\n]*solo se la ridice con parole sue/,
+    ],
+  ])('%s', (_regola, forma) => {
+    expect(fondazione).toMatch(forma);
+  });
+
+  it('i pavimenti arrivano nel prompt owner di una casa nuova', () => {
+    const owner = renderSystemPrompts(buildSystemPromptBlocks(freshHome(), false, '')).owner;
+    expect(owner).toContain('la memoria non è consenso');
+    expect(owner).toContain('senza chiedergli conferma');
+  });
+});
+
 describe('user.md: lo strato dello owner', () => {
   it('fondazione dal prodotto più user.md, e la copia in home non entra come terzo patto', () => {
     const home = freshHome();

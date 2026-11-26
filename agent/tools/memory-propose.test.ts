@@ -19,7 +19,7 @@ import { proposeMemoryRecord } from '../../core/memory/proposals.js';
 import { MemoryStore } from '../../core/memory/store.js';
 import { JsonlExporter, SimpleTracer } from '../../core/tracing/tracer.js';
 import type { ChatCall, ChatResult, Provider } from '../providers/types.js';
-import { type ProposeDeps, proposeMemory } from './memory-propose.js';
+import { memoryProposeSpec, type ProposeDeps, proposeMemory } from './memory-propose.js';
 
 /** Scripted judge: coexist/accept by default, scripted verdicts on demand. */
 class Scripted implements Provider {
@@ -766,5 +766,32 @@ describe('memory_propose — preferenze standing (ADR-0112)', () => {
     const h = seed();
     const out = await proposeMemory(h.deps, CTX, { ...preferenza, standing: true });
     expect(out.content).toContain('un «sì» da solo non basta');
+  });
+  /**
+   * Decisione dell'owner del 26/11/2026 (ADR-0112 §Decisioni): una preferenza
+   * detta in modo esplicito si salva subito, senza una domanda di conferma;
+   * solo quella dedotta si chiede. Il modello lo legge dalla descrizione del
+   * tool, quindi la descrizione è il contratto da fissare.
+   */
+  it('esplicita si salva subito senza chiedere conferma; dedotta si chiede', async () => {
+    const description = memoryProposeSpec.description;
+    expect(description).toContain(
+      'save it right away in that same turn: do not ask them to confirm first',
+    );
+    expect(description).toContain('A preference you inferred is never pinned: ask the owner');
+    const standing = (
+      memoryProposeSpec.inputSchema as { properties: Record<string, { description: string }> }
+    ).properties.standing!.description;
+    expect(standing).toContain('save it now, no confirmation question');
+    expect(standing).toContain('Inferred: never pinned; ask first.');
+
+    const h = seed();
+    const out = await proposeMemory(
+      h.deps,
+      { ...CTX, getSource: () => ingress(FRASE) },
+      { ...preferenza, standing: true, instruction: FRASE },
+    );
+    expect(out.content).toContain('Appuntato come preferenza');
+    expect(out.content).not.toContain('Chiedigli');
   });
 });

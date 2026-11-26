@@ -1,8 +1,9 @@
 # ADR-0112 — L'identità a strati: kernel, fondazione, user.md, memoria
 
-**Stato: architettura approvata dall'owner il 2026-11-25 (Europe/Rome).** Il
-testo della fondazione è un cambio di default da recensire nella PR che
-introduce questo ADR. Profilo di verifica **CRITICAL**
+**Stato: architettura approvata dall'owner il 2026-11-25 (Europe/Rome);
+pavimenti della fondazione e semantica delle preferenze decisi dall'owner il
+2026-11-26 (§Decisioni dell'owner).** Il testo della fondazione è un cambio
+di default da recensire nella PR che introduce questo ADR. Profilo di verifica **CRITICAL**
 (`docs/development/ORCHESTRATION.md`: identità, Root of Trust, memoria).
 Non dà all'agente nessun nuovo write-path: né su `rot/`, né su `defaults/`,
 né su `user.md`. Una cosa cambia, ed è detta qui: la fondazione letta a
@@ -97,7 +98,8 @@ Quattro strati, in quest'ordine di autorità:
    (nucleo appuntato, che entra in ogni turno owner) solo se è
    *owner-stated*: le parole dell'owner verificate byte per byte
    nell'ingresso autenticato (#776) e il turno a tier 0, lo stesso gate di
-   `addFact`. Una preferenza dedotta diventa al massimo una credenza non
+   `addFact`. Detta in modo esplicito, si salva **subito**, nello stesso
+   turno, senza una domanda di conferma. Una preferenza dedotta diventa al massimo una credenza non
    appuntata e la risposta del tool dice al modello di chiedere. La
    conferma è l'owner che la dice con parole sue, anche dopo una domanda
    («sì, d'ora in poi usa sempre liste puntate»): in quel caso si appunta
@@ -109,6 +111,37 @@ Quattro strati, in quest'ordine di autorità:
    di ripetere la preferenza invece di annunciare un appunto. Si
    toglie con `memory_forget` o `muffin memory unpin`. Nessuno store
    parallelo.
+
+### Decisioni dell'owner (26 novembre 2026)
+
+Le due domande aperte dalla PR sono state chiuse dall'owner:
+
+1. **I pavimenti minimi stanno nella fondazione.** Il file spedito
+   (`defaults/rot/identity.md`, copiato in `dist/defaults` da
+   `npm run compile`) porta le regole minime di sicurezza e onestà che il
+   patto precedente aveva già, in forma generica e senza dati personali:
+   - §«Cosa non fai mai»: dichiararsi IA se chiesto; non fingere memoria,
+     verifiche o lavoro, né dirlo finito quando non lo è; dire «non so»
+     e verificare prima di chiedere; un'inferenza resta
+     un'inferenza; non dare ragione per compiacere né presentare una
+     speranza come probabilità; niente manipolazione, terapia o coaching;
+   - §«Il limite»: la familiarità non è autorità e la memoria non è
+     consenso; le decisioni dell'umano restano sue, e su privacy, sicurezza,
+     identità o irreversibilità si portano opzioni, conseguenze e un'opinione.
+   Sono un pavimento di prodotto, non il kernel: il kernel resta nel codice
+   e arriva comunque dopo. `agent/context/identity.test.ts` li fissa sul
+   file spedito.
+2. **Preferenze: esplicite subito, dedotte con domanda.** Una preferenza che
+   l'owner dice in modo esplicito su un turno non contaminato si salva e si
+   appunta subito, senza chiedere conferma. Una dedotta non si appunta mai da
+   sola: il modello chiede, e si appunta solo se l'owner la ridice con parole
+   sue (`pinIfEligible`; un «sì» da solo non basta). Lo dicono in modo coerente
+   la fondazione (§«Il limite»), la descrizione di `memory_propose` e
+   del suo campo `standing`, e la risposta del tool; i test in
+   `agent/tools/memory-propose.test.ts` fissano descrizione e comportamento.
+   L'alternativa scartata, «chiedere sempre», avrebbe fatto ripetere
+   all'owner una cosa già detta con parole sue senza aggiungere sicurezza:
+   il gate sulle parole verificate è lo stesso in entrambi i casi.
 
 ### Transizione (coerente con ADR-0108)
 
@@ -156,7 +189,9 @@ precedente trova ancora un patto. `rot/identity.md` esce dal confronto
 - La fondazione è stata riscritta con i tratti di compagno e conserva i
   pavimenti già spediti e già misurati: dichiararsi IA, non fingere memoria
   o lavoro, detto contro dedotto, niente manipolazione o coaching, il
-  registro casuale («hey» non apre un ticket).
+  registro casuale («hey» non apre un ticket). Con la decisione del
+  26/11 tornano anche «la memoria non è consenso», «le decisioni restano
+  sue» e la regola delle preferenze (esplicite subito, dedotte con domanda).
 - Un'installazione con una copia in home modificata a mano non cambia
   finché l'owner non crea `user.md`.
 - Resta aperto un tool dedicato e approvato per scrivere `user.md` dalla
