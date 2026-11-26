@@ -167,8 +167,14 @@ describe('memory store', () => {
     const me = s.upsertEntity(HOST, 'Giusto', 'person', '2026-08-04T10:00:00Z');
     const ep = episode(s, HOST, 'nota');
     const base = {
-      tenantId: HOST, subjectId: me, predicate: 'x', objectValue: 'y',
-      episodeId: ep, trustTier: 0 as const, confidence: 0.9, extractionV: 1,
+      tenantId: HOST,
+      subjectId: me,
+      predicate: 'x',
+      objectValue: 'y',
+      episodeId: ep,
+      trustTier: 0 as const,
+      confidence: 0.9,
+      extractionV: 1,
       recordedAt: '2026-08-04T10:00:00Z',
     };
     expect(() => s.addFact({ ...base, origin: 'gossip' as never })).toThrow(/CHECK/);
@@ -205,8 +211,15 @@ describe('memory store', () => {
     const groupSubject = s.upsertEntity(GROUP, 'Marco', 'person', '2026-08-04T10:00:00Z');
     const ep = episode(s, GROUP, 'nota di gruppo');
     s.addFact({
-      tenantId: GROUP, subjectId: groupSubject, predicate: 'claims', objectValue: 'IBAN XX',
-      episodeId: ep, trustTier: 2, confidence: 0.9, extractionV: 1, recordedAt: '2026-08-04T10:00:00Z',
+      tenantId: GROUP,
+      subjectId: groupSubject,
+      predicate: 'claims',
+      objectValue: 'IBAN XX',
+      episodeId: ep,
+      trustTier: 2,
+      confidence: 0.9,
+      extractionV: 1,
+      recordedAt: '2026-08-04T10:00:00Z',
     });
 
     const leaked = s.factsAsOf(HOST, groupSubject, '2026-08-04T10:00:00Z');
@@ -220,7 +233,15 @@ describe('memory store', () => {
     const now = '2026-08-04T10:00:00Z';
     const me = s.upsertEntity(HOST, 'Giusto', 'person', now);
     const ep = episode(s, HOST, 'mi piace la fotografia e anche la vela');
-    const base = { tenantId: HOST, subjectId: me, episodeId: ep, trustTier: 0 as const, confidence: 0.9, extractionV: 1, recordedAt: now };
+    const base = {
+      tenantId: HOST,
+      subjectId: me,
+      episodeId: ep,
+      trustTier: 0 as const,
+      confidence: 0.9,
+      extractionV: 1,
+      recordedAt: now,
+    };
     s.addFact({ ...base, predicate: 'interest', objectValue: 'fotografia' });
     s.addFact({ ...base, predicate: 'interest', objectValue: 'vela' });
 
@@ -236,10 +257,28 @@ describe('memory store', () => {
     const me = s.upsertEntity(HOST, 'Giusto', 'person', now);
     const ep1 = episode(s, HOST, 'il mio commercialista è Marco');
     const ep2 = episode(s, HOST, 'ho cambiato commercialista, ora è Lucia');
-    const base = { tenantId: HOST, subjectId: me, trustTier: 0 as const, confidence: 0.9, extractionV: 1 };
+    const base = {
+      tenantId: HOST,
+      subjectId: me,
+      trustTier: 0 as const,
+      confidence: 0.9,
+      extractionV: 1,
+    };
 
-    const marco = s.addFact({ ...base, predicate: 'accountant', objectValue: 'Marco', episodeId: ep1, recordedAt: now });
-    const lucia = s.addFact({ ...base, predicate: 'accountant', objectValue: 'Lucia', episodeId: ep2, recordedAt: '2026-07-01T10:00:00Z' });
+    const marco = s.addFact({
+      ...base,
+      predicate: 'accountant',
+      objectValue: 'Marco',
+      episodeId: ep1,
+      recordedAt: now,
+    });
+    const lucia = s.addFact({
+      ...base,
+      predicate: 'accountant',
+      objectValue: 'Lucia',
+      episodeId: ep2,
+      recordedAt: '2026-07-01T10:00:00Z',
+    });
     s.supersede(HOST, marco, lucia, '2026-07-01T10:00:00Z');
 
     expect(s.activeFacts(HOST, me, 'accountant').map((f) => f.objectValue)).toEqual(['Lucia']);
@@ -257,8 +296,15 @@ describe('memory store', () => {
     const me = s.upsertEntity(HOST, 'Giusto', 'person', now);
     const ep = episode(s, HOST, 'abito a Cagliari');
     s.addFact({
-      tenantId: HOST, subjectId: me, predicate: 'lives_in', objectValue: 'Cagliari',
-      episodeId: ep, trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: now,
+      tenantId: HOST,
+      subjectId: me,
+      predicate: 'lives_in',
+      objectValue: 'Cagliari',
+      episodeId: ep,
+      trustTier: 0,
+      confidence: 0.9,
+      extractionV: 1,
+      recordedAt: now,
     });
     const fact = s.activeFacts(HOST, me, 'lives_in')[0];
     expect(fact?.validFrom).toBeNull(); // world time unknown
@@ -271,8 +317,15 @@ describe('memory store', () => {
     const someone = s.upsertEntity(GROUP, 'Tizio', 'person', now);
     const ep = episode(s, GROUP, 'Tizio dice che il bonifico va fatto a questo IBAN', 2);
     s.addFact({
-      tenantId: GROUP, subjectId: someone, predicate: 'claims', objectValue: 'IBAN XX',
-      episodeId: ep, trustTier: 2, confidence: 0.5, extractionV: 1, recordedAt: now,
+      tenantId: GROUP,
+      subjectId: someone,
+      predicate: 'claims',
+      objectValue: 'IBAN XX',
+      episodeId: ep,
+      trustTier: 2,
+      confidence: 0.5,
+      extractionV: 1,
+      recordedAt: now,
     });
     const fact = s.activeFacts(GROUP, someone)[0];
     // Tier travels with the fact: a recall can label it, and the kernel can refuse to act on it.
@@ -326,21 +379,42 @@ describe('memory store', () => {
     const me = s.upsertEntity(HOST, 'Giusto', 'person', '2026-08-04T10:00:00Z');
     const ep = episode(s, HOST, 'nota');
     const marco = s.addFact({
-      tenantId: HOST, subjectId: me, predicate: 'accountant', objectValue: 'Marco',
-      episodeId: ep, trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: '2026-08-04T10:00:00Z',
+      tenantId: HOST,
+      subjectId: me,
+      predicate: 'accountant',
+      objectValue: 'Marco',
+      episodeId: ep,
+      trustTier: 0,
+      confidence: 0.9,
+      extractionV: 1,
+      recordedAt: '2026-08-04T10:00:00Z',
     });
     const lucia = s.addFact({
-      tenantId: HOST, subjectId: me, predicate: 'accountant', objectValue: 'Lucia',
-      episodeId: ep, trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: '2026-08-05T10:00:00Z',
+      tenantId: HOST,
+      subjectId: me,
+      predicate: 'accountant',
+      objectValue: 'Lucia',
+      episodeId: ep,
+      trustTier: 0,
+      confidence: 0.9,
+      extractionV: 1,
+      recordedAt: '2026-08-05T10:00:00Z',
     });
 
     s.recordReview({
-      tenantId: HOST, kind: 'contradiction', subject: 'Giusto', predicate: 'accountant',
-      existingFactId: marco, incomingFactId: lucia, detail: 'non chiaro se è un cambio',
+      tenantId: HOST,
+      kind: 'contradiction',
+      subject: 'Giusto',
+      predicate: 'accountant',
+      existingFactId: marco,
+      incomingFactId: lucia,
+      detail: 'non chiaro se è un cambio',
       createdAt: '2026-08-05T10:00:00Z',
     });
     s.recordReview({
-      tenantId: HOST, kind: 'error', detail: 'giudice non disponibile',
+      tenantId: HOST,
+      kind: 'error',
+      detail: 'giudice non disponibile',
       createdAt: '2026-08-05T10:01:00Z',
     });
 
@@ -480,7 +554,7 @@ describe('memory store — pinned facts', () => {
     expect(s.pinnedFacts(HOST)).toEqual([]);
   });
 
-  it('addFact only honours a requested pin when the source is owner-tier and said, never on the model\'s say-so alone', () => {
+  it("addFact only honours a requested pin when the source is owner-tier and said, never on the model's say-so alone", () => {
     // The gate `MemoryStore.addFact` itself owns, precisely because a caller
     // can be an extractor reading a group chat or a forwarded message: asking
     // for `pinned` is not the same as being granted it.
@@ -488,8 +562,14 @@ describe('memory store — pinned facts', () => {
     const me = s.upsertEntity(HOST, 'owner', 'person', '2026-08-04T10:00:00Z');
     const ep = episode(s, HOST, 'nota', 2); // tier 2: a group/stranger episode
     const base = {
-      tenantId: HOST, subjectId: me, predicate: 'preferred_name', objectValue: 'Giusto',
-      episodeId: ep, confidence: 0.9, extractionV: 1, recordedAt: '2026-08-04T10:00:00Z',
+      tenantId: HOST,
+      subjectId: me,
+      predicate: 'preferred_name',
+      objectValue: 'Giusto',
+      episodeId: ep,
+      confidence: 0.9,
+      extractionV: 1,
+      recordedAt: '2026-08-04T10:00:00Z',
     };
     const strangerId = s.addFact({ ...base, trustTier: 2, pinned: true });
     expect(s.factById(HOST, strangerId)!.pinned).toBe(0);
@@ -507,14 +587,52 @@ describe('memory store — pinned facts', () => {
     const groupMe = s.upsertEntity(GROUP, 'owner', 'person', '2026-08-04T10:00:00Z');
     const ep = episode(s, HOST, 'nota');
     const groupEp = episode(s, GROUP, 'nota');
-    const base = { episodeId: ep, trustTier: 0 as const, origin: 'said' as const, confidence: 0.9, extractionV: 1 };
+    const base = {
+      episodeId: ep,
+      trustTier: 0 as const,
+      origin: 'said' as const,
+      confidence: 0.9,
+      extractionV: 1,
+    };
 
-    const older = s.addFact({ ...base, tenantId: HOST, subjectId: hostMe, predicate: 'name', objectValue: 'Giusto', recordedAt: '2026-08-01T10:00:00Z', pinned: true });
-    const newer = s.addFact({ ...base, tenantId: HOST, subjectId: hostMe, predicate: 'city', objectValue: 'Cagliari', recordedAt: '2026-08-04T10:00:00Z', pinned: true });
-    const notPinned = s.addFact({ ...base, tenantId: HOST, subjectId: hostMe, predicate: 'interest', objectValue: 'vela', recordedAt: '2026-08-05T10:00:00Z' });
+    const older = s.addFact({
+      ...base,
+      tenantId: HOST,
+      subjectId: hostMe,
+      predicate: 'name',
+      objectValue: 'Giusto',
+      recordedAt: '2026-08-01T10:00:00Z',
+      pinned: true,
+    });
+    const newer = s.addFact({
+      ...base,
+      tenantId: HOST,
+      subjectId: hostMe,
+      predicate: 'city',
+      objectValue: 'Cagliari',
+      recordedAt: '2026-08-04T10:00:00Z',
+      pinned: true,
+    });
+    const notPinned = s.addFact({
+      ...base,
+      tenantId: HOST,
+      subjectId: hostMe,
+      predicate: 'interest',
+      objectValue: 'vela',
+      recordedAt: '2026-08-05T10:00:00Z',
+    });
     // A different tenant's own pinned fact must never surface here — the same
     // isolation every other method in this class already holds.
-    s.addFact({ ...base, tenantId: GROUP, subjectId: groupMe, episodeId: groupEp, predicate: 'name', objectValue: 'Impostore', recordedAt: '2026-08-04T10:00:00Z', pinned: true });
+    s.addFact({
+      ...base,
+      tenantId: GROUP,
+      subjectId: groupMe,
+      episodeId: groupEp,
+      predicate: 'name',
+      objectValue: 'Impostore',
+      recordedAt: '2026-08-04T10:00:00Z',
+      pinned: true,
+    });
 
     const pinned = s.pinnedFacts(HOST);
     expect(pinned.map((f) => f.id)).toEqual([newer, older]);
@@ -535,9 +653,29 @@ describe('memory store — pinned facts', () => {
     const s = store();
     const me = s.upsertEntity(HOST, 'owner', 'person', '2026-08-04T10:00:00Z');
     const ep = episode(s, HOST, 'nota');
-    const base = { tenantId: HOST, subjectId: me, episodeId: ep, trustTier: 0 as const, origin: 'said' as const, confidence: 0.9, extractionV: 1 };
-    const oldId = s.addFact({ ...base, predicate: 'name', objectValue: 'Giusto', recordedAt: '2026-08-01T10:00:00Z', pinned: true });
-    const newId = s.addFact({ ...base, predicate: 'name', objectValue: 'G.', recordedAt: '2026-08-05T10:00:00Z', pinned: true });
+    const base = {
+      tenantId: HOST,
+      subjectId: me,
+      episodeId: ep,
+      trustTier: 0 as const,
+      origin: 'said' as const,
+      confidence: 0.9,
+      extractionV: 1,
+    };
+    const oldId = s.addFact({
+      ...base,
+      predicate: 'name',
+      objectValue: 'Giusto',
+      recordedAt: '2026-08-01T10:00:00Z',
+      pinned: true,
+    });
+    const newId = s.addFact({
+      ...base,
+      predicate: 'name',
+      objectValue: 'G.',
+      recordedAt: '2026-08-05T10:00:00Z',
+      pinned: true,
+    });
     s.supersede(HOST, oldId, newId, '2026-08-05T10:00:00Z');
 
     const pinned = s.pinnedFacts(HOST);
@@ -545,20 +683,41 @@ describe('memory store — pinned facts', () => {
   });
 });
 
-describe('markEpisodesUndone — D11, muffin undo\'s memory half', () => {
+describe("markEpisodesUndone — D11, muffin undo's memory half", () => {
   it('marks only the role: agent episodes of that turn', () => {
     const s = store();
     const agentEp = s.addEpisode({
-      tenantId: HOST, connector: 'cli', threadKey: 't1', role: 'agent', kind: 'message',
-      content: 'Fatto: ho scritto nota.md.', trustTier: 0, createdAt: '2026-09-04T10:00:00Z', turnId: 'turn-1',
+      tenantId: HOST,
+      connector: 'cli',
+      threadKey: 't1',
+      role: 'agent',
+      kind: 'message',
+      content: 'Fatto: ho scritto nota.md.',
+      trustTier: 0,
+      createdAt: '2026-09-04T10:00:00Z',
+      turnId: 'turn-1',
     });
     const userEp = s.addEpisode({
-      tenantId: HOST, connector: 'cli', threadKey: 't1', role: 'user', kind: 'message',
-      content: 'scrivi nota.md', trustTier: 0, createdAt: '2026-09-04T09:59:00Z', turnId: 'turn-1',
+      tenantId: HOST,
+      connector: 'cli',
+      threadKey: 't1',
+      role: 'user',
+      kind: 'message',
+      content: 'scrivi nota.md',
+      trustTier: 0,
+      createdAt: '2026-09-04T09:59:00Z',
+      turnId: 'turn-1',
     });
     const altroTurno = s.addEpisode({
-      tenantId: HOST, connector: 'cli', threadKey: 't1', role: 'agent', kind: 'message',
-      content: 'un altro turno', trustTier: 0, createdAt: '2026-09-04T11:00:00Z', turnId: 'turn-2',
+      tenantId: HOST,
+      connector: 'cli',
+      threadKey: 't1',
+      role: 'agent',
+      kind: 'message',
+      content: 'un altro turno',
+      trustTier: 0,
+      createdAt: '2026-09-04T11:00:00Z',
+      turnId: 'turn-2',
     });
 
     const marcati = s.markEpisodesUndone(HOST, 'turn-1', '2026-09-04T12:00:00Z');
@@ -570,11 +729,18 @@ describe('markEpisodesUndone — D11, muffin undo\'s memory half', () => {
     expect(s.episodeById(HOST, altroTurno)?.undoneAt).toBeUndefined();
   });
 
-  it('non riscrive content: la riga resta ciò che l\'agente ha detto davvero', () => {
+  it("non riscrive content: la riga resta ciò che l'agente ha detto davvero", () => {
     const s = store();
     const ep = s.addEpisode({
-      tenantId: HOST, connector: 'cli', threadKey: 't1', role: 'agent', kind: 'message',
-      content: 'Fatto: ho scritto nota.md.', trustTier: 0, createdAt: '2026-09-04T10:00:00Z', turnId: 'turn-1',
+      tenantId: HOST,
+      connector: 'cli',
+      threadKey: 't1',
+      role: 'agent',
+      kind: 'message',
+      content: 'Fatto: ho scritto nota.md.',
+      trustTier: 0,
+      createdAt: '2026-09-04T10:00:00Z',
+      turnId: 'turn-1',
     });
     s.markEpisodesUndone(HOST, 'turn-1', '2026-09-04T12:00:00Z');
     expect(s.episodeById(HOST, ep)?.content).toBe('Fatto: ho scritto nota.md.');
@@ -583,8 +749,15 @@ describe('markEpisodesUndone — D11, muffin undo\'s memory half', () => {
   it('un secondo undo dello stesso turno non sovrascrive il primo timestamp', () => {
     const s = store();
     const ep = s.addEpisode({
-      tenantId: HOST, connector: 'cli', threadKey: 't1', role: 'agent', kind: 'message',
-      content: 'x', trustTier: 0, createdAt: '2026-09-04T10:00:00Z', turnId: 'turn-1',
+      tenantId: HOST,
+      connector: 'cli',
+      threadKey: 't1',
+      role: 'agent',
+      kind: 'message',
+      content: 'x',
+      trustTier: 0,
+      createdAt: '2026-09-04T10:00:00Z',
+      turnId: 'turn-1',
     });
     s.markEpisodesUndone(HOST, 'turn-1', '2026-09-04T12:00:00Z');
     expect(s.markEpisodesUndone(HOST, 'turn-1', '2026-09-04T13:00:00Z')).toBe(0);
@@ -599,10 +772,64 @@ describe('markEpisodesUndone — D11, muffin undo\'s memory half', () => {
   it('non attraversa il tenant: un episodio di un altro tenant con lo stesso turnId non si marca', () => {
     const s = store();
     const groupEp = s.addEpisode({
-      tenantId: GROUP, connector: 'telegram', threadKey: 't1', role: 'agent', kind: 'message',
-      content: 'x', trustTier: 2, createdAt: '2026-09-04T10:00:00Z', turnId: 'turn-1',
+      tenantId: GROUP,
+      connector: 'telegram',
+      threadKey: 't1',
+      role: 'agent',
+      kind: 'message',
+      content: 'x',
+      trustTier: 2,
+      createdAt: '2026-09-04T10:00:00Z',
+      turnId: 'turn-1',
     });
     s.markEpisodesUndone(HOST, 'turn-1', '2026-09-04T12:00:00Z');
     expect(s.episodeById(GROUP, groupEp)?.undoneAt).toBeUndefined();
+  });
+});
+
+describe('memory schema — profiles and digests are not current tables', () => {
+  it('a fresh store has neither table, and opening an older database leaves them in place', () => {
+    const fresh = new DatabaseCtor(':memory:');
+    const has = (db: typeof fresh, name: string) =>
+      db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name);
+    new MemoryStore(fresh);
+    expect(has(fresh, 'episodes')).toBeDefined();
+    expect(has(fresh, 'profiles')).toBeUndefined();
+    expect(has(fresh, 'digests')).toBeUndefined();
+    fresh.close();
+
+    const older = new DatabaseCtor(':memory:');
+    older.exec(`
+      CREATE TABLE profiles (
+        entity_id INTEGER PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        generated_at TEXT NOT NULL,
+        extraction_v INTEGER NOT NULL
+      );
+      CREATE TABLE digests (
+        id INTEGER PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        text TEXT NOT NULL,
+        covers_from TEXT NOT NULL,
+        covers_to TEXT NOT NULL,
+        generated_at TEXT NOT NULL
+      );
+    `);
+    older
+      .prepare(
+        `INSERT INTO digests(id, tenant_id, scope, text, covers_from, covers_to, generated_at)
+       VALUES (1, 'host', 'day', 'già qui', 'a', 'b', '2026-09-11T10:01:00.000Z')`,
+      )
+      .run();
+    new MemoryStore(older);
+    expect(has(older, 'profiles')).toBeDefined();
+    expect(has(older, 'digests')).toBeDefined();
+    expect(
+      (older.prepare(`SELECT text FROM digests WHERE id = 1`).get() as { text: string }).text,
+    ).toBe('già qui');
+    expect(has(older, 'episodes')).toBeDefined();
+    older.close();
   });
 });
