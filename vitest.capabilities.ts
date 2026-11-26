@@ -4,7 +4,7 @@
  * `MUFFIN_REQUIRE_CAPABILITIES` (o dagli alias storici) manca, la run fallisce
  * qui, prima di qualunque test, dicendo quale e perché.
  */
-import type { GlobalSetupContext } from 'vitest/node';
+import type { TestProject } from 'vitest/node';
 import {
   decide,
   describeReport,
@@ -13,7 +13,7 @@ import {
   requiredCapabilities,
 } from './test-support/capabilities.js';
 
-export async function setup({ provide }: GlobalSetupContext): Promise<void> {
+export async function setup(project: TestProject): Promise<void> {
   const required = requiredCapabilities();
   const forced = forcedCapabilities();
   const { report, missingRequired } = decide(await probeAll(), required, forced);
@@ -25,5 +25,5 @@ export async function setup({ provide }: GlobalSetupContext): Promise<void> {
         'Qui un salto sarebbe un verde falso: la run si ferma invece di contare i test come saltati.',
     );
   }
-  provide('muffinCapabilities', report);
+  project.provide('muffinCapabilities', report);
 }
