@@ -198,6 +198,11 @@ function harness(options: {
   log?: string[];
   messages?: Message[];
   execution?: ExecutionBudget;
+  surface?: TurnInput['surface'];
+  promptMode?: TurnInput['promptMode'];
+  jobId?: string;
+  sendInterimMessage?: LoopDeps['sendInterimMessage'];
+  now?: () => Date;
 }) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-round-'));
   const decls = options.decls ?? [];
@@ -223,6 +228,7 @@ function harness(options: {
     todos: new TodoStore(new DatabaseCtor(':memory:')),
     budgetExhausted: () => false,
     systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite in un gruppo.' },
+    ...(options.sendInterimMessage ? { sendInterimMessage: options.sendInterimMessage } : {}),
   };
 
   const id = 'b'.repeat(32);
@@ -230,7 +236,7 @@ function harness(options: {
     id,
     principal: owner,
     tenant: 'host',
-    surface: 'cli',
+    surface: options.surface ?? 'cli',
     sessionId: 's1',
     model: options.model ?? 'test',
     messages: options.messages ?? [{ role: 'user', content: [{ type: 'text', text: 'ciao' }] }],
@@ -246,11 +252,13 @@ function harness(options: {
   const input: TurnInput = {
     principal: owner,
     tenant: 'host',
-    surface: 'cli',
+    surface: options.surface ?? 'cli',
     session: { id: 's1', file: join(home, 's1.jsonl') },
     text: 'ciao',
     ...(options.onDelta ? { onDelta: options.onDelta } : {}),
     ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+    ...(options.promptMode ? { promptMode: options.promptMode } : {}),
+    ...(options.jobId ? { jobId: options.jobId } : {}),
   };
   const toolContext: ToolContext = {
     tenant: 'host',
@@ -299,7 +307,7 @@ function harness(options: {
     toolContext,
     noteSensitiveResourceEcho: () => undefined,
     turnClass: 'owner',
-    now: () => new Date('2026-09-05T12:00:00.000Z'),
+    now: options.now ?? (() => new Date('2026-09-05T12:00:00.000Z')),
     door,
     doorRefusal,
     refusalLabel: (refusal) => (refusal.effect === 'deny' ? refusal.code : refusal.effect),
@@ -1478,5 +1486,210 @@ describe('tryAutoRenewLease — rinnovo silenzioso delle lease lente', () => {
       expect(tryAutoRenewLease(r, reason)).toBe(false);
       expect(r.autoRenewsUsed).toBe(0);
     }
+  });
+});
+
+describe('conversational interims between ReAct steps', () => {
+  function spokenCall(text: string, name = 'noop'): ChatResult {
+    return {
+      text,
+      toolCalls: [{ id: 'c0', name, args: {} }],
+      stopReason: 'tool_use',
+      usage,
+      model: 'test',
+    };
+  }
+
+  function sessionOf(h: ReturnType<typeof harness>) {
+    return h.deps.sessions.read({ id: 's1', file: join(h.home, 's1.jsonl') });
+  }
+
+  it('promotes a qualified preamble on the REPL, records it, and keeps only the final in the answering append', async () => {
+    const { tool, decl } = okTool('noop');
+    const progress: TurnEvent[] = [];
+    const deltas: TurnDelta[] = [];
+    const provider = scriptedProvider({
+      stream: [
+        [
+          { type: 'text_delta', text: 'Ok, vado a guardare' },
+          {
+            type: 'done',
+            result: spokenCall('Ok, vado a guardare'),
+          },
+        ],
+        [{ type: 'done', result: reply('ho guardato') }],
+      ],
+    });
+    const h = harness({
+      provider,
+      tools: [tool],
+      decls: [decl],
+      onDelta: (delta) => deltas.push(delta),
+      onProgress: (event) => progress.push(event),
+    });
+
+    const result = await runRounds(h.scope);
+
+    expect(result.text).toBe('ho guardato');
+    expect(progress.filter((event) => event.type === 'interim')).toEqual([
+      { type: 'interim', text: 'Ok, vado a guardare', source: 'preamble' },
+    ]);
+    expect(deltas).toContainEqual({ type: 'boundary', reason: 'tool-call' });
+    const interims = sessionOf(h).filter((row) => row.interim === 'preamble');
+    expect(interims).toHaveLength(1);
+    expect(interims[0]).toMatchObject({
+      role: 'assistant',
+      content: 'Ok, vado a guardare',
+      traceId: h.span.traceId,
+    });
+    const finals = sessionOf(h).filter(
+      (row) => row.role === 'assistant' && row.interim === undefined,
+    );
+    expect(finals.map((row) => row.content)).toEqual(['ho guardato']);
+  });
+
+  it('does not promote “Ecco cosa ho trovato” and never emits an interim event', async () => {
+    const { tool, decl } = okTool('noop');
+    const progress: TurnEvent[] = [];
+    const provider = scriptedProvider({
+      stream: [
+        [{ type: 'done', result: spokenCall('Ecco cosa ho trovato') }],
+        [{ type: 'done', result: reply('Ecco cosa ho trovato: è pronto.') }],
+      ],
+    });
+    const h = harness({
+      provider,
+      tools: [tool],
+      decls: [decl],
+      onDelta: () => undefined,
+      onProgress: (event) => progress.push(event),
+    });
+
+    const result = await runRounds(h.scope);
+
+    expect(result.text).toBe('Ecco cosa ho trovato: è pronto.');
+    expect(progress.filter((event) => event.type === 'interim')).toEqual([]);
+    expect(sessionOf(h).filter((row) => row.interim !== undefined)).toEqual([]);
+  });
+
+  it.each([
+    { name: 'a Telegram group', surface: 'telegram' as const },
+    { name: 'the REPL', surface: 'cli' as const },
+  ])('promotes a qualified preamble on $name', async ({ surface }) => {
+    const { tool, decl } = okTool('noop');
+    const sent: string[] = [];
+    const progress: TurnEvent[] = [];
+    const first = spokenCall('Prima devo controllare.');
+    const last = reply('fatto');
+    const provider = scriptedProvider({
+      chat: [first, last],
+      stream: [[{ type: 'done', result: first }], [{ type: 'done', result: last }]],
+    });
+    const h = harness({
+      provider,
+      tools: [tool],
+      decls: [decl],
+      surface,
+      ...(surface === 'cli' ? { onDelta: () => undefined } : {}),
+      onProgress: (event) => progress.push(event),
+      sendInterimMessage: async (_turnId, _id, text) => {
+        sent.push(text);
+        return 'sent';
+      },
+    });
+
+    await runRounds(h.scope);
+
+    expect(progress.filter((event) => event.type === 'interim')).toEqual([
+      { type: 'interim', text: 'Prima devo controllare.', source: 'preamble' },
+    ]);
+    if (surface === 'telegram') expect(sent).toEqual(['Prima devo controllare.']);
+    else expect(sent).toEqual([]);
+  });
+
+  it('does not promote on a job or a minimal prompt', async () => {
+    const { tool, decl } = okTool('noop');
+    for (const extra of [{ jobId: 'job-1' }, { promptMode: 'minimal' as const }]) {
+      const progress: TurnEvent[] = [];
+      const sent: string[] = [];
+      const h = harness({
+        provider: scriptedProvider({
+          chat: [spokenCall('Ok, vado a guardare'), reply('fatto')],
+        }),
+        tools: [tool],
+        decls: [decl],
+        surface: 'telegram',
+        onProgress: (event) => progress.push(event),
+        sendInterimMessage: async (_turnId, _id, text) => {
+          sent.push(text);
+          return 'sent';
+        },
+        ...extra,
+      });
+      await runRounds(h.scope);
+      expect(sent).toEqual([]);
+      expect(progress.filter((event) => event.type === 'interim')).toEqual([]);
+    }
+  });
+
+  it('promotes at most one preamble per turn and skips a batch that already has work_message', async () => {
+    const { tool, decl } = okTool('noop');
+    const progress: TurnEvent[] = [];
+    const sent: string[] = [];
+    const provider = scriptedProvider({
+      chat: [
+        spokenCall('Ok, vado a guardare'),
+        spokenCall('Adesso leggo il secondo file.'),
+        {
+          text: 'Ok, aggiorno.',
+          toolCalls: [
+            { id: 'w1', name: 'work_message', args: { text: 'Ci sto lavorando' } },
+            { id: 'c1', name: 'noop', args: {} },
+          ],
+          stopReason: 'tool_use',
+          usage,
+          model: 'test',
+        },
+        reply('fine'),
+      ],
+    });
+    const h = harness({
+      provider,
+      tools: [tool],
+      decls: [decl],
+      surface: 'telegram',
+      onProgress: (event) => progress.push(event),
+      sendInterimMessage: async (_turnId, _id, text) => {
+        sent.push(text);
+        return 'sent';
+      },
+    });
+
+    await runRounds(h.scope);
+
+    expect(sent).toEqual(['Ok, vado a guardare']);
+    expect(
+      progress.filter((event) => event.type === 'interim' && event.source === 'preamble'),
+    ).toHaveLength(1);
+  });
+
+  it('does not promote when sendInterimMessage does not confirm delivery', async () => {
+    const { tool, decl } = okTool('noop');
+    const progress: TurnEvent[] = [];
+    const h = harness({
+      provider: scriptedProvider({
+        chat: [spokenCall('Ok, vado a guardare'), reply('fatto')],
+      }),
+      tools: [tool],
+      decls: [decl],
+      surface: 'telegram',
+      onProgress: (event) => progress.push(event),
+      sendInterimMessage: async () => 'deferred',
+    });
+
+    await runRounds(h.scope);
+
+    expect(progress.filter((event) => event.type === 'interim')).toEqual([]);
+    expect(sessionOf(h).filter((row) => row.interim !== undefined)).toEqual([]);
   });
 });
