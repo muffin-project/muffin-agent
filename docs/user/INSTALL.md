@@ -80,6 +80,15 @@ for, what it will do to your machine, and how to undo it.
 runtime data home and changes nothing on the machine — useful before an install
 and for scripts that need to know where things will land.
 
+## Receiving the result of background work
+
+A result of background work goes back to the conversation that asked. A request
+from the terminal (`muffin`, or `muffin run` forwarded to the gateway) cannot
+receive messages after it exits, so its result goes to your primary messaging
+surface (`surfaces.default`, set with `muffin surface default`), in your own
+paired chat there and nowhere else. If the primary surface is the terminal or
+none is connected, Muffin reports that no job was created.
+
 ## What it does, in order
 
 | Step | What ends up where |
@@ -99,6 +108,11 @@ packages and the command shim in `/usr/local/bin`; the service account and
 program are under `/var/lib/muffin`. If passwordless `sudo` is not available on
 Linux the personal installer prints the one package-manager line it cannot
 perform and continues where it safely can.
+
+Text setup for Telegram and Discord can finish before the local voice model is
+present. Muffin prepares that model on the first attachment that needs local
+transcription. That attachment may take longer while the model downloads. Run
+`muffin doctor` to see whether the local transcription tools are available.
 
 ## Linux shell containment
 

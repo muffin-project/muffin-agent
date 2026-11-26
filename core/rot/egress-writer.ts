@@ -5,12 +5,13 @@ import { paths } from '../config/config.js';
 import { tightenPrivateFile } from '../config/private-fs.js';
 import {
   EgressFileSchema,
+  type EgressPolicy,
   hostAllowed,
   isForbiddenAddress,
   loadEgress,
-  type EgressPolicy,
 } from '../net/egress.js';
-import { seal, type RotManifest } from './verify.js';
+import { backupOwnerConfigFile } from './backup.js';
+import { type RotManifest, seal } from './verify.js';
 
 /**
  * The one function that widens `rot/egress.json` for an owner-approved
@@ -175,7 +176,9 @@ function currentRotVersion(manifestFile: string): string {
   if (!existsSync(manifestFile)) return '1';
   try {
     const parsed = JSON.parse(readFileSync(manifestFile, 'utf8')) as Partial<RotManifest>;
-    return typeof parsed.rotVersion === 'string' && parsed.rotVersion !== '' ? parsed.rotVersion : '1';
+    return typeof parsed.rotVersion === 'string' && parsed.rotVersion !== ''
+      ? parsed.rotVersion
+      : '1';
   } catch {
     return '1';
   }
@@ -217,7 +220,9 @@ export async function widenEgressForCapability(
   try {
     policy = loadEgress(home);
   } catch (error) {
-    out(`non riesco a leggere l'allowlist: ${error instanceof Error ? error.message : String(error)}`);
+    out(
+      `non riesco a leggere l'allowlist: ${error instanceof Error ? error.message : String(error)}`,
+    );
     return { ok: false };
   }
 
@@ -226,17 +231,19 @@ export async function widenEgressForCapability(
 
   const elenco = mancanti.join(', ');
   const plurale = mancanti.length > 1;
-  const rimedioAMano = `aggiungi ${plurale ? elenco : `"${mancanti[0]}"`} all'array "allow" in ${egressFile}, poi \`muffin rot reseal\`.`;
+  const rimedioAMano = `aggiungi ${plurale ? elenco : `"${mancanti[0]}"`} all'array "allow" in ${egressFile} e riavvia.`;
 
   if (deps.chiediConferma === undefined) {
-    out(`${capabilityLabel} deve raggiungere ${elenco}, non ancora nell'allowlist (${egressFile}).`);
+    out(
+      `${capabilityLabel} deve raggiungere ${elenco}, non ancora nell'allowlist (${egressFile}).`,
+    );
     out(`Da qui non posso chiedere conferma — nessun terminale interattivo: ${rimedioAMano}`);
     return { ok: false };
   }
 
   const risposta = await deps.chiediConferma(
     `${capabilityLabel} deve poter raggiungere ${elenco}. ` +
-      `${plurale ? 'Li aggiungo' : "Lo aggiungo"} all'allowlist e risigillo il root of trust adesso? [s/N] `,
+      `${plurale ? 'Li aggiungo' : 'Lo aggiungo'} all'allowlist adesso? [s/N] `,
   );
   const consenso = risposta !== undefined && SI_NO.test(risposta.trim());
   if (!consenso) {
@@ -248,14 +255,18 @@ export async function widenEgressForCapability(
   try {
     egressRawPrima = readFileSync(egressFile, 'utf8');
   } catch (error) {
-    out(`${egressFile}: ${error instanceof Error ? error.message : String(error)}. ${rimedioAMano}`);
+    out(
+      `${egressFile}: ${error instanceof Error ? error.message : String(error)}. ${rimedioAMano}`,
+    );
     return { ok: false };
   }
   let raw: unknown;
   try {
     raw = JSON.parse(egressRawPrima);
   } catch (error) {
-    out(`${egressFile}: ${error instanceof Error ? error.message : String(error)}. ${rimedioAMano}`);
+    out(
+      `${egressFile}: ${error instanceof Error ? error.message : String(error)}. ${rimedioAMano}`,
+    );
     return { ok: false };
   }
   const parsed = EgressFileSchema.safeParse(raw);
@@ -271,13 +282,19 @@ export async function widenEgressForCapability(
   // boot rifiutato in hardened) anche se l'owner non ha mai visto un errore
   // che dicesse "fatto". Tenere i byte di prima e rimetterli se il sigillo
   // fallisce è l'unico modo per non lasciare quello stato a metà.
-  const manifestRawPrima = existsSync(manifestFile) ? readFileSync(manifestFile, 'utf8') : undefined;
+  const manifestRawPrima = existsSync(manifestFile)
+    ? readFileSync(manifestFile, 'utf8')
+    : undefined;
   const rotVersion = currentRotVersion(manifestFile);
 
   // Ogni altra voce (e `_comment`) resta com'era: si aggiunge, non si sostituisce.
   const next = { ...parsed.data, allow: [...parsed.data.allow, ...mancanti] };
   try {
-    writeFileSync(egressFile, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    backupOwnerConfigFile(home, egressFile);
+    writeFileSync(egressFile, `${JSON.stringify(next, null, 2)}\n`, {
+      encoding: 'utf8',
+      mode: 0o600,
+    });
     tightenPrivateFile(egressFile);
     seal(home, rotVersion, new Date());
   } catch (error) {
@@ -307,18 +324,17 @@ export async function widenEgressForCapability(
     const motivo =
       code === 'EACCES' || code === 'EPERM'
         ? `non posso scrivere in ${rotDir}: permesso negato. Se hai reso vera la modalità hardened, rifai questo ` +
-          "comando con il privilegio che serve (es. `sudo`), oppure a mano: " +
+          'comando con il privilegio che serve (es. `sudo`), oppure a mano: ' +
           rimedioAMano
         : `scrittura fallita: ${error instanceof Error ? error.message : String(error)}. ${rimedioAMano}`;
     out(
       rollbackFallito
-        ? `${motivo} E non sono riuscito a rimettere ${egressFile} e ${manifestFile} come stavano prima: verifica con ` +
-          '`muffin rot verify` — se dice che è diverso, `muffin rot reseal` a mano dopo aver controllato cosa è cambiato.'
+        ? `${motivo} E non sono riuscito a rimettere ${egressFile} e ${manifestFile} come stavano prima: controlla a mano egress.json e il backup in ~/.muffin/backups.`
         : motivo,
     );
     return { ok: false };
   }
 
-  out(`${elenco} aggiunt${plurale ? 'i' : 'o'} all'allowlist. Root of trust risigillato.`);
+  out(`${elenco} aggiunt${plurale ? 'i' : 'o'} all'allowlist.`);
   return { ok: true, added: mancanti };
 }

@@ -18,7 +18,7 @@
  * than never. Explicit zero-price contracts are different: a provider-owned
  * free router is not an unknown model, and charging it at UNKNOWN would make a
  * budget claim money was spent when the provider contract says it was not.
-  */
+ */
 
 // Type-only: the sealed shape lives in `core/rot/budgets.ts` (single reader,
 // single definition). This module takes no runtime dependency on it — the
@@ -80,6 +80,16 @@ const PRICES: [pattern: string, price: Price][] = [
   ['gemma', { inputPerMTok: 0.15, outputPerMTok: 0.6 }],
   ['glm', { inputPerMTok: 1.4, outputPerMTok: 4.4 }],
   ['deepseek', { inputPerMTok: 1.12, outputPerMTok: 3.35 }],
+  // xAI developer API, read from https://docs.x.ai/docs/models on 2026-11-25
+  // (ADR-0110). Rates for prompts under 200k tokens — Muffin's turns are far
+  // below that. Specific rows before the family row; an unlisted grok slug is
+  // charged at the family's long-context rate, the highest xAI publishes.
+  ['grok-4.7', { inputPerMTok: 2, outputPerMTok: 6, cachedInputPerMTok: 0.5 }],
+  ['grok-4.6', { inputPerMTok: 2, outputPerMTok: 6, cachedInputPerMTok: 0.5 }],
+  ['grok-4.5', { inputPerMTok: 2, outputPerMTok: 6, cachedInputPerMTok: 0.3 }],
+  ['grok-4.3', { inputPerMTok: 1.25, outputPerMTok: 2.5, cachedInputPerMTok: 0.2 }],
+  ['grok-4.20', { inputPerMTok: 1.25, outputPerMTok: 2.5, cachedInputPerMTok: 0.2 }],
+  ['grok', { inputPerMTok: 4, outputPerMTok: 12, cachedInputPerMTok: 1 }],
 ];
 
 /**
@@ -139,7 +149,13 @@ export function isUnmeteredEndpoint(
   const host = url.hostname.toLowerCase().replace(/\.$/, '');
   if (host === '') return false;
   const port =
-    url.port !== '' ? Number(url.port) : url.protocol === 'http:' ? 80 : url.protocol === 'https:' ? 443 : 0;
+    url.port !== ''
+      ? Number(url.port)
+      : url.protocol === 'http:'
+        ? 80
+        : url.protocol === 'https:'
+          ? 443
+          : 0;
   return unmetered.some((e) => e.host === host && (e.port === undefined || e.port === port));
 }
 
@@ -162,7 +178,12 @@ export type Tokens = {
 };
 
 /** Zero for a local model — not "unknown", zero, and the caller can tell. */
-export function costUsd(model: string, tokens: Tokens, baseUrl?: string, requestedModel?: string): number {
+export function costUsd(
+  model: string,
+  tokens: Tokens,
+  baseUrl?: string,
+  requestedModel?: string,
+): number {
   // An explicit free route is a billing contract, not a model-family guess:
   // it wins over whatever the response resolved to. Anything else prices the
   // served model exactly as before (#499).

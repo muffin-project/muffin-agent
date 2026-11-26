@@ -1,4 +1,5 @@
 import { ChatGPTConnection } from '../core/config/chatgpt-oauth.js';
+import { clearChainPauses } from '../core/config/provider-chain.js';
 import { openChatGPTBrowser } from './chatgpt-browser.js';
 import { cmdModel, type ModelDeps } from './model.js';
 
@@ -47,6 +48,7 @@ export async function cmdChatGPT(
         openBrowser: deps.openBrowser ?? openChatGPTBrowser,
         ...(value === '--new' ? { newProfile: true } : value ? { profileId: value } : {}),
       });
+      clearChainPauses(home, { apiKeyRef: 'secret://chatgpt' });
       out('Connection saved. Select and verify a model with `muffin chatgpt use <model>`.');
       out(`Manage plan usage and credit permissions: ${CHATGPT_USAGE_URL}`);
       return 0;
@@ -78,8 +80,30 @@ export async function cmdChatGPT(
         out(CHATGPT_USAGE);
         return 2;
       }
-      out(JSON.stringify(await connection.session()));
-      for (const profile of await connection.profiles()) out(JSON.stringify(profile));
+      const session = connection.session();
+      out(JSON.stringify(session));
+      for (const profile of connection.profiles()) out(JSON.stringify(profile));
+      if (session?.planLimited) {
+        out(
+          `ChatGPT plan usage limit reached${session.planLimitedAt === undefined ? '' : ` (last refusal ${new Date(session.planLimitedAt).toISOString()})`}. Replies fail until it resets; the next successful reply clears this.`,
+        );
+        out(`Manage usage: ${CHATGPT_USAGE_URL}`);
+        return 1;
+      }
+      if (!session?.usable && !session?.renewable) {
+        const why = session?.needsLogin
+          ? 'ChatGPT refused to refresh this session.'
+          : session?.accessExpired
+            ? 'ChatGPT access token is expired.'
+            : 'ChatGPT is not connected.';
+        out(`${why} Run \`muffin chatgpt login\`.`);
+        return 1;
+      }
+      out(
+        session.usable
+          ? 'Status shows a usable saved authorization. Run `muffin chatgpt models` to check catalog access.'
+          : 'ChatGPT will attempt to refresh the saved authorization on the next request. Run `muffin chatgpt models` to check catalog access.',
+      );
       out(`Manage usage: ${CHATGPT_USAGE_URL}`);
       return 0;
     }

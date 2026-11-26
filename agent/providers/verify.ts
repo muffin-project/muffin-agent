@@ -16,7 +16,7 @@ import {
   selectSourcedProfile,
   withThinking,
 } from '../profiles/profile.js';
-import { configuredProvider } from './configured.js';
+import { connectionProvider } from './configured.js';
 import { ReasoningConfigurationError, reasoningFromLegacyThinking } from './reasoning.js';
 import { type Provider, ProviderError } from './types.js';
 
@@ -197,7 +197,9 @@ export async function verifyInferenceRoute(
           throw new ConfigError('secret file is empty', 'write it with `muffin secret set`');
         knownSecrets.push(key);
       }
-      provider = configuredProvider(config, opts.home ?? muffinHome(), opts.fetch, lane);
+      // The lane's own connection only: a probe that a fallback answered
+      // would report a signed-out or exhausted primary as working (ADR-0110).
+      provider = connectionProvider(selectedConfig, opts.home ?? muffinHome(), opts.fetch);
     } catch (error) {
       return finish({
         status: 'misconfigured',

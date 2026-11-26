@@ -45,7 +45,11 @@ import type { ConnectorId, Principal, TenantId } from '../policy/types.js';
  * — the scheduler does, into the turn record — must never have to write
  * "consegna fallita" with no reason because the type let the producer omit one.
  */
-export type DeliveryOutcome = { delivered: true } | { delivered: false; why: string };
+export type DeliveryOutcome =
+  | { delivered: true }
+  | { delivered: false; why: string; status?: 'possibly_sent' | 'deferred' };
+
+export type DeliveryTurn = { id: string; recovered?: true };
 
 /** The successful answer, named so call sites read as sentences. */
 export const DELIVERED: DeliveryOutcome = { delivered: true };
@@ -108,7 +112,6 @@ type StreamingTransport = 'stdout' | 'edit' | 'off';
 export type StreamingCapability = {
   readonly transport: StreamingTransport;
 };
-
 
 /**
  * La stanza in cui si risponde — non la porta, e non la persona.
@@ -219,7 +222,11 @@ export const MUTA: Negotiation = {
  * `'say'`: «è pronto, sta qui». Prima del 06/09/2026 la risposta era
  * `{delivered:false}`, cioè «non te lo do e non ti dico dov'è».
  */
-export function fileModeFor(negotiation: Negotiation, limits: SurfaceLimits, bytes: number): FileMode {
+export function fileModeFor(
+  negotiation: Negotiation,
+  limits: SurfaceLimits,
+  bytes: number,
+): FileMode {
   for (const mode of negotiation.files) {
     if (mode === 'native' && bytes > limits.maxUploadBytes) continue;
     return mode;
@@ -260,39 +267,54 @@ export function assertNegotiable(surface: Surface): void {
       // qualcosa. Se domani la servirai, la promessa va scritta insieme al
       // codice che la mantiene, non prima.
       if (n.stream[0] !== 'off' || n.files[0] !== 'say') {
-        throw new Error(`${dove(place)}: non è fra le stanze dichiarate, ma la negoziazione promette ${n.stream[0]}/${n.files[0]}`);
+        throw new Error(
+          `${dove(place)}: non è fra le stanze dichiarate, ma la negoziazione promette ${n.stream[0]}/${n.files[0]}`,
+        );
       }
       continue;
     }
 
     if (n.stream.length === 0) throw new Error(`${dove(place)}: catena stream vuota`);
-    if (new Set(n.stream).size !== n.stream.length) throw new Error(`${dove(place)}: catena stream con ripetizioni`);
-    if (n.stream[n.stream.length - 1] !== 'off') throw new Error(`${dove(place)}: la catena stream non finisce con "off"`);
+    if (new Set(n.stream).size !== n.stream.length)
+      throw new Error(`${dove(place)}: catena stream con ripetizioni`);
+    if (n.stream[n.stream.length - 1] !== 'off')
+      throw new Error(`${dove(place)}: la catena stream non finisce con "off"`);
     if (n.stream.includes('draft') && place !== 'direct') {
-      throw new Error(`${dove(place)}: "draft" è un'anteprima uno-a-uno e non esiste in una stanza condivisa`);
+      throw new Error(
+        `${dove(place)}: "draft" è un'anteprima uno-a-uno e non esiste in una stanza condivisa`,
+      );
     }
     if (n.stream.includes('stdout') && place !== 'terminal') {
       throw new Error(`${dove(place)}: "stdout" è lo stream di un terminale, non di una chat`);
     }
     if (n.stream.includes('draft') && n.draftTtlMs <= 0) {
-      throw new Error(`${dove(place)}: dichiara "draft" senza draftTtlMs, quindi senza sapere quando rinnovarlo`);
+      throw new Error(
+        `${dove(place)}: dichiara "draft" senza draftTtlMs, quindi senza sapere quando rinnovarlo`,
+      );
     }
     if (n.stream.includes('edit')) {
       if (n.editEveryMs <= 0) throw new Error(`${dove(place)}: dichiara "edit" senza editEveryMs`);
-      if (n.maxEditsPerMinute <= 0) throw new Error(`${dove(place)}: dichiara "edit" senza maxEditsPerMinute`);
+      if (n.maxEditsPerMinute <= 0)
+        throw new Error(`${dove(place)}: dichiara "edit" senza maxEditsPerMinute`);
       // I due limiti devono poter coesistere: un pavimento di 1 s con un
       // tetto di 120 al minuto è un tetto che non esiste, e uno dei due
       // numeri sarebbe decorazione.
       if (n.maxEditsPerMinute > Math.floor(60_000 / n.editEveryMs)) {
-        throw new Error(`${dove(place)}: maxEditsPerMinute=${n.maxEditsPerMinute} è oltre quanto editEveryMs=${n.editEveryMs} lascia passare in un minuto`);
+        throw new Error(
+          `${dove(place)}: maxEditsPerMinute=${n.maxEditsPerMinute} è oltre quanto editEveryMs=${n.editEveryMs} lascia passare in un minuto`,
+        );
       }
     }
 
     if (n.files.length === 0) throw new Error(`${dove(place)}: catena files vuota`);
-    if (new Set(n.files).size !== n.files.length) throw new Error(`${dove(place)}: catena files con ripetizioni`);
-    if (n.files[n.files.length - 1] !== 'say') throw new Error(`${dove(place)}: la catena files non finisce con "say"`);
+    if (new Set(n.files).size !== n.files.length)
+      throw new Error(`${dove(place)}: catena files con ripetizioni`);
+    if (n.files[n.files.length - 1] !== 'say')
+      throw new Error(`${dove(place)}: la catena files non finisce con "say"`);
     if (n.files.includes('native') && !(surface.limits.maxUploadBytes > 0)) {
-      throw new Error(`${dove(place)}: dichiara "native" ma maxUploadBytes è ${surface.limits.maxUploadBytes}`);
+      throw new Error(
+        `${dove(place)}: dichiara "native" ma maxUploadBytes è ${surface.limits.maxUploadBytes}`,
+      );
     }
   }
 
@@ -372,7 +394,7 @@ export interface Surface {
    * catches it into a `{ delivered: false }` rather than letting it escape into
    * a caller that was promised a value.
    */
-  deliver(channel: string, text: string): Promise<DeliveryOutcome>;
+  deliver(channel: string, text: string, turn?: DeliveryTurn): Promise<DeliveryOutcome>;
 
   /**
    * Send a file to a channel this surface `handles` — DAY-1 requirement B14, "un file

@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -520,6 +520,56 @@ describe('muffin model', () => {
     expect(out.join(' ')).toContain('--key-ref');
   });
 
+  it.each([
+    [401, true],
+    [403, false],
+    [503, false],
+  ])(
+    'suggests ChatGPT login for catalog HTTP %i only when authentication failed',
+    async (status, authenticationFailed) => {
+      const h = home();
+      try {
+        writeFileSync(
+          join(h, 'secrets', 'chatgpt'),
+          JSON.stringify({
+            version: 1,
+            hostId: 'synthetic-host',
+            activeProfileId: 'p',
+            profiles: [
+              {
+                id: 'p',
+                clientId: 'synthetic-client',
+                subject: 'synthetic-subject',
+                tokens: {
+                  accessToken: 'access',
+                  refreshToken: 'refresh',
+                  tokenType: 'Bearer',
+                  scopes: ['chatgpt.tokens.use.direct', 'offline_access', 'resource.invoke'],
+                  expiresAt: Date.now() + 3600_000,
+                  pendingIdentity: false,
+                },
+              },
+            ],
+          }),
+          { mode: 0o600 },
+        );
+        const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status }));
+        const output: string[] = [];
+        expect(
+          await cmdModel(h, ['--list', '--provider', 'chatgpt'], {
+            out: (line) => output.push(line),
+            chatgpt: new ChatGPTConnection(h, { fetch }),
+          }),
+        ).toBe(1);
+        expect(fetch).toHaveBeenCalledWith('https://api.openai.com/v1/models', expect.anything());
+        expect(output.join('\n').includes('muffin chatgpt login')).toBe(authenticationFailed);
+        if (!authenticationFailed) expect(output).toEqual(['ChatGPT connection failed']);
+      } finally {
+        rmSync(h, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('signs in to ChatGPT from the terminal menu before listing and verifying a model', async () => {
     const h = home();
     const before = loadConfig(h);
@@ -528,6 +578,11 @@ describe('muffin model', () => {
     vi.spyOn(connection, 'signIn').mockResolvedValue({
       profileId: 'synthetic-profile',
       connected: true,
+      usable: true,
+      renewable: true,
+      accessExpired: false,
+      needsLogin: false,
+      planLimited: false,
       scopes: ['chatgpt.tokens.use.direct'],
     });
     vi.spyOn(connection, 'listModels').mockResolvedValue([
@@ -672,6 +727,124 @@ describe('muffin model', () => {
     expect(c.embedder?.model).toBe('text-embedding-3-small');
     expect(c.embedder?.dimensions).toBe(1536);
     expect(out.join('\n')).toContain('1536');
+  });
+
+  it('switches only the embedding lane to the OpenAI API after a synthetic probe', async () => {
+    const h = home();
+    const before = {
+      ...loadConfig(h),
+      embedder: { kind: 'ollama' as const, model: 'qwen3-embedding:0.6b', dimensions: 1024 },
+    };
+    saveConfig(before, h);
+    writeSecret('openai_api_key', 'sk-embedding-fake', h, 'home');
+    const fetch = vi.fn(async () =>
+      Response.json({ data: [{ embedding: Array.from({ length: 1536 }, () => 0.125) }] }),
+    );
+    vi.stubGlobal('fetch', fetch);
+    try {
+      const { sink } = raccogli();
+      expect(await cmdModel(h, ['embed', '--openai'], { out: sink })).toBe(0);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledWith(
+        'https://api.openai.com/v1/embeddings',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({ authorization: 'Bearer sk-embedding-fake' }),
+          body: JSON.stringify({ model: 'text-embedding-3-small', input: ['muffin'] }),
+        }),
+      );
+      expect(loadConfig(h)).toEqual({
+        ...before,
+        embedder: {
+          kind: 'openai-compat',
+          model: 'text-embedding-3-small',
+          dimensions: 1536,
+          apiKeyRef: 'secret://openai_api_key',
+        },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('turns embedding off without a probe and restores the saved route on demand', async () => {
+    const h = home();
+    const endpoint = await embeddingEndpoint(4);
+    try {
+      const embedder = {
+        kind: 'ollama' as const,
+        model: 'fixture-embedding',
+        dimensions: 4,
+        baseUrl: endpoint.baseUrl,
+        fallback: { kind: 'ollama' as const, model: 'fixture-fallback', dimensions: 4 },
+      };
+      const config = { ...loadConfig(h), embedder };
+      saveConfig(config, h);
+
+      const { sink } = raccogli();
+      expect(await cmdModel(h, ['embed', 'off'], { out: sink })).toBe(0);
+      expect(loadConfig(h)).toEqual({ ...config, embedder: { ...embedder, enabled: false } });
+      expect(endpoint.requests).toEqual([]);
+
+      const status = raccogli();
+      expect(await cmdModel(h, [], { out: status.sink })).toBe(0);
+      expect(status.out.join('\n')).toMatch(/embed +off/);
+      expect(await cmdModel(h, ['embed', 'on'], { out: sink })).toBe(0);
+      expect(loadConfig(h)).toEqual({ ...config, embedder: { ...embedder, enabled: true } });
+      expect(endpoint.requests).toEqual([
+        {
+          path: '/api/embeddings',
+          body: { model: 'fixture-embedding', prompt: 'muffin' },
+        },
+      ]);
+    } finally {
+      await endpoint.close();
+    }
+  });
+
+  it('preserves a disabled embedder when reactivating it fails', async () => {
+    const h = home();
+    const { sink } = raccogli();
+    const probe = vi.fn(async () => 1024);
+    expect(await cmdModel(h, ['embed', 'off'], { out: sink, probe })).toBe(0);
+    expect(probe).not.toHaveBeenCalled();
+    const disabled = loadConfig(h);
+    expect(disabled.embedder?.enabled).toBe(false);
+    expect(
+      await cmdModel(h, ['embed', 'on'], {
+        out: sink,
+        probe: async () => {
+          throw new Error('embedder endpoint unavailable');
+        },
+      }),
+    ).toBe(1);
+    expect(loadConfig(h)).toEqual(disabled);
+    expect(await cmdModel(h, ['embed', 'replacement'], { out: sink, probe: async () => 16 })).toBe(
+      0,
+    );
+    expect(loadConfig(h).embedder).toMatchObject({
+      enabled: true,
+      model: 'replacement',
+      dimensions: 16,
+    });
+  });
+
+  it('keeps the existing embedder when OpenAI refuses the synthetic probe', async () => {
+    const h = home();
+    const before = loadConfig(h);
+    writeSecret('openai_api_key', 'sk-embedding-fake', h, 'home');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(null, { status: 401 })),
+    );
+    try {
+      const { out, sink } = raccogli();
+      expect(await cmdModel(h, ['embed', '--openai'], { out: sink })).toBe(1);
+      expect(out.join('\n')).toContain('HTTP 401');
+      expect(loadConfig(h)).toEqual(before);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('probes the Ollama model dimensions without a fake expected size', async () => {

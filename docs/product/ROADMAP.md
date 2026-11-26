@@ -1,13 +1,14 @@
 # Roadmap
 
-This document owns one question only:
+This document owns two questions:
+
+> **What does each product version include, exclude, and accept as done?**
 
 > **If a capability or architectural idea is deliberately not required now, in which product phase should it be reconsidered?**
 
-It does **not** own implementation status, DAY-1 truth, architecture or sequencing of current work.
+It does **not** own live status, DAY-1 row classification, architecture, or the SHA of current work. Version membership and progress are GitHub milestones and issues. This file holds the reasoning and the exit criteria. A dated note below is a snapshot; `scripts/agent/repo-state.mjs` is the current SHA.
 
-- Selected initiatives and their live work status (Now / Next / Later / Exploring) are the
-  [Muffin roadmap project](https://github.com/orgs/muffin-project/projects/2).
+- The [Muffin roadmap project](https://github.com/orgs/muffin-project/projects/2) is the existing board (Now / Next / Later / Exploring). Version status belongs on that board, grouped by milestone. Do not create a second project. The version issues were added to it on 2026-11-21; a roadmap view grouped by the Milestone field is still to be created in the project UI.
 - DAY-1 status belongs to `docs/status/day1/requirements-status.md`.
 - Remaining DAY-1 order belongs to `docs/status/day1/critical-path.md`.
 - Current work belongs to observed Git/GitHub state.
@@ -33,6 +34,125 @@ post-MVP product & hardware
     ↓
 research only / consumer-triggered
 ```
+
+The phase list is when a deferred idea is reconsidered. The version train below is what the product is committed to build, in order. v0 is the start of the fourteen-day dogfood, not the completion of those days. v1 and later are not a feature sprint to finish before the owner starts using Muffin. Dogfood may pull a later version forward only when a repeated, observed failure is the reason.
+
+## Version train
+
+Versions name general capabilities: talk, remember, wake, execute on a computer, connect to a service, reuse a method, change this repository, stay with an open loop. A home-lab task, a calendar, or a named model provider is a scene or a configuration, not a version of its own. Use cases show up when the capability exists. Owner decision, 2026-11-21: a Muffin app catalogue is not part of this train.
+
+Capabilities already on `dev` are not re-specified here. The exit is an observation, and a fixture PASS is not a live PASS.
+
+**Snapshot, 2026-11-20.** `dev` had merged the ChatGPT reconnect notice (#963) and conversational one-shot arming (#964). #937 was still open: the last witnessed owner install was behind that `dev`, the token endpoint had returned `invalid_grant`, and the Telegram turn delivered nothing. The reconnect path was proven with fixtures only. #939 was fixed on `dev` and still open for the installed retest. #934, the draft for the short-turn cost, was open and behind `dev`.
+
+**Peers, used to place capabilities, not to copy products.** ChatGPT Dot keeps a continuous personal responsibility and asks to reconnect an expired connection ([Dot](https://help.openai.com/en/articles/20001530-getting-started-with-your-dot), as used for #963). Claude Duet separates conversation, background work, results and decisions ([Duet](https://support.claude.com/en/articles/17631495-get-started-with-claude-duet)). Grok Bot saves a skill only after a task has worked, and a routine is a separate decision about when that work runs; a missing source is reported instead of reused as if it were current ([skills and routines](https://docs.x.ai/grok-bot/skills-routines-and-automations), page dated 2026-11-13). Hermes builds one system prompt per session and loads skills as documents (`docs/evidence/divergenza-per-connector-nei-peer.md`); useful automation there does not require a second agent loop (`docs/evidence/automation-605-acceptance-2026-10-07.md`).
+
+**Milestones.** Each version has one GitHub milestone, titled as its heading, with that version's Objective and Exit as the description and no due date: none of these exits is a calendar promise. They were created on 2026-11-21 and the issues named under each version were assigned to them. Do not invent a parallel label scheme.
+
+### v0 Daily use can start
+
+**Objective.** The owner can install the reviewed candidate and start the fourteen days.
+
+**In.** The daily path on the installed candidate (#937). Truthful recovery read-back after that path (#939, sub-issue of #937). Proof of the existing capability families, not new ones (#874), including an authorized tool the cap currently hides (#469, sub-issue of #874). A short turn that does not pay for a second pass, and a new home that uses the machine timezone (#967, sub-issue of #942). #942 itself stays the latency measurement; #967 does not retune recall.
+
+**Out.** New providers, guest mode, Node or remote write, self-modification, new cognitive mechanisms, the home lab as a project, and every removal in [#972](https://github.com/muffin-project/muffin-agent/issues/972). Completing the fourteen days is #938, on the existing MVP milestone, and is not this exit.
+
+**Exit.** #937 records integrated SHA, installed SHA, schema and inference pins. On that install one real Telegram turn gets one reply, or one visible reconnect notice if the provider refuses the token. `muffin gateway turn` for that turn does not repeat an older answer. The #874 journeys the gate needs are PASS or an explicit gap. #967's fixture falsifier passes; a live free-router upstream remains NOT_RUN until an authorized key is used.
+
+**Depends on.** The owner's choice to install the candidate, and a fresh ChatGPT consent if the token is still refused. Those are owner acts recorded on #937, not new issues.
+
+**Risk.** Fixture proof of #963 and #964 being treated as the installed system. The gate stays open until the install is the candidate.
+
+### v1 Work continues without the conversation
+
+**Objective.** One delegated job survives the conversation, takes a correction, and finishes once.
+
+**In.** One durable unattended goal through the existing loop, policy and effect journal (#598). #964 is a merged slice of that claim, not the exit. Deterministic routines that wake the model only when the check finds something (#605).
+
+**Out.** A second scheduler or agent loop. Named services. Self-modification. Building the home lab.
+
+**Exit.** A job armed in conversation is still armed after a restart, produces one external effect and one result, and a later correction binds to that job. A routine whose check finds nothing does not call the main model.
+
+**Depends on.** v0 for the live scene. Fixture work on #598 does not wait for the install.
+
+**Risk.** Treating the one-shot slice as the whole of #598.
+
+### v2 A computer and its connections
+
+**Objective.** Operational work runs on a declared computer, and a connection the work needs is visibly usable, needs consent, or failed. The home lab is the proof scene, not a module.
+
+**In.** Computer and browser execution as Work, not new core plumbing (#853), with the browser spike limited to the existing MCP lane (#873, sub-issue of #853). The connection state as a general fact (#968). #963 remains the ChatGPT instance of "failed".
+
+**Out.** A package or tool named after a household device or a single vendor. Guest mode. Writes on a machine other than the Home before the [#972](https://github.com/muffin-project/muffin-agent/issues/972) D3 approval is implemented.
+
+**Exit.** One real infrastructure change is done with shell and files on the machine that should run it, including when the request arrived on Telegram. A connection that job needs is shown in one of the three states, and the failed state does not look healthy and then stay silent. Removing the shared reporting path fails the fixture.
+
+**Depends on.** v1 if the job runs unattended. The D3 per-effect approval, implemented, before any non-Home write.
+
+**Risk.** A tainted Telegram turn reaching another computer's disk. That risk is why D3 blocks the write.
+
+### v3 A procedure learned from verified work
+
+**Objective.** A method that already worked can be reused, and a correction replaces the contradicted part.
+
+**In.** One record of a checked job: when it applies, the steps, how the result is checked, what needs approval, and whether the owner stated the step or Muffin inferred it (#969).
+
+**Out.** Plugin ingestion and a public catalog (#672). Scheduling, which stays #605. Grok's order is skill, then routine; Muffin already has the wake, so the routine is v1 and the learned method attaches in v3. That is deliberate, not a missing copy of Grok.
+
+**Exit.** After a checked job, a reuse request runs the record; a correction is what the next run follows; removing the record makes the reuse an ordinary turn.
+
+**Depends on.** v1 having a job worth learning. A computer scene from v2 is useful and not required for the fixture.
+
+**Risk.** Accumulating contradictory instructions, which is the failure the exit is written to catch.
+
+### v4 Muffin can change Muffin
+
+**Objective.** Muffin proposes, tests, and opens a change to this repository through the gates any other change uses.
+
+**In.** Bounded coding Work (#668) whose first proof is one pull request to muffin-agent (#970, sub-issue of #668). The required checks are the repository ruleset. A CRITICAL claim still needs an independent MERGE verdict.
+
+**Out.** Self-merge of a CRITICAL claim, weakening branch protection, and authority, privacy, or durable-data changes. Governed edits to persona (#667) are a different act and are not part of v4.
+
+**Exit.** One pull request from a Muffin run, with profile and falsifier written down, and the required checks green. Owner decision D4, 2026-11-21: Muffin may merge that pull request to `dev` when those checks are green and the profile is not CRITICAL. `main`, a CRITICAL claim, and any change to authority, privacy, or the owner's durable data stay with the owner. Since 2026-11-25 CRITICAL merges to `dev` are owned by Muffin Coder under the same gates (see D4, amended).
+
+**Depends on.** v2 for a computer that can edit and test the tree. Not on a GitHub-named product tool.
+
+**Risk.** A change to policy that reviews itself. D4 exists so that case stays with the owner.
+
+### v5 Continuous presence
+
+**Objective.** Open loops stay visible, and Muffin speaks only for a concrete reason.
+
+**In.** An open commitment that survives a restart and a quiet interval (#971). One report when something specific changed. No main-model call on a timer.
+
+**Out.** Proactive group chat, pendant hardware, and multi-home replication. Those remain in the phase list below.
+
+**Exit.** On a build with v1 wakes: a quiet interval after restart does not call the main model on a timer; one concrete change produces one report. A fixture may compress the interval. A live quiet day stays NOT_RUN until the owner is in the window.
+
+**Depends on.** v1. Multi-body placement stays a dogfood question, not a v5 feature.
+
+**Risk.** Notification fatigue. Elapsed time is not a reason to interrupt; a heartbeat fails the exit.
+
+### Decisions from the owner, 2026-11-21
+
+[#972](https://github.com/muffin-project/muffin-agent/issues/972) collected these. This section is the record. Nothing here was applied by being written, except where a decision says the implementation is authorized.
+
+**D1, decided.** `WORK_RULES_V2` is the single operating text. v1 does not state what to do on failure, uncertainty, or when to stop; v2 does, and those rules are the ones the assembler cites as measured. No character eval shows that v2 is the better voice, so there is no V3 written up front: v2 changes only with evidence from the fourteen-day owner window, each change carried by an eval that shows it. Making v2 the only operating text in `agent/context/assemble.ts` follows from this decision and was not yet done when it was recorded.
+
+**D2, decided.** The numeric tool cap is not the design. Authorized, installed tools are reached by selective load: a small core stays visible, and the rest load when the task needs them. An authorized tool is not dropped because of registration order or a count. #469 is that reachability. The October challenge already rejected raising the count and rejected dumping every schema into every turn.
+
+**D3, decided.** A Telegram message must not gain a write on another computer as a side effect. A write on a paired computer requested from Telegram needs an owner approval of that single effect, showing machine, path, action and provenance (the ingress taint). It never becomes a standing grant; a different path or action asks again. No such write is enabled yet. Proof, when implemented: a tainted fixture is denied until that approval exists, and removing the check fails the fixture.
+
+**D4, decided.** Muffin may merge to `dev` when the required checks are green and the verification profile is not CRITICAL. `main`, a CRITICAL claim, and changes to authority, privacy, or the owner's durable data stay with the owner.
+
+**D4, amended 2026-11-25.** The owner delegated every merge to `dev`, CRITICAL included, to Muffin Coder, the orchestrator of this repository. Each merge still needs all required checks green on the exact head and an independent review with no verified blocker. A CRITICAL review is posted on the pull request as a summary of findings. No merge bypasses checks, branch protection or reviews. `main`, and changes to the owner's durable data outside a merged pull request, stay with the owner.
+
+**D5, decided.** #914, #915, #924 and #925 are not in this train. They were closed on 2026-11-21 with a pointer back here and to #972.
+
+**D6, decided 2026-11-25.** The data-tier seal ceremony is retired (ADR-0108). Owner-editable `rot/` files keep real safety through the code-tier kernel, the runtime deny of `rot.write`, backups, and per-effect approval for changes the agent proposes. Hash manifests, `muffin rot reseal`, and safe mode (or a refused boot) because a file drifted from a hash are no longer the mechanism. The code-tier root of trust, the effect journal, and owner approval remain.
+
+
+## Phase placement
 
 ### DAY-1 READY
 
@@ -599,4 +719,4 @@ or explicit owner decision
 
 When an item becomes DAY-1 relevant, add/reclassify it in the DAY-1 requirements. When it becomes active work, observed Git/GitHub own execution state. When its semantic shape changes, update Architecture/Security or write/supersede an ADR.
 
-This file never says that something is implemented merely because its phase has arrived.
+This file never says that something is implemented merely because its phase has arrived. A version is done when its milestone's issues meet the exit written above, not when this file is edited to say so.

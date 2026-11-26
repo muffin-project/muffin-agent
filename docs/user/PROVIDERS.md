@@ -24,7 +24,9 @@ lanes that already use that provider.
 
 Anthropic is a Console API key, including Max, Ultra, and Team API credits.
 Muffin does not start a claude.ai or Claude Code login and does not read
-`~/.claude`. xAI/Grok OAuth is not part of this client.
+`~/.claude`. xAI/Grok connects with a console.x.ai API key, billed per token
+(`muffin secret set xai_api_key`); a SuperGrok or X Premium subscription login
+is not part of this client (ADR-0110).
 
 The key is saved before the capability probe. The probe uses the same
 inference check as `muffin doctor --online`. Muffin reports the route as
@@ -71,6 +73,69 @@ opts into model probes, which may consume provider quota or API credit.
 Model catalogs are availability evidence. Generic endpoints may accept models
 absent from their catalog; selections reported as unverified require an online
 probe or a real turn. ChatGPT selection verifies its actual model route first.
-Muffin never switches to another paid provider automatically. ChatGPT-plan usage
-is managed in [ChatGPT Settings](https://chatgpt.com/settings/usage), separately
-from Muffin's API-dollar estimates.
+Muffin never switches to another paid provider unless you listed it as a
+fallback. ChatGPT-plan usage is managed in
+[ChatGPT Settings](https://chatgpt.com/settings/usage), separately from Muffin's
+API-dollar estimates.
+
+## Fallbacks
+
+Each lane can list up to four fallbacks, tried in order when the lane's own
+connection is out of quota, signed out, rate limited or down (ADR-0110). Errors
+caused by the request itself, including a moderation or guardrail block (a bare
+403), never move to another provider and never pause a link.
+
+```sh
+muffin fallback                                  # chains, active link, pauses
+muffin fallback add xai grok-4.7                 # main lane, second link
+muffin fallback add openrouter openrouter/free   # third link
+muffin fallback add openrouter some/model --account work --light
+muffin fallback remove xai                       # or by position: remove 3
+muffin fallback reset                            # lift every pause now
+```
+
+A paused link is retried first when the provider's declared reset time (or a
+short default) passes, or right away when you save a new key or sign in again
+for it (or run `muffin fallback reset`). `muffin doctor` shows which link
+answered last and why the lane's own connection is paused.
+Spending on a fallback counts against the same budget caps.
+
+## Embedding selection
+
+Run `muffin model embed off` and restart the gateway to pause embedding
+requests and use full-text memory search. The stored vectors and selected
+embedding route are kept. To resume, run `muffin model embed on` and restart
+the gateway after its test succeeds. Selecting a model explicitly also
+activates embeddings after verification. `muffin doctor` reports the configured
+mode.
+
+To use the OpenAI API as your embedding provider:
+
+```sh
+muffin secret set openai_api_key
+muffin model embed --openai
+muffin gateway restart
+muffin doctor
+```
+
+Use a platform API key issued by OpenAI. This selects `text-embedding-3-small`
+for embeddings. The command sends one synthetic input to verify the key and
+measure vector dimensions before saving. After restarting, Muffin sends memory
+text for indexing and semantic search queries to the OpenAI API. The local
+database keeps its source text and rebuilds vectors for the new model as
+consolidation runs. API usage is charged to the key's API organization, including
+any eligible [subscription API credits](https://help.openai.com/en/articles/20001626).
+
+## Web search
+
+With ChatGPT selected as the main provider, run `muffin search chatgpt` once to
+authorize web search using that connection. Review the network permission if
+prompted, then restart the gateway. The ordinary plan connection does not enable
+search by itself. `muffin doctor` checks the local setup. An actual search depends on
+the model and ChatGPT account's eligibility and uses the connected plan's quota.
+
+Muffin sends the searched phrase to ChatGPT in a separate request. It returns
+source links to the turn and uses Muffin's usual web reader to open them.
+An existing Tavily or Keenable selection stays in place until you change it.
+`muffin search off` disables search without disconnecting ChatGPT. Use it before
+rolling back to a build that cannot read the ChatGPT search setting.

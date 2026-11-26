@@ -1,13 +1,18 @@
-import DatabaseCtor from 'better-sqlite3';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, it } from 'vitest';
-import { install, until, type Install } from '../harness.js';
-import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
-import { callbackQuery, privateMessage, startFakeTelegram, type FakeTelegram } from '../telegram.js';
-import { scenario } from '../scenario.js';
+import DatabaseCtor from 'better-sqlite3';
+import { describe, expect, it } from 'vitest';
 import { MemoryStore } from '../../../core/memory/store.js';
+import { type Install, install, until } from '../harness.js';
 import { shellNonDisponibileQui } from '../sandbox-host.js';
+import { scenario } from '../scenario.js';
+import {
+  callbackQuery,
+  type FakeTelegram,
+  privateMessage,
+  startFakeTelegram,
+} from '../telegram.js';
+import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
 
 /**
  * B/D · Four DAY-1 rows, all BLOCKER for the same reason: the mechanism is in
@@ -85,7 +90,8 @@ async function pairOwner(inst: Install, tg: FakeTelegram, ownerId: number): Prom
   const tok = await inst.muffin(['secret', 'set', 'telegram_token'], '123456:fake-journey-token');
   if (tok.code !== 0) throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
   const enable = await inst.muffin(['surface', 'enable', 'telegram', '--api-base', tg.url]);
-  if (enable.code !== 0) throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
+  if (enable.code !== 0)
+    throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
   const code = /\n\s{6}([A-Z0-9-]{4,})\n/.exec(enable.err)?.[1];
   if (!code) throw new Error(`nessun codice di pairing stampato:\n${enable.err}`);
 
@@ -178,7 +184,9 @@ describe('acceptance · B1 telegram · un fatto detto su Telegram torna a un `ru
       try {
         const gw = await pairOwner(inst, tg, OWNER_ID);
         try {
-          tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'il mio animale preferito è il tasso'));
+          tg.deliver(
+            privateMessage({ id: OWNER_ID, name: 'Owner' }, 'il mio animale preferito è il tasso'),
+          );
           await until(() => tg.messages().some((m) => m.text.includes('tasso')), 20_000);
 
           // The construction claim, checked directly rather than inferred:
@@ -187,16 +195,22 @@ describe('acceptance · B1 telegram · un fatto detto su Telegram torna a un `ru
           // — never a literal written in the connector (ADR-0056).
           const turnRow = inst.db(
             (db) =>
-              db.prepare(`SELECT session_id, tenant, surface FROM turns ORDER BY created_at DESC LIMIT 1`).get() as
-                | { session_id: string; tenant: string; surface: string }
-                | undefined,
+              db
+                .prepare(
+                  `SELECT session_id, tenant, surface FROM turns ORDER BY created_at DESC LIMIT 1`,
+                )
+                .get() as { session_id: string; tenant: string; surface: string } | undefined,
           );
           if (!turnRow) throw new Error('nessun turno dopo il messaggio Telegram');
           if (turnRow.session_id !== 'owner') {
-            throw new Error(`session_id atteso "owner", trovato ${JSON.stringify(turnRow.session_id)}`);
+            throw new Error(
+              `session_id atteso "owner", trovato ${JSON.stringify(turnRow.session_id)}`,
+            );
           }
           if (turnRow.tenant !== 'host' || turnRow.surface !== 'telegram') {
-            throw new Error(`tenant/surface inattesi sul turno Telegram: ${JSON.stringify(turnRow)}`);
+            throw new Error(
+              `tenant/surface inattesi sul turno Telegram: ${JSON.stringify(turnRow)}`,
+            );
           }
         } finally {
           await gw.stop();
@@ -208,8 +222,14 @@ describe('acceptance · B1 telegram · un fatto detto su Telegram torna a un `ru
         // tenant's memory. Dopo ADR-0056 è **questa** la porta che isola, ed è
         // isolata di proposito: `--session owner` sarebbe la scelta esplicita
         // di entrare nella conversazione.
-        const second = await inst.muffin(['run', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'qual è il mio animale preferito?']);
-        if (second.code !== 0) throw new Error(`secondo processo CLI: exit ${second.code}\n${second.err}`);
+        const second = await inst.muffin([
+          'run',
+          '--timeout',
+          String(HEADLESS_TURN_TIMEOUT_SECONDS),
+          'qual è il mio animale preferito?',
+        ]);
+        if (second.code !== 0)
+          throw new Error(`secondo processo CLI: exit ${second.code}\n${second.err}`);
         const sent = inst.provider.main().at(-1);
         if (!sent) throw new Error('il secondo processo CLI non ha mai chiamato il modello');
 
@@ -218,7 +238,8 @@ describe('acceptance · B1 telegram · un fatto detto su Telegram torna a un `ru
         // wire messages — the same shape `b-continuity.accept.ts`'s B1 checks
         // for the CLI-only case, checked here for its absence instead.
         const literalTelegramTurn = sent.messages.find(
-          (m) => m.role === 'assistant' && typeof m.content === 'string' && m.content.includes('tasso'),
+          (m) =>
+            m.role === 'assistant' && typeof m.content === 'string' && m.content.includes('tasso'),
         );
         if (literalTelegramTurn) {
           throw new Error(
@@ -229,7 +250,9 @@ describe('acceptance · B1 telegram · un fatto detto su Telegram torna a un `ru
         // And yet the fact crossed the boundary — through tenant-scoped
         // memory, never through the session.
         if (!sent.transcript.includes('tasso')) {
-          throw new Error(`il fatto detto su Telegram non è arrivato al secondo processo CLI via memoria:\n${sent.transcript}`);
+          throw new Error(
+            `il fatto detto su Telegram non è arrivato al secondo processo CLI via memoria:\n${sent.transcript}`,
+          );
         }
       } finally {
         await inst.cleanup();
@@ -280,7 +303,9 @@ describe('acceptance · B13 · la trascrizione del turno su Telegram', () => {
       try {
         const gw = await pairOwner(inst, tg, OWNER_ID);
         try {
-          tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'fammi un resoconto dei miei appunti'));
+          tg.deliver(
+            privateMessage({ id: OWNER_ID, name: 'Owner' }, 'fammi un resoconto dei miei appunti'),
+          );
           // The answer now lands as an edit, not a fresh `sendMessage` —
           // `tg.messages()` only ever sees genuinely new messages
           // (`evals/acceptance/telegram.ts`'s own contract), so this scenario
@@ -291,7 +316,10 @@ describe('acceptance · B13 · la trascrizione del turno su Telegram', () => {
                 .sent()
                 .some(
                   (c) =>
-                    (c.method === 'sendMessage' || c.method === 'editMessageText' || c.method === 'editMessageRichText' || c.method === 'sendRichMessage') &&
+                    (c.method === 'sendMessage' ||
+                      c.method === 'editMessageText' ||
+                      c.method === 'editMessageRichText' ||
+                      c.method === 'sendRichMessage') &&
                     testoDi(c).includes('niente di nuovo da ieri a oggi'),
                 ),
             30_000,
@@ -302,21 +330,27 @@ describe('acceptance · B13 · la trascrizione del turno su Telegram', () => {
           // a fresh rich send whose `details` block collapses the process.
           const sent = tg.sent();
           const drafts = sent.filter((c) => c.method === 'sendMessageDraft');
-          if (!drafts.some((c) => testoDi(c).includes('cerco in memoria'))) {
-            throw new Error(`la bozza non ha mai mostrato i passi:\n${JSON.stringify(drafts, null, 2)}`);
-          }
+          expect(drafts.map(testoDi).join('\n')).toContain('sto lavorando');
+          expect(drafts.every((c) => c.payload['can_stop'] === true)).toBe(true);
+          expect(JSON.stringify(drafts)).not.toMatch(/Processo|appunti di ieri|appunti di oggi/);
 
           // Exactly two durable creates in the whole scenario: the pairing
           // confirmation plus the turn's one final message.
-          const allCreates = sent.filter((c) => c.method === 'sendMessage' || c.method === 'sendRichMessage');
+          const allCreates = sent.filter(
+            (c) => c.method === 'sendMessage' || c.method === 'sendRichMessage',
+          );
           if (allCreates.length !== 2) {
             throw new Error(
               `attesi esattamente 2 sendMessage in tutto lo scenario (pairing + risposta), trovati ${allCreates.length}:\n` +
                 JSON.stringify(allCreates, null, 2),
             );
           }
-          if (sent.some((c) => c.method === 'editMessageText' || c.method === 'editMessageRichText')) {
-            throw new Error(`un edit persistente su questo turno — in DM il processo non è mai un messaggio:\n${JSON.stringify(sent, null, 2)}`);
+          if (
+            sent.some((c) => c.method === 'editMessageText' || c.method === 'editMessageRichText')
+          ) {
+            throw new Error(
+              `un edit persistente su questo turno — in DM il processo non è mai un messaggio:\n${JSON.stringify(sent, null, 2)}`,
+            );
           }
           if (sent.some((c) => c.method === 'deleteMessage')) {
             throw new Error(`qualcosa è stato cancellato:\n${JSON.stringify(sent, null, 2)}`);
@@ -324,28 +358,18 @@ describe('acceptance · B13 · la trascrizione del turno su Telegram', () => {
 
           const finaleCall = allCreates.find(
             (c) =>
-              (c.payload['rich_message'] as { blocks?: Block[] } | undefined)?.blocks !== undefined &&
-              testoDi(c).includes('niente di nuovo da ieri a oggi'),
+              (c.payload['rich_message'] as { blocks?: Block[] } | undefined)?.blocks !==
+                undefined && testoDi(c).includes('niente di nuovo da ieri a oggi'),
           );
           if (finaleCall === undefined) {
-            throw new Error(`la risposta non è arrivata come un solo messaggio a blocchi:\n${JSON.stringify(allCreates, null, 2)}`);
+            throw new Error(
+              `la risposta non è arrivata come un solo messaggio a blocchi:\n${JSON.stringify(allCreates, null, 2)}`,
+            );
           }
-          const blocks = (finaleCall.payload['rich_message'] as { blocks?: Block[] } | undefined)?.blocks ?? [];
-          const details = blocks.find((b) => b.type === 'details');
-          if (details === undefined || details.summary !== 'Processo') {
-            throw new Error(`manca il blocco details del processo:\n${JSON.stringify(blocks, null, 2)}`);
-          }
-          const processText = JSON.stringify(details.blocks);
-          if (!processText.includes('cerco in memoria: appunti di ieri') || !processText.includes('cerco in memoria: appunti di oggi')) {
-            throw new Error(`il details non tiene entrambi i passi:\n${processText}`);
-          }
-          if (/⏳|· \d+s/.test(processText)) {
-            throw new Error(`il processo finale ha ancora un contatore vivo:\n${processText}`);
-          }
-          const answerText = JSON.stringify(blocks.filter((b) => b.type !== 'details'));
-          if (!answerText.includes('niente di nuovo da ieri a oggi')) {
-            throw new Error(`la risposta non è fuori dal details:\n${answerText}`);
-          }
+          const blocks =
+            (finaleCall.payload['rich_message'] as { blocks?: Block[] } | undefined)?.blocks ?? [];
+          expect(blocks.some((b) => b.type === 'details')).toBe(false);
+          expect(JSON.stringify(blocks)).not.toMatch(/Processo|appunti di ieri|appunti di oggi|⏳/);
         } finally {
           await gw.stop();
         }
@@ -387,7 +411,9 @@ describe('acceptance · B14 · un allegato reale su Telegram', () => {
 
         const gw = await pairOwner(inst, tg, OWNER_ID);
         try {
-          tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'mandami il report.txt come allegato'));
+          tg.deliver(
+            privateMessage({ id: OWNER_ID, name: 'Owner' }, 'mandami il report.txt come allegato'),
+          );
           // The text answer follows a tool call (`send_file`), so it lands as
           // an edit of that tool's own transcript message, not a fresh
           // `sendMessage` (B13's merge, `connector.ts#deliverTo`) — wait on
@@ -398,7 +424,10 @@ describe('acceptance · B14 · un allegato reale su Telegram', () => {
                 .sent()
                 .some(
                   (c) =>
-                    (c.method === 'sendMessage' || c.method === 'editMessageText' || c.method === 'editMessageRichText' || c.method === 'sendRichMessage') &&
+                    (c.method === 'sendMessage' ||
+                      c.method === 'editMessageText' ||
+                      c.method === 'editMessageRichText' ||
+                      c.method === 'sendRichMessage') &&
                     testoDi(c).includes("l'ho mandato come allegato"),
                 ),
             30_000,
@@ -406,21 +435,34 @@ describe('acceptance · B14 · un allegato reale su Telegram', () => {
 
           const docs = tg.documents();
           if (docs.length !== 1) {
-            throw new Error(`atteso esattamente 1 sendDocument, trovati ${docs.length}: ${JSON.stringify(tg.sent(), null, 2)}`);
+            throw new Error(
+              `atteso esattamente 1 sendDocument, trovati ${docs.length}: ${JSON.stringify(tg.sent(), null, 2)}`,
+            );
           }
           const doc = docs[0]!;
-          if (doc.chatId !== OWNER_ID) throw new Error(`sendDocument sulla chat sbagliata: ${JSON.stringify(doc)}`);
-          if (doc.filename !== 'report.txt') throw new Error(`filename atteso "report.txt", trovato ${JSON.stringify(doc.filename)}`);
+          if (doc.chatId !== OWNER_ID)
+            throw new Error(`sendDocument sulla chat sbagliata: ${JSON.stringify(doc)}`);
+          if (doc.filename !== 'report.txt')
+            throw new Error(
+              `filename atteso "report.txt", trovato ${JSON.stringify(doc.filename)}`,
+            );
           if (doc.bytes !== expectedBytes) {
-            throw new Error(`byte attesi ${expectedBytes}, arrivati ${doc.bytes} — il file non è arrivato per intero`);
+            throw new Error(
+              `byte attesi ${expectedBytes}, arrivati ${doc.bytes} — il file non è arrivato per intero`,
+            );
           }
-          if (doc.caption !== 'ecco il report') throw new Error(`caption attesa "ecco il report", trovata ${JSON.stringify(doc.caption)}`);
+          if (doc.caption !== 'ecco il report')
+            throw new Error(
+              `caption attesa "ecco il report", trovata ${JSON.stringify(doc.caption)}`,
+            );
 
           // And the durable record agrees: the tool itself reported success,
           // never "inviato" on a delivery that failed (`deliver.ts`'s own point).
           const turnRow = inst.db(
             (db) =>
-              db.prepare(`SELECT messages FROM turns ORDER BY created_at DESC LIMIT 1`).get() as { messages: string } | undefined,
+              db.prepare(`SELECT messages FROM turns ORDER BY created_at DESC LIMIT 1`).get() as
+                | { messages: string }
+                | undefined,
           );
           if (!turnRow || !turnRow.messages.includes('inviato: report.txt')) {
             throw new Error(`il turno non registra "inviato: report.txt": ${turnRow?.messages}`);
@@ -456,14 +498,14 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
       const inst = await install({
         main: [
           { tool: { name: 'memory_search', args: { query: 'nota interna' } } },
-          { tool: { name: 'shell_run_write', args: { command: 'echo ciao', cwd: '.', description: 'stampa la parola ciao' } } },
-          // The same call again: a resumed turn re-asks the model, and the
-          // model is scripted here to retry exactly the call it made before
-          // suspending (`cli/surface.ts#approvatoreTelegram`'s own docstring:
-          // "il turno si sospende qui e riprende da solo quando arriva la
-          // risposta" — the retry is real production behaviour, not a test
-          // artefact).
-          { tool: { name: 'shell_run_write', args: { command: 'echo ciao', cwd: '.', description: 'stampa la parola ciao' } } },
+          {
+            tool: {
+              name: 'shell_run_write',
+              args: { command: 'echo ciao', cwd: '.', description: 'stampa la parola ciao' },
+            },
+          },
+          // The runtime applies the saved command on consent. The model can
+          // report its result in its next request without issuing it again.
           { text: 'fatto, il comando ha risposto ciao' },
         ],
         env: { MUFFIN_GATEWAY_TICK_MS: '200' },
@@ -477,62 +519,92 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
 
         const gw = await pairOwner(inst, tg, OWNER_ID);
         try {
-          tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'leggi le mie note e poi esegui echo ciao'));
+          tg.deliver(
+            privateMessage(
+              { id: OWNER_ID, name: 'Owner' },
+              'leggi le mie note e poi esegui echo ciao',
+            ),
+          );
 
           // The ASK: the turn's own message, with an inline keyboard —
           // distinct from the pairing confirmation already in `tg.sent()`.
           // Dal 2026-09-29 la domanda vive sul messaggio del turno (la
           // tastiera non sta su una bozza effimera), non su una bolla a parte.
           await until(
-            () => tg.sent().some((c) => c.method === 'sendMessage' && c.payload['reply_markup'] !== undefined),
+            () =>
+              tg
+                .sent()
+                .some((c) => c.method === 'sendMessage' && c.payload['reply_markup'] !== undefined),
             20_000,
           );
-          const askCall = tg.sent().find((c) => c.method === 'sendMessage' && c.payload['reply_markup'] !== undefined);
+          const askCall = tg
+            .sent()
+            .find((c) => c.method === 'sendMessage' && c.payload['reply_markup'] !== undefined);
           if (!askCall) throw new Error('nessun messaggio ASK con tastiera trovato');
           const askText = testoDi(askCall);
-          if (!askText.includes('sys.shell.write')) throw new Error(`l'ASK non nomina la capability:\n${askText}`);
+          if (!askText.includes('sys.shell.write'))
+            throw new Error(`l'ASK non nomina la capability:\n${askText}`);
           if (!askText.includes('command: echo ciao') || !askText.includes('cwd: .')) {
             throw new Error(`l'ASK non mostra comando e cwd insieme:\n${askText}`);
           }
           // 03/09: the model's own account of the command, above it — and
           // never *inside* the argument line, where it would read as a
           // parameter of the command rather than a sentence about it.
-          if (!askText.includes('stampa la parola ciao')) throw new Error(`l'ASK non mostra cosa fa il comando:\n${askText}`);
-          if (askText.includes('description:')) throw new Error(`la description è finita fra gli argomenti:\n${askText}`);
-          if (!askText.includes('taint 2')) throw new Error(`l'ASK non mostra il taint del turno:\n${askText}`);
+          if (!askText.includes('stampa la parola ciao'))
+            throw new Error(`l'ASK non mostra cosa fa il comando:\n${askText}`);
+          if (askText.includes('description:'))
+            throw new Error(`la description è finita fra gli argomenti:\n${askText}`);
+          if (!askText.includes('taint 2'))
+            throw new Error(`l'ASK non mostra il taint del turno:\n${askText}`);
           const askMessageId = askCall.messageId;
-          if (askMessageId === undefined) throw new Error('il messaggio ASK non ha un id registrato');
+          if (askMessageId === undefined)
+            throw new Error('il messaggio ASK non ha un id registrato');
 
-          type Keyboard = { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+          type Keyboard = {
+            inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+          };
           const keyboard = askCall.payload['reply_markup'] as Keyboard;
-          const okButton = keyboard.inline_keyboard.flat().find((b) => b.callback_data.startsWith('ok:'));
-          if (!okButton) throw new Error(`nessun pulsante "ok:" nella tastiera:\n${JSON.stringify(keyboard)}`);
+          const okButton = keyboard.inline_keyboard
+            .flat()
+            .find((b) => b.callback_data.startsWith('ok:'));
+          if (!okButton)
+            throw new Error(`nessun pulsante "ok:" nella tastiera:\n${JSON.stringify(keyboard)}`);
           const approvalId = okButton.callback_data.slice('ok:'.length);
 
           // === the negative first: an impostor's press decides nothing =====
           tg.deliver(
-            callbackQuery(
-              { id: IMPOSTOR_ID, name: 'Impostore' },
-              `ok:${approvalId}`,
-              { messageId: askMessageId, chatId: OWNER_ID, text: askText },
-            ),
+            callbackQuery({ id: IMPOSTOR_ID, name: 'Impostore' }, `ok:${approvalId}`, {
+              messageId: askMessageId,
+              chatId: OWNER_ID,
+              text: askText,
+            }),
           );
           // No durable signal an impostor's press *should* move — poll a fixed
           // window instead of a condition, then check the row never moved.
           await new Promise((r) => setTimeout(r, 1_500));
           const afterImpostor = inst.db(
             (db) =>
-              db.prepare(`SELECT decision, consumed_at FROM approvals WHERE id = ?`).get(approvalId) as
+              db
+                .prepare(`SELECT decision, consumed_at FROM approvals WHERE id = ?`)
+                .get(approvalId) as
                 | { decision: string | null; consumed_at: string | null }
                 | undefined,
           );
           if (!afterImpostor) throw new Error(`nessuna riga approvals per ${approvalId}`);
           if (afterImpostor.decision !== null) {
-            throw new Error(`il click dell'impostore ha deciso l'approvazione: ${JSON.stringify(afterImpostor)}`);
+            throw new Error(
+              `il click dell'impostore ha deciso l'approvazione: ${JSON.stringify(afterImpostor)}`,
+            );
           }
 
           // === now the owner's press ========================================
-          tg.deliver(callbackQuery({ id: OWNER_ID, name: 'Owner' }, `ok:${approvalId}`, { messageId: askMessageId, chatId: OWNER_ID, text: askText }));
+          tg.deliver(
+            callbackQuery({ id: OWNER_ID, name: 'Owner' }, `ok:${approvalId}`, {
+              messageId: askMessageId,
+              chatId: OWNER_ID,
+              text: askText,
+            }),
+          );
 
           // The resumed turn's answer follows a tool call, so it joins that
           // tool's own transcript message as an edit (B13's merge,
@@ -544,7 +616,10 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
                 .sent()
                 .some(
                   (c) =>
-                    (c.method === 'sendMessage' || c.method === 'editMessageText' || c.method === 'editMessageRichText' || c.method === 'sendRichMessage') &&
+                    (c.method === 'sendMessage' ||
+                      c.method === 'editMessageText' ||
+                      c.method === 'editMessageRichText' ||
+                      c.method === 'sendRichMessage') &&
                     testoDi(c).includes('ha risposto ciao'),
                 ),
             30_000,
@@ -552,13 +627,36 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
 
           const finalRow = inst.db(
             (db) =>
-              db.prepare(`SELECT decision, consumed_at FROM approvals WHERE id = ?`).get(approvalId) as
+              db
+                .prepare(`SELECT decision, consumed_at FROM approvals WHERE id = ?`)
+                .get(approvalId) as
                 | { decision: string | null; consumed_at: string | null }
                 | undefined,
           );
-          if (!finalRow) throw new Error(`nessuna riga approvals per ${approvalId} dopo l'approvazione`);
-          if (finalRow.decision !== 'allow') throw new Error(`decision attesa "allow", trovata ${JSON.stringify(finalRow.decision)}`);
-          if (finalRow.consumed_at === null) throw new Error('la riga approvals non risulta mai consumata dopo la ripresa del turno');
+          if (!finalRow)
+            throw new Error(`nessuna riga approvals per ${approvalId} dopo l'approvazione`);
+          if (finalRow.decision !== 'allow')
+            throw new Error(
+              `decision attesa "allow", trovata ${JSON.stringify(finalRow.decision)}`,
+            );
+          if (finalRow.consumed_at === null)
+            throw new Error(
+              'la riga approvals non risulta mai consumata dopo la ripresa del turno',
+            );
+          const shellResults = inst.db((db) =>
+            db
+              .prepare(
+                "SELECT is_error, content FROM turn_tool_calls WHERE tool = 'shell_run_write'",
+              )
+              .all(),
+          ) as Array<{ is_error: number; content: string }>;
+          if (
+            shellResults.length !== 1 ||
+            shellResults[0]?.is_error !== 0 ||
+            !shellResults[0].content.includes('\nciao\n')
+          ) {
+            throw new Error('the approved shell did not record exactly one successful output');
+          }
 
           // The button press itself got answered (`answerCallbackQuery`) —
           // the client is never left with a spinner.
@@ -583,17 +681,28 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
           // `reply_markup` (§4.4 della memo).
           const tastieraTolta = tg
             .sent()
-            .find((c) => c.method === 'editMessageReplyMarkup' && Number(c.payload['message_id']) === askMessageId);
+            .find(
+              (c) =>
+                c.method === 'editMessageReplyMarkup' &&
+                Number(c.payload['message_id']) === askMessageId,
+            );
           if (!tastieraTolta) {
-            throw new Error('nessun editMessageReplyMarkup esplicito sul messaggio ASK dopo la decisione');
+            throw new Error(
+              'nessun editMessageReplyMarkup esplicito sul messaggio ASK dopo la decisione',
+            );
           }
           const tastieraVuota = tastieraTolta.payload['reply_markup'] as Keyboard | undefined;
-          if (!Array.isArray(tastieraVuota?.inline_keyboard) || tastieraVuota.inline_keyboard.length !== 0) {
-            throw new Error(`reply_markup non è una tastiera esplicitamente vuota: ${JSON.stringify(tastieraTolta.payload)}`);
+          if (
+            !Array.isArray(tastieraVuota?.inline_keyboard) ||
+            tastieraVuota.inline_keyboard.length !== 0
+          ) {
+            throw new Error(
+              `reply_markup non è una tastiera esplicitamente vuota: ${JSON.stringify(tastieraTolta.payload)}`,
+            );
           }
 
           // (b) La domanda è un passo del turno: il processo del turno ripreso
-          // — la riga di attesa risolta e il tool rieseguito — arriva
+          // — la riga di attesa risolta e il tool eseguito — arriva
           // collassato nel `details` dello **stesso** messaggio che portava la
           // tastiera. Nessuna riga di attesa congelata, nessuna seconda bolla:
           // il verdetto è nello stesso vocabolario di ogni altro passo
@@ -607,7 +716,8 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
                   c.method === 'sendRichMessage' ||
                   c.method === 'editMessageText' ||
                   c.method === 'editMessageRichText') &&
-                (c.payload['rich_message'] as { blocks?: Block[] } | undefined)?.blocks !== undefined &&
+                (c.payload['rich_message'] as { blocks?: Block[] } | undefined)?.blocks !==
+                  undefined &&
                 testoDi(c).includes('ha risposto ciao'),
             );
           if (finalCall === undefined) {
@@ -619,7 +729,9 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
                     messageId: c.messageId,
                     payloadMessageId: c.payload['message_id'],
                     hasAnswer: testoDi(c).includes('ha risposto ciao'),
-                    hasBlocks: (c.payload['rich_message'] as { blocks?: unknown } | undefined)?.blocks !== undefined,
+                    hasBlocks:
+                      (c.payload['rich_message'] as { blocks?: unknown } | undefined)?.blocks !==
+                      undefined,
                     keys: Object.keys(c.payload),
                   })),
                   null,
@@ -633,9 +745,11 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
                 `ask=${askMessageId} final=${JSON.stringify(finalCall.payload['message_id'] ?? finalCall.messageId)}`,
             );
           }
-          const blocks = (finalCall.payload['rich_message'] as { blocks?: Block[] } | undefined)?.blocks ?? [];
+          const blocks =
+            (finalCall.payload['rich_message'] as { blocks?: Block[] } | undefined)?.blocks ?? [];
           const details = blocks.find((b) => b.type === 'details');
-          if (details === undefined) throw new Error('manca il blocco details del processo');
+          expect(details?.summary).toBe('Approvazioni');
+          if (details === undefined) throw new Error('missing approval receipt');
           const processText = JSON.stringify(details.blocks);
           if (processText.includes('aspetto la tua approvazione')) {
             throw new Error(`la riga di attesa resta congelata a turno concluso:\n${processText}`);
@@ -643,14 +757,9 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
           if (!processText.includes('sys.shell.write: consentito')) {
             throw new Error(`il verdetto non compare, risolto, nel processo:\n${processText}`);
           }
-          // E il tool rieseguito dopo la ripresa è nello stesso processo, a
-          // riprova che `resumeStream` ha riusato la trascrizione tenuta
-          // aperta invece di aprirne una fresca.
-          if (!processText.includes('eseguo un comando: echo ciao')) {
-            throw new Error(
-              `il passo del tool rieseguito dopo l'approvazione non è nel processo:\n${processText}`,
-            );
-          }
+          expect(processText).toContain('echo ciao');
+          expect(processText).not.toContain('eseguo un comando:');
+          expect(JSON.stringify(blocks[0])).toContain('ha risposto ciao');
           // (c) La risposta finale è fuori dal `details`, e in un solo
           // messaggio: quello della domanda, editato.
           const answerText = JSON.stringify(blocks.filter((b) => b.type !== 'details'));
@@ -670,7 +779,9 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
           // Più edit dello stesso messaggio vanno bene — è lo streaming che si
           // posa e poi la consegna che lo ripiega. Ciò che non deve esistere è
           // un **secondo** messaggio con la risposta.
-          const idDellaRisposta = new Set(risposte.map((c) => Number(c.payload['message_id'] ?? c.messageId)));
+          const idDellaRisposta = new Set(
+            risposte.map((c) => Number(c.payload['message_id'] ?? c.messageId)),
+          );
           if (idDellaRisposta.size !== 1 || !idDellaRisposta.has(askMessageId)) {
             throw new Error(
               `la risposta ha toccato messaggi diversi da quello della domanda: ${JSON.stringify([...idDellaRisposta])} vs ask=${askMessageId}`,
@@ -696,113 +807,171 @@ describe('acceptance · #746 · una seconda approvazione in un turno ripreso res
    * seconda domanda perde la tastiera alla sospensione e il click non risolve
    * più niente: l'`until` sulla seconda domanda o sulla risposta finale scade.
    *
-   * Il turno: due comandi diversi, quindi due approvazioni reali. La prima
-   * sospende il turno fresco; il click lo riprende; il modello chiede il
-   * secondo comando; la lane finalizza l'AttachStream sull'esito sospeso; la
+   * A workspace read raises taint before the two URL reads. The model-chosen
+   * paths require approval and the loopback target is rejected before the
+   * network request. D12 separately covers shell output.
+   *
+   * La prima sospende il turno fresco; il click lo riprende; il modello chiede
+   * la seconda lettura; la lane finalizza l'AttachStream sull'esito sospeso; la
    * domanda deve restare sullo **stesso messaggio** con la tastiera viva, e il
    * secondo click deve chiudere il turno.
    */
-  it(
-    '#746 doppia approvazione: la seconda domanda vive sullo stesso messaggio, la tastiera sopravvive alla sospensione, il turno riprende e chiude',
-    async () => {
-      const tg = await startFakeTelegram();
-      const inst = await install({
-        main: [
-          { tool: { name: 'shell_run_write', args: { command: 'echo primo', cwd: '.', description: 'primo comando' } } },
-          { tool: { name: 'shell_run_write', args: { command: 'echo secondo', cwd: '.', description: 'secondo comando' } } },
-          { text: 'fatto, entrambi i comandi hanno risposto' },
-        ],
-        env: { MUFFIN_GATEWAY_TICK_MS: '200' },
-      });
+  it('#746 doppia approvazione: la seconda domanda vive sullo stesso messaggio, la tastiera sopravvive alla sospensione, il turno riprende e chiude', async () => {
+    const tg = await startFakeTelegram();
+    const firstRead = {
+      tool: { name: 'http_get', args: { url: 'http://127.0.0.1:1/first-approval' } },
+    };
+    const secondRead = {
+      tool: { name: 'http_get', args: { url: 'http://127.0.0.1:1/second-approval' } },
+    };
+    const inst = await install({
+      main: [
+        { tool: { name: 'fs_read', args: { path: 'resources.txt' } } },
+        firstRead,
+        firstRead,
+        secondRead,
+        secondRead,
+        { text: 'entrambe le letture sono terminate' },
+      ],
+      env: { MUFFIN_GATEWAY_TICK_MS: '200' },
+    });
+    try {
+      writeFileSync(join(inst.workspace, 'resources.txt'), 'Synthetic research notes.', 'utf8');
+      const gw = await pairOwner(inst, tg, OWNER_ID);
       try {
-        plantTier2Episode(inst.home, 'fixture-746');
-        const gw = await pairOwner(inst, tg, OWNER_ID);
+        type Tastiera = { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+        const tastieraViva = (c: { payload: Record<string, unknown> }): boolean => {
+          const kb = (c.payload['reply_markup'] as Tastiera | undefined)?.inline_keyboard;
+          return Array.isArray(kb) && kb.length > 0;
+        };
+        const idDi = (c: {
+          messageId?: number;
+          payload: Record<string, unknown>;
+        }): number | undefined =>
+          typeof c.payload['message_id'] === 'number'
+            ? (c.payload['message_id'] as number)
+            : c.messageId;
+        const ultimaDomanda = () =>
+          tg
+            .sent()
+            .filter((c) => tastieraViva(c) && testoDi(c).includes('⚠'))
+            .at(-1);
+        const okDi = (c: { payload: Record<string, unknown> }): string => {
+          const bottoni = ((c.payload['reply_markup'] as Tastiera).inline_keyboard ?? []).flat();
+          const ok = bottoni.find((b) => b.callback_data.startsWith('ok:'));
+          if (!ok)
+            throw new Error(`nessun pulsante ok: ${JSON.stringify(c.payload['reply_markup'])}`);
+          return ok.callback_data;
+        };
+
+        tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'controlla le due risorse'));
+
+        await until(
+          () =>
+            ultimaDomanda() !== undefined && testoDi(ultimaDomanda()!).includes('first-approval'),
+          20_000,
+        );
+        const prima = ultimaDomanda()!;
+        const messaggio = prima.messageId;
+        if (messaggio === undefined) throw new Error('la prima domanda non ha un id di messaggio');
+        tg.deliver(
+          callbackQuery({ id: OWNER_ID, name: 'Owner' }, okDi(prima), {
+            messageId: messaggio,
+            chatId: OWNER_ID,
+            text: testoDi(prima),
+          }),
+        );
+
+        // Seconda domanda: risorsa diversa, nuova approvazione, e deve vivere
+        // sullo stesso messaggio del turno.
         try {
-          type Tastiera = { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
-          const tastieraViva = (c: { payload: Record<string, unknown> }): boolean => {
-            const kb = (c.payload['reply_markup'] as Tastiera | undefined)?.inline_keyboard;
-            return Array.isArray(kb) && kb.length > 0;
-          };
-          const idDi = (c: { messageId?: number; payload: Record<string, unknown> }): number | undefined =>
-            typeof c.payload['message_id'] === 'number' ? (c.payload['message_id'] as number) : c.messageId;
-          const ultimaDomanda = () => tg.sent().filter((c) => tastieraViva(c) && testoDi(c).includes('⚠')).at(-1);
-          const okDi = (c: { payload: Record<string, unknown> }): string => {
-            const bottoni = ((c.payload['reply_markup'] as Tastiera).inline_keyboard ?? []).flat();
-            const ok = bottoni.find((b) => b.callback_data.startsWith('ok:'));
-            if (!ok) throw new Error(`nessun pulsante ok: ${JSON.stringify(c.payload['reply_markup'])}`);
-            return ok.callback_data;
-          };
-
-          tg.deliver(privateMessage({ id: OWNER_ID, name: 'Owner' }, 'esegui due comandi'));
-
-          // Prima domanda: il comando è `echo primo`.
-          await until(() => ultimaDomanda() !== undefined && testoDi(ultimaDomanda()!).includes('echo primo'), 20_000);
-          const prima = ultimaDomanda()!;
-          const messaggio = prima.messageId;
-          if (messaggio === undefined) throw new Error('la prima domanda non ha un id di messaggio');
-          tg.deliver(callbackQuery({ id: OWNER_ID, name: 'Owner' }, okDi(prima), { messageId: messaggio, chatId: OWNER_ID, text: testoDi(prima) }));
-
-          // Seconda domanda: comando diverso, nuova approvazione, e deve vivere
-          // sullo stesso messaggio del turno.
-          try {
-            await until(() => {
-              const ultima = ultimaDomanda();
-              return ultima !== undefined && idDi(ultima) === messaggio && testoDi(ultima).includes('echo secondo');
-            }, 30_000);
-          } catch (error) {
-            const righe = inst.db((db) => db.prepare('SELECT id, capability, resource, decision, consumed_at FROM approvals ORDER BY asked_at').all());
-            throw new Error(
-              `${error instanceof Error ? error.message : String(error)}\n` +
-                `approvals: ${JSON.stringify(righe)}\n` +
-                JSON.stringify(
-                  tg.sent().map((c) => ({
-                    method: c.method,
-                    messageId: c.messageId,
-                    payloadMessageId: c.payload['message_id'],
-                    tastiera: tastieraViva(c),
-                    kb: tastieraViva(c) ? JSON.stringify(c.payload['reply_markup']) : undefined,
-                    text: testoDi(c).slice(0, 160),
-                  })),
-                  null,
-                  2,
-                ),
+          await until(() => {
+            const ultima = ultimaDomanda();
+            return (
+              ultima !== undefined &&
+              idDi(ultima) === messaggio &&
+              testoDi(ultima).includes('second-approval')
             );
-          }
-          const seconda = ultimaDomanda()!;
-
-          // La sospensione non deve aver tolto la tastiera: nessuna rimozione
-          // esplicita dopo la seconda domanda, prima del click.
-          const daSeconda = tg.sent().slice(tg.sent().indexOf(seconda));
-          const rimozioni = daSeconda.filter(
-            (c) => c.method === 'editMessageReplyMarkup' && Number(c.payload['message_id']) === messaggio,
+          }, 30_000);
+        } catch (error) {
+          const righe = inst.db((db) =>
+            db
+              .prepare(
+                'SELECT id, capability, resource, decision, consumed_at FROM approvals ORDER BY asked_at',
+              )
+              .all(),
           );
-          if (rimozioni.length !== 0) {
-            throw new Error(`la tastiera della seconda domanda è stata tolta durante la sospensione: ${JSON.stringify(rimozioni)}`);
-          }
-
-          // Il secondo click risolve lo stesso passo e il turno chiude con la
-          // risposta, sullo stesso messaggio.
-          tg.deliver(callbackQuery({ id: OWNER_ID, name: 'Owner' }, okDi(seconda), { messageId: messaggio, chatId: OWNER_ID, text: testoDi(seconda) }));
-          await until(
-            () =>
-              tg
-                .sent()
-                .some(
-                  (c) =>
-                    (c.method === 'editMessageText' || c.method === 'editMessageRichText' || c.method === 'sendMessage') &&
-                    Number(c.payload['message_id'] ?? c.messageId) === messaggio &&
-                    testoDi(c).includes('entrambi i comandi hanno risposto'),
-                ),
-            30_000,
+          throw new Error(
+            `${error instanceof Error ? error.message : String(error)}\n` +
+              `approvals: ${JSON.stringify(righe)}\n` +
+              JSON.stringify(
+                tg.sent().map((c) => ({
+                  method: c.method,
+                  messageId: c.messageId,
+                  payloadMessageId: c.payload['message_id'],
+                  tastiera: tastieraViva(c),
+                  kb: tastieraViva(c) ? JSON.stringify(c.payload['reply_markup']) : undefined,
+                  text: testoDi(c).slice(0, 160),
+                })),
+                null,
+                2,
+              ),
           );
-        } finally {
-          await gw.stop();
         }
+        const seconda = ultimaDomanda()!;
+        expect(okDi(seconda)).not.toBe(okDi(prima));
+
+        // La sospensione non deve aver tolto la tastiera: nessuna rimozione
+        // esplicita dopo la seconda domanda, prima del click.
+        const daSeconda = tg.sent().slice(tg.sent().indexOf(seconda));
+        const rimozioni = daSeconda.filter(
+          (c) =>
+            c.method === 'editMessageReplyMarkup' && Number(c.payload['message_id']) === messaggio,
+        );
+        if (rimozioni.length !== 0) {
+          throw new Error(
+            `la tastiera della seconda domanda è stata tolta durante la sospensione: ${JSON.stringify(rimozioni)}`,
+          );
+        }
+
+        // Il secondo click risolve lo stesso passo e il turno chiude con la
+        // risposta, sullo stesso messaggio.
+        tg.deliver(
+          callbackQuery({ id: OWNER_ID, name: 'Owner' }, okDi(seconda), {
+            messageId: messaggio,
+            chatId: OWNER_ID,
+            text: testoDi(seconda),
+          }),
+        );
+        await until(
+          () =>
+            tg
+              .sent()
+              .some(
+                (c) =>
+                  (c.method === 'editMessageText' ||
+                    c.method === 'editMessageRichText' ||
+                    c.method === 'sendMessage') &&
+                  Number(c.payload['message_id'] ?? c.messageId) === messaggio &&
+                  testoDi(c).includes('entrambe le letture sono terminate'),
+              ),
+          30_000,
+        );
+        expect(
+          inst.db((db) =>
+            db
+              .prepare(
+                "SELECT count(*) AS n FROM approvals WHERE capability = 'sys.http' AND decision = 'allow' AND consumed_at IS NOT NULL",
+              )
+              .get(),
+          ),
+        ).toEqual({ n: 2 });
       } finally {
-        await inst.cleanup();
-        await tg.close();
+        await gw.stop();
       }
-    },
-    120_000,
-  );
+    } finally {
+      await inst.cleanup();
+      await tg.close();
+    }
+  }, 120_000);
 });

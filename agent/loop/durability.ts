@@ -10,6 +10,8 @@ import type {
 import type { TodoItem } from '../../core/turns/todo.js';
 import { encodeWaitFor, type WaitSpec } from '../../core/turns/wait.js';
 import type { ContentBlock, Message } from '../providers/types.js';
+import { isWorkQuestion, WORK_MESSAGE_TOOL_NAME } from '../tools/work-message.js';
+import { resumeApprovedInvocations } from './approval-resume.js';
 import { harnessMessage, toolMessage } from './message-origin.js';
 import { harnessMessages, providerMessages } from './provider-checkpoint.js';
 import type { TurnRun } from './run-state.js';
@@ -220,7 +222,14 @@ export function suspendHere(scope: TurnScope, spec: WaitSpec): TurnResult {
     [ATTR.stopReason]: 'suspended',
     [ATTR.turnIteration]: run.iterations,
     'muffin.turn.wake_at': spec.wakeAt,
-    ...(spec.waitFor === null ? {} : { 'muffin.turn.wait_for': encodeWaitFor(spec.waitFor) }),
+    ...(spec.waitFor === null
+      ? {}
+      : {
+          'muffin.turn.wait_for':
+            spec.waitFor.kind === 'owner_reply'
+              ? `owner_reply:${spec.waitFor.id}`
+              : encodeWaitFor(spec.waitFor),
+        }),
   });
   turn.end({ status: 'ok' });
   // No `announceEnd`: the memory lane is told when a turn *ends*, and this
@@ -286,6 +295,7 @@ export async function reconcile(scope: TurnScope): Promise<TurnResult | null> {
     toolContext,
     turn,
   } = scope;
+  const approved = await resumeApprovedInvocations(scope);
   const last = run.messages[run.messages.length - 1];
   if (last === undefined || last.role !== 'assistant') return null;
   const pending = last.content.filter(
@@ -298,9 +308,19 @@ export async function reconcile(scope: TurnScope): Promise<TurnResult | null> {
   const repaired: ContentBlock[] = [];
   turn.setAttributes({ 'muffin.turn.reconciled': pending.length });
 
-  for (const block of pending) {
+  for (const [index, block] of pending.entries()) {
+    const approvedResult = approved.get(block.id);
+    if (approvedResult !== undefined) {
+      repaired.push(approvedResult);
+      continue;
+    }
     const done = recorded.get(block.id);
     if (done !== undefined) {
+      // A recorded tool result with an unanswered tool_use is not a committed
+      // owner wait: suspend writes both the result transcript and the barrier.
+      // This process died between them. Never publish or claim that it waited.
+      const interruptedQuestion =
+        !done.isError && block.name === WORK_MESSAGE_TOOL_NAME && isWorkQuestion(block.input);
       // The taint the recorded result carried has to come back with it: this
       // is the same "the two facts must not land apart" the outcome write
       // enforces in a transaction.
@@ -309,8 +329,10 @@ export async function reconcile(scope: TurnScope): Promise<TurnResult | null> {
       repaired.push({
         type: 'tool_result',
         toolCallId: block.id,
-        content: done.content,
-        ...(done.isError ? { isError: true } : {}),
+        content: interruptedQuestion
+          ? 'The turn was interrupted before it could wait. The question was not sent. Continue without waiting.'
+          : done.content,
+        ...(done.isError || interruptedQuestion ? { isError: true } : {}),
       });
       continue;
     }
@@ -334,7 +356,12 @@ export async function reconcile(scope: TurnScope): Promise<TurnResult | null> {
     // is written again — `ON CONFLICT DO NOTHING` absorbs the second write.
     try {
       const call = { id: block.id, name: block.name, args: block.input };
-      const outcome = await runTool(deps, snapshot, turn, call, input, exposed, toolContext);
+      const outcome = await runTool(deps, snapshot, turn, call, input, exposed, toolContext, {
+        record,
+        run,
+        size: pending.length,
+        index,
+      });
       repaired.push(outcome);
       noteSensitiveResourceEcho(call, outcome);
     } catch (error) {
@@ -359,6 +386,9 @@ export async function reconcile(scope: TurnScope): Promise<TurnResult | null> {
   // are `tool_result`s the transcript owes the next provider call, not words
   // anyone spoke.
   run.messages.push(toolMessage(repaired));
+  // Keep the recovered question's transcript and barrier in one fenced write,
+  // just like a fresh question. Do not checkpoint the result before the wait.
+  if (run.barrier?.waitFor?.kind === 'owner_reply') return suspendHere(scope, run.barrier);
   return checkpoint(scope) ? null : finish(scope, 'error', '');
 }
 

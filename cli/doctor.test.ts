@@ -57,6 +57,74 @@ import { runInit } from './init.js';
  * default install, and the owner has no other way to learn which one answered.
  */
 
+it.each([
+  { refreshToken: 'refresh', level: 'ok', detail: 'will attempt to refresh', remedy: undefined },
+  { refreshToken: '', level: 'fail', detail: 'expired', remedy: 'muffin chatgpt login' },
+  // A valid token on an exhausted plan is not a usable model.
+  {
+    refreshToken: 'refresh',
+    level: 'fail',
+    detail: 'Plan usage limit reached',
+    remedy: 'check https://chatgpt.com/settings/usage',
+    planLimited: true,
+  },
+])(
+  'ChatGPT doctor reports an expired or limited session with a $level result',
+  async ({ refreshToken, level, detail, remedy, ...limit }) => {
+    const planLimited = 'planLimited' in limit && limit.planLimited === true;
+    const dir = home();
+    const config = loadConfig(dir);
+    saveConfig(
+      {
+        ...config,
+        provider: {
+          kind: 'openai-chatgpt',
+          baseUrl: 'https://api.openai.com/v1',
+          apiKeyRef: 'secret://chatgpt',
+        },
+      },
+      dir,
+    );
+    const file = join(dir, 'secrets', 'chatgpt');
+    writeFileSync(
+      file,
+      `${JSON.stringify({
+        version: 1,
+        hostId: 'urn:uuid:00000000-0000-4000-8000-000000000001',
+        activeProfileId: 'p1',
+        profiles: [
+          {
+            id: 'p1',
+            clientId: 'client',
+            subject: 'subject-1',
+            tokens: {
+              accessToken: 'access',
+              refreshToken,
+              idToken: 'id',
+              tokenType: 'Bearer',
+              scopes: ['chatgpt.tokens.use.direct', 'offline_access', 'resource.invoke'],
+              receivedAt: 1,
+              idTokenReceivedAt: 1,
+              expiresAt: planLimited ? Date.now() + 3_600_000 : 1,
+              pendingIdentity: false,
+            },
+            ...(planLimited ? { planLimit: { at: 1 } } : {}),
+          },
+        ],
+      })}\n`,
+      { mode: 0o600 },
+    );
+    try {
+      const c = await check(dir, 'ChatGPT');
+      expect(c?.level).toBe(level);
+      expect(c?.detail).toContain(detail);
+      expect(c?.remedy).toBe(remedy);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
 function home(): string {
   const dir = mkdtempSync(join(tmpdir(), 'muffin-doctor-'));
   // The persistent secret store defaults to the *real* `~/.config`, so without
@@ -206,36 +274,14 @@ describe('doctor nomina il workspace di ADR-0059, mai la casa', () => {
   });
 });
 
-describe('doctor names the everyday consequence of single-user, and the remedy for it', () => {
-  it('names sys.shell asking every time, and points at `muffin rot harden`', async () => {
-    // `runInit` without `--hardened` seals `single-user` (cli/init.ts) — the
-    // mode every fresh install actually has. Before this slice the line named
-    // the mechanism (detection, not prevention) but not what the owner feels
-    // from it: every high-risk capability asking, always, with no command
-    // that gets them out of it.
+describe('doctor distinguishes seal checking from OS write protection', () => {
+  it('describes the default without directing the owner to change it', async () => {
     const dir = home();
     const c = await check(dir, 'root of trust mode');
-    expect(c?.level).toBe('warn');
-    expect(c?.detail).toContain('single-user');
-    expect(c?.detail).toContain('sys.shell');
-    expect(c?.remedy).toContain('muffin rot harden');
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  it('leads with what happens to him, and only names the mode afterwards — 03/09/2026 UX pass', async () => {
-    // The owner's own complaint, read against real `muffin doctor` output:
-    // the line named "root of trust", "single-user", "seal" before it ever
-    // said what he should expect or do. This locks the order so a future
-    // edit cannot quietly put the vocabulary back in front.
-    const dir = home();
-    const c = await check(dir, 'root of trust mode');
-    const consequenceAt = c!.detail.indexOf('sys.shell');
-    const modeNameAt = c!.detail.indexOf('single-user');
-    expect(consequenceAt).toBeGreaterThan(-1);
-    expect(modeNameAt).toBeGreaterThan(-1);
-    expect(consequenceAt).toBeLessThan(modeNameAt);
-    // Every warning names something the owner can actually type.
-    expect(c?.remedy).toMatch(/`muffin [^`]+`/);
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('rot/');
+    expect(c?.detail).toMatch(/ADR-0108|nessun sigillo/i);
+    expect(c?.remedy).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -283,10 +329,8 @@ describe('doctor names which profile the configured model resolves to', () => {
     // The cost, not just the fact (D4 half 2): the fallback's own numbers,
     // named — not merely "something changed".
     expect(c?.detail).toContain('sampling deterministic');
-    expect(c?.detail).toContain('10 tool esposti');
-    // Etichettato come su `sys_inspect`, non "orizzonte N" — i due numeri si
-    // somigliano (qui: 10 e 15) e vanno distinti per quello che sono, quanti
-    // tool si vedono contro quante call si fanno, non con un termine indefinito.
+    expect(c?.detail).toContain('tool caricati per pertinenza');
+    expect(c?.detail).not.toContain('tool esposti');
     expect(c?.detail).toContain('15 call/turno');
     expect(report.exitCode).toBe(2);
 
@@ -658,7 +702,7 @@ describe('doctor names the spend cap and where it came from', () => {
     seal(dir, '1', new Date());
     const c = await check(dir, 'endpoint non conteggiati');
     expect(c?.level).toBe('warn');
-    expect(c?.remedy).toContain('rot reseal');
+    expect(c?.remedy).toMatch(/riavvia|muffin rot migrate|nessun sigillo/);
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -721,7 +765,7 @@ describe('doctor names the spend cap and where it came from', () => {
     const c = await check(dir, 'tetto di spesa');
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('compilati');
-    expect(c?.remedy).toContain('rot reseal');
+    expect(c?.remedy).toMatch(/riavvia|muffin rot migrate|nessun sigillo/);
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -1003,19 +1047,8 @@ describe('doctor names continuable leases awaiting the owner', () => {
 });
 
 describe('doctor tells the four consolidation outcomes apart', () => {
-  /**
-   * The four outcomes are four different facts about the lane, and for a long
-   * time three of them printed the same green line. `budget` had its own branch;
-   * `ran`, `busy` and `error` all fell through to one `ok` that named episodes,
-   * facts and the run count — and never `errors`. So a batch that threw wrote a
-   * blank row and read like a quiet week, and a batch where a third of the
-   * episodes failed to extract read like one where none did.
-   *
-   * `errors` is the count of per-episode failures inside a batch that otherwise
-   * finished (`consolidator.ts`, the `outcome: report.busy ? 'busy' : 'ran'`
-   * write). It is comparable to `episodes` because `episodes` counts *attempts*
-   * (`ingest.ts` §`marked`).
-   */
+  // Seed persisted summaries: they record the outcome and counts, not the stage
+  // that produced an error.
   const seedRun = (
     dir: string,
     outcome: ConsolidationOutcome,
@@ -1046,128 +1079,88 @@ describe('doctor tells the four consolidation outcomes apart', () => {
     const report = await runDoctor(dir);
     const c = report.checks.find((x) => x.name === 'consolidamento');
     expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('/ran');
     expect(c?.detail).toContain('12 episodi');
     expect(c?.detail).toContain('3 fatti');
-    expect(c?.detail).not.toContain('falliti');
+    expect(c?.detail).toContain('4 indicizzati');
+    expect(c?.detail).not.toContain('nel batch');
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('names the failed episodes even when it stays green', async () => {
-    // The defect, at the size it actually shipped: a third of the batch failed
-    // to extract and the line carried nothing but the successes. Still `ok` on
-    // purpose — a failed extraction is left unmarked and retried next fire, so a
-    // minority of them is the lane healing itself, and an exit 1 over that is
-    // how a line stops being read. The count has to be *there*; it does not have
-    // to be an alarm.
+  it('warns with the aggregate error count', async () => {
     const dir = home();
     seedRun(dir, 'ran', 4);
     const report = await runDoctor(dir);
     const c = report.checks.find((x) => x.name === 'consolidamento');
-    expect(c?.level).toBe('ok');
-    expect(c?.detail).toContain('4 falliti');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('4 errori nel batch (fase non registrata)');
     expect(c?.detail).toContain('12 episodi');
 
-    // Against a clean seed rather than against a literal: a fresh install warns
-    // about three unrelated things (sandbox mode, empty vector index, no
-    // gateway), so pinning `exitCode` to a number here would be asserting facts
-    // about checks this block does not test. The claim is the comparison — four
-    // failed episodes move nothing.
-    const clean = home();
-    seedRun(clean, 'ran');
-    expect(report.exitCode).toBe((await runDoctor(clean)).exitCode);
-
-    rmSync(dir, { recursive: true, force: true });
-    rmSync(clean, { recursive: true, force: true });
-  });
-
-  it('warns when the whole batch went nowhere, because those episodes come back', async () => {
-    // What does not heal on its own: every attempted episode failed and nothing
-    // was added, so the same rows fail again next run, and again.
-    const dir = home();
-    seedRun(dir, 'ran', 12, { episodes: 12, facts: 0 });
-    const report = await runDoctor(dir);
-    const c = report.checks.find((x) => x.name === 'consolidamento');
-    expect(c?.level).toBe('warn');
-    expect(c?.detail).toContain('12 errori su 12 episodi');
-    expect(c?.remedy).toContain('muffin memory extract');
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('un episodio che non lancia non salva un giro andato a vuoto — 13 errori su 14, zero fatti', async () => {
-    // Lo stato vero dell'installazione dell'owner il 27/08, letto da
-    // `consolidation_runs`: dopo il cambio di modello del 25/08 i tre giri sono
-    // stati 3/3, 10/11 e 13/14 errori, sempre con zero fatti. Il primo avvisava,
-    // gli altri due erano **verdi** — bastava un episodio che non avesse
-    // lanciato perché `errors >= episodes` fallisse per uno, e la corsia morta
-    // si leggeva come una settimana tranquilla. Che è esattamente l'unica
-    // confusione che questo check esiste per togliere.
-    const dir = home();
-    seedRun(dir, 'ran', 13, { episodes: 14, facts: 0 });
-    const c = await check(dir, 'consolidamento');
-    expect(c?.level).toBe('warn');
-    expect(c?.detail).toContain('13 errori su 14 episodi');
-    rmSync(dir, { recursive: true, force: true });
-  });
+  it.each([0, 2])(
+    'reports a batch error without diagnosing a failed extraction (%i indexed)',
+    async (indexed) => {
+      // Indexing alone can fail after an extraction that yields no facts, even
+      // after some of the backlog has already been indexed.
+      const dir = home();
+      seedRun(dir, 'ran', 1, { episodes: 1, facts: 0, indexed });
+      const c = await check(dir, 'consolidamento');
+      expect(c?.level).toBe('warn');
+      expect(c?.detail).toContain('1 episodio');
+      expect(c?.detail).toContain('0 fatti');
+      expect(c?.detail).toContain(`${indexed} indicizzati`);
+      expect(c?.detail).toContain('1 errore nel batch (fase non registrata)');
+      expect(c?.detail).not.toMatch(/fallit|riprov|andato a vuoto/);
+      expect(c?.remedy).toBeUndefined();
+      rmSync(dir, { recursive: true, force: true });
+    },
+  );
 
-  it('stays green when the sweep threw but the batch worked', async () => {
-    // `errors >= episodes` alone is not the condition. The maintenance sweep
-    // pushes its own failure into `report.errors`, so a one-episode run that
-    // extracted a fact and then tripped the sweep arrives here as 1 error over 1
-    // episode — and it is not a lane going nowhere.
+  it('reports a batch error without hiding a stored fact', async () => {
+    // A sweep error can be recorded after a new fact has already been stored.
     const dir = home();
     seedRun(dir, 'ran', 1, { episodes: 1, facts: 1 });
     const c = await check(dir, 'consolidamento');
-    expect(c?.level).toBe('ok');
-    expect(c?.detail).toContain('1 falliti');
+    expect(c?.level).toBe('warn');
+    expect(c?.detail).toContain('1 fatto');
+    expect(c?.detail).toContain('1 errore nel batch');
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('fails on a run that threw, instead of printing its blank row as green', async () => {
-    // The bigger half of the same defect: `execute` writes zero episodi and zero
-    // fatti when `ingest` throws, which through `ok` is indistinguishable from a
-    // quiet week — the exact confusion this check exists to remove.
+  it('fails on a run that threw and points to its logs', async () => {
     const dir = home();
-    seedRun(dir, 'error', 1, { episodes: 0, facts: 0 });
+    seedRun(dir, 'error', 1, { episodes: 0, facts: 0, indexed: 0 });
     const report = await runDoctor(dir);
     const c = report.checks.find((x) => x.name === 'consolidamento');
     expect(c?.level).toBe('fail');
     expect(c?.detail).toContain('fallito');
-    // The row does not keep the message, so the remedy has to be the command
-    // that reproduces it in the foreground.
-    expect(c?.remedy).toContain('muffin memory extract');
+    expect(c?.detail).toContain('1 errore nel batch');
+    expect(c?.remedy).toContain('log');
+    expect(c?.remedy).not.toContain('memory extract');
     expect(report.exitCode).toBe(2);
     rmSync(dir, { recursive: true, force: true });
   });
 
   it('warns, naming the cap, when the budget stopped the lane', async () => {
     const dir = home();
-    seedRun(dir, 'budget', 0, { episodes: 0, facts: 0 });
+    seedRun(dir, 'budget', 0, { episodes: 0, facts: 0, indexed: 0 });
     const c = await check(dir, 'consolidamento');
     expect(c?.level).toBe('warn');
     expect(c?.detail).toContain('budget mensile esaurito');
-    expect(c?.remedy).toContain('rot reseal');
+    expect(c?.remedy).toMatch(/riavvia|muffin rot migrate|nessun sigillo/);
     rmSync(dir, { recursive: true, force: true });
   });
 
   it('is ok on a lock refusal, and says so — it is the guarantee working', async () => {
-    // `busy` is the lane lock refusing a second extraction, which is the
-    // opposite of a failure. Green, but the word has to appear: zero episodi and
-    // zero fatti with no explanation is the shape this whole block distrusts.
-    //
-    // `errors: 1`, not 0: in production a lock refusal always carries one row
-    // in `report.errors` — `ingest.ts`'s `acquireIngestLock` rejection pushes
-    // its own message there so the caller can see why nothing ran
-    // (`core/memory/ingest.ts` §busy) — and `consolidator.ts` writes that count
-    // straight into `errors` regardless of outcome. Seeding 0 here hid the
-    // defect: a lock refusal is not a per-episode extraction failure, so it
-    // must never earn the "N falliti, riprovati al prossimo giro" suffix that
-    // means exactly that on a `ran` row.
+    // The lock refusal itself contributes an error before any work is attempted.
     const dir = home();
-    seedRun(dir, 'busy', 1, { episodes: 0, facts: 0 });
+    seedRun(dir, 'busy', 1, { episodes: 0, facts: 0, indexed: 0 });
     const c = await check(dir, 'consolidamento');
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('busy');
-    expect(c?.detail).not.toContain('falliti');
+    expect(c?.detail).not.toContain('nel batch');
     rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -1421,7 +1414,6 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
     // up-to-date, not merely "present".
     for (const relPath of [
       'skills/voce/SKILL.md',
-      'rot/identity.md',
       'rot/policy.json',
       'rot/egress.json',
       'rot/budgets.json',
@@ -1430,21 +1422,30 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
       expect(c, `missing check for ${relPath}`).toBeTruthy();
       expect(c?.level, `${relPath}: ${c?.detail}`).toBe('ok');
     }
+    // `rot/identity.md` left the drift list (ADR-0112): the foundation is
+    // read from the product, and the identity check says so.
+    expect(defaultsChecks.find((x) => x.name === 'default rot/identity.md')).toBeUndefined();
+    const identita = r.checks.find((x) => x.name === 'identità');
+    expect(identita?.level).toBe('ok');
+    expect(identita?.detail).toContain('fondazione letta dal prodotto');
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('leftover persona.md and voice.md are named as no longer prompt sources', async () => {
+  it('persona.md and voice.md on an existing home stay prompt sources, and doctor does not reseal', async () => {
     const dir = home();
+    const identity = join(dir, 'rot', 'identity.md');
+    const before = readFileSync(identity);
     writeFileSync(join(dir, 'persona.md'), 'vecchio patto\n');
     writeFileSync(join(dir, 'voice.md'), 'vecchia voce\n');
     const c = await check(dir, 'prompt sources');
-    expect(c?.level).toBe('warn');
+    expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('persona.md');
     expect(c?.detail).toContain('voice.md');
-    expect(c?.detail).toContain('rot/identity.md');
-    expect(c?.remedy).toContain('rot reseal');
+    expect(c?.detail).toContain('patto');
+    expect(c?.remedy).toBeUndefined();
     expect(existsSync(join(dir, 'persona.md'))).toBe(true);
     expect(existsSync(join(dir, 'voice.md'))).toBe(true);
+    expect(readFileSync(identity)).toEqual(before);
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -1472,7 +1473,7 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('adopting a sealed rot/ file states the safe-mode consequence before the command, and names `rot reseal`', async () => {
+  it('adopting a rot/ default names muffin rot migrate and does not recommend a reseal (ADR-0108)', async () => {
     // A synthetic checkout, independent of this repository's own history, so
     // the "installed content matches an old shipped commit" fact is
     // constructed rather than borrowed from real history.
@@ -1482,41 +1483,34 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
       if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} failed: ${r.stderr}`);
     };
     mkdirSync(join(checkout, 'defaults', 'rot'), { recursive: true });
-    writeFileSync(join(checkout, 'defaults', 'rot', 'identity.md'), 'v1 identity\n');
+    writeFileSync(join(checkout, 'defaults', 'rot', 'policy.json'), '{"v":1}\n');
     sh('git', ['init', '-q']);
     sh('git', ['config', 'user.email', 't@t']);
     sh('git', ['config', 'user.name', 't']);
     sh('git', ['add', '.']);
     sh('git', ['commit', '-qm', 'v1']);
-    writeFileSync(
-      join(checkout, 'defaults', 'rot', 'identity.md'),
-      'v2 identity — HEAD ora dice questo\n',
-    );
+    writeFileSync(join(checkout, 'defaults', 'rot', 'policy.json'), '{"v":2}\n');
     sh('git', ['add', '.']);
     sh('git', ['commit', '-qm', 'v2']);
 
     const dir = home();
-    writeFileSync(join(paths(dir).rot, 'identity.md'), 'v1 identity\n'); // stuck at the v1 commit, never touched since
+    writeFileSync(join(paths(dir).rot, 'policy.json'), '{"v":1}\n'); // stuck at the v1 commit, never touched since
     // `home()` already ran a real `muffin init` against THIS repository, so
-    // the registry it wrote (rule 1) names the real, shipped identity.md —
+    // the registry it wrote (rule 1) names the real, shipped policy.json —
     // not the synthetic v1/v2 fabricated above. Dropping it forces this test
     // through rule 2 (Git history) against the synthetic checkout instead,
     // which is the fallback this test actually means to exercise.
     rmSync(paths(dir).defaultsManifest, { force: true });
 
     try {
-      const c = await checkWith(dir, 'default rot/identity.md', { checkoutRoot: checkout });
+      const c = await checkWith(dir, 'default rot/policy.json', { checkoutRoot: checkout });
       expect(c?.level).toBe('warn');
       expect(c?.remedy).toBeTruthy();
-      const safeModeAt = c!.remedy!.indexOf('safe mode');
-      const cpAt = c!.remedy!.indexOf('cp ');
-      const resealAt = c!.remedy!.indexOf('rot reseal');
-      expect(safeModeAt).toBeGreaterThan(-1);
-      expect(cpAt).toBeGreaterThan(-1);
-      expect(resealAt).toBeGreaterThan(-1);
-      // The consequence is said BEFORE the command — the owner decides first.
-      expect(safeModeAt).toBeLessThan(cpAt);
-      expect(cpAt).toBeLessThan(resealAt);
+      expect(c!.remedy).toContain('muffin rot migrate');
+      expect(c!.remedy).toMatch(/ADR-0108|non serve un sigillo/);
+      expect(c!.remedy).not.toContain('safe mode');
+      expect(c!.remedy).not.toContain('rot reseal');
+      expect(c!.remedy).not.toContain('cp ');
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(checkout, { recursive: true, force: true });
@@ -1537,23 +1531,20 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
       if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} failed: ${r.stderr}`);
     };
     mkdirSync(join(checkout, 'defaults', 'rot'), { recursive: true });
-    writeFileSync(join(checkout, 'defaults', 'rot', 'identity.md'), 'v1 identity\n');
+    writeFileSync(join(checkout, 'defaults', 'rot', 'egress.json'), '{"e":1}\n');
     writeFileSync(join(checkout, 'defaults', 'rot', 'policy.json'), '{"v":1}\n');
     sh('git', ['init', '-q']);
     sh('git', ['config', 'user.email', 't@t']);
     sh('git', ['config', 'user.name', 't']);
     sh('git', ['add', '.']);
     sh('git', ['commit', '-qm', 'v1']);
-    writeFileSync(
-      join(checkout, 'defaults', 'rot', 'identity.md'),
-      'v2 identity — HEAD ora dice questo\n',
-    );
+    writeFileSync(join(checkout, 'defaults', 'rot', 'egress.json'), '{"e":2}\n');
     writeFileSync(join(checkout, 'defaults', 'rot', 'policy.json'), '{"v":2}\n');
     sh('git', ['add', '.']);
     sh('git', ['commit', '-qm', 'v2']);
 
     const dir = home();
-    writeFileSync(join(paths(dir).rot, 'identity.md'), 'v1 identity\n');
+    writeFileSync(join(paths(dir).rot, 'egress.json'), '{"e":1}\n');
     writeFileSync(join(paths(dir).rot, 'policy.json'), '{"v":1}\n');
     rmSync(paths(dir).defaultsManifest, { force: true });
 
@@ -1562,24 +1553,22 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
 
       // No per-file check for the two that diverged together — they are
       // folded into the group instead of repeating.
-      expect(report.checks.find((c) => c.name === 'default rot/identity.md')).toBeUndefined();
+      expect(report.checks.find((c) => c.name === 'default rot/egress.json')).toBeUndefined();
       expect(report.checks.find((c) => c.name === 'default rot/policy.json')).toBeUndefined();
 
       const group = report.checks.find((c) => c.name === 'default rot/*');
       expect(group).toBeTruthy();
       expect(group?.level).toBe('warn');
-      expect(group?.detail).toContain('rot/identity.md');
+      expect(group?.detail).toContain('rot/egress.json');
       expect(group?.detail).toContain('rot/policy.json');
       expect(group?.remedy).toBeTruthy();
-      // One explanation, one command sequence: `rot reseal` named exactly
-      // once for the whole batch, not once per file.
-      const resealCount = (group!.remedy!.match(/rot reseal/g) ?? []).length;
-      expect(resealCount).toBe(1);
-      // A command an owner can actually run — for each file — is still there.
-      expect(group?.remedy).toContain('cp ');
-      expect(group?.remedy).toContain(join(checkout, 'defaults', 'rot', 'identity.md'));
-      expect(group?.remedy).toContain(join(checkout, 'defaults', 'rot', 'policy.json'));
-      expect(group?.remedy).toContain('safe mode');
+      expect(group?.remedy).toContain('muffin rot migrate');
+      expect(group?.remedy).toMatch(/ADR-0108|non serve un sigillo/);
+      expect(group?.remedy).not.toContain('rot reseal');
+      expect(group?.remedy).not.toContain('cp ');
+      expect(group?.remedy).not.toContain('safe mode');
+      expect(group?.detail).toContain('rot/egress.json');
+      expect(group?.detail).toContain('rot/policy.json');
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(checkout, { recursive: true, force: true });
@@ -2330,6 +2319,20 @@ describe('doctor says whether a voice note would be understood, before the first
     expect(c?.detail).toContain(join(dir, 'models', 'ggml-base.bin'));
   });
 
+  it('describes the first-use download when only the local model is missing', async () => {
+    const dir = conTelegram(home());
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'ffmpeg'), '');
+    writeFileSync(join(bin, 'whisper-cli'), '');
+    const c = await checkWith(dir, 'note vocali', {
+      voce: { accettaAudio: async () => false, path: bin },
+    });
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toMatch(/scaricare il modello locale alla prima nota da trascrivere/);
+    expect(c?.remedy).toBeUndefined();
+  });
+
   it('takes the transcription branch when the probe fails, like the runtime does', async () => {
     const dir = conTelegram(home());
     const c = await checkWith(dir, 'note vocali', {
@@ -2378,7 +2381,7 @@ describe('doctor nomina le capacità spente o tagliate, come sys.inspect', () =>
     expect(c?.detail).toBe(gap?.reason);
     expect(c?.remedy).toBe(gap?.remedy);
     expect(c?.detail).toContain('api.tavily.com');
-    expect(c?.remedy).toContain('rot reseal');
+    expect(c?.remedy).toMatch(/riavvia|muffin rot migrate|nessun sigillo/);
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -2485,7 +2488,7 @@ describe('doctor nomina le capacità spente o tagliate, come sys.inspect', () =>
     config.models.main = 'modello-mai-schedato-xyz';
     writeFileSync(configPath, JSON.stringify(config, null, 2));
 
-    const c = await check(dir, 'capacità: tetto tool');
+    const c = await check(dir, 'capacità: tool');
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('conservative');
     expect(c?.detail).toContain('capability native');
@@ -2497,9 +2500,9 @@ describe('doctor nomina le capacità spente o tagliate, come sys.inspect', () =>
 
   it('tetto tool: ok quando il profilo risolto copre tutto il catalogo nativo', async () => {
     const dir = home();
-    const c = await check(dir, 'capacità: tetto tool');
+    const c = await check(dir, 'capacità: tool');
     expect(c?.level).toBe('ok');
-    expect(c?.detail).toContain('capability native entro la proiezione');
+    expect(c?.detail).toContain('il nucleo resta visibile');
     expect(c?.remedy).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
   });
@@ -2576,7 +2579,7 @@ describe('doctor names where the owner binding lives', () => {
     conConfigTelegram(dir, 111);
     const c = await checkWith(dir, 'owner binding legacy', { hardened: false });
     expect(c?.level).toBe('warn');
-    expect(c?.remedy).toContain('scrive rot/owner.json e risigilla nello stesso giro');
+    expect(c?.remedy).toContain('scrive rot/owner.json nello stesso giro');
   });
 
   it('says which of two disagreeing bindings wins', async () => {
@@ -2585,23 +2588,22 @@ describe('doctor names where the owner binding lives', () => {
     sealOwnerBinding(dir, { telegram: { userId: 999, chatId: 999 } }, { out: () => {} });
     const c = await check(dir, 'owner binding');
     expect(c?.level).toBe('warn');
-    expect(c?.detail).toContain('sigillo 999');
+    expect(c?.detail).toContain('rot/owner.json 999');
     expect(c?.detail).toContain('config.json 111');
-    expect(c?.detail).toMatch(/vince il sigillo/);
+    expect(c?.detail).toMatch(/vince rot\/owner\.json/);
   });
 
-  it('fails loudly when the sealed binding no longer verifies — nobody is owner', async () => {
+  it('a hand-edited valid owner.json still binds without a reseal (ADR-0108)', async () => {
     const dir = home();
     conConfigTelegram(dir, 111);
     sealOwnerBinding(dir, { telegram: { userId: 999, chatId: 999 } }, { out: () => {} });
-    // La manomissione: il file sigillato riscritto, nessun reseal.
     writeFileSync(
       join(dir, 'rot', 'owner.json'),
       JSON.stringify({ schemaVersion: 1, telegram: { userId: 111, chatId: 111 } }),
     );
     const c = await check(dir, 'owner binding');
-    expect(c?.level).toBe('fail');
-    expect(c?.detail).toMatch(/nessuna superficie riconosce più un owner/);
+    expect(c?.level).toBe('ok');
+    expect(c?.detail).toContain('telegram 111');
   });
 });
 

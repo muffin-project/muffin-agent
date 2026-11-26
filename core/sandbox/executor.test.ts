@@ -12,8 +12,8 @@ import { createServer } from 'node:net';
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { capability, withReason } from '../../test-support/requires.js';
 import { type ExecRequest, SandboxExecutor, STERILE_GIT_CONFIG_ENV } from './executor.js';
-import { probeSandbox } from './probe.js';
 
 /**
  * These are the tracer bullets of ADR-0026, as tests: each one executes a real
@@ -33,7 +33,8 @@ import { probeSandbox } from './probe.js';
  * containments had never run on Linux — the platform of the production VPS —
  * on any machine, ever. The skip reason was right; what was missing is that
  * nothing ever turned the skip into a failure where the containment was
- * supposed to be provable. That is `MUFFIN_REQUIRE_SANDBOX` below.
+ * supposed to be provable. That is the `sandbox` capability's `required` flag
+ * below (`MUFFIN_REQUIRE_CAPABILITIES`, see `test-support/capabilities.ts`).
  */
 const host = platform();
 
@@ -47,15 +48,12 @@ const host = platform();
  * condition* (Ubuntu 24.04 restricts unprivileged user namespaces — ADR-0018,
  * field note 2026-08-04), not a bug in this repo.
  */
-const gate: { run: boolean; why: string } = (() => {
-  if (host === 'darwin') return { run: true, why: 'macOS: seatbelt is part of the OS' };
-  if (host === 'linux') {
-    const p = probeSandbox();
-    if (p.available) return { run: true, why: `linux: ${p.mechanism} contained a real probe` };
-    return { run: false, why: `linux: sandbox unavailable — ${p.reason}: ${p.detail}` };
-  }
-  return { run: false, why: `no OS-level sandbox on ${host}` };
-})();
+/**
+ * Il contenimento di produzione (`verify()`, hook Git compresi), misurato una
+ * volta per run dal globalSetup: `test-support/capabilities.ts`.
+ */
+const sandboxCap = capability('sandbox');
+const gate: { run: boolean; why: string } = { run: sandboxCap.ok, why: sandboxCap.reason };
 
 /**
  * The flag that makes a skip fail. Set it wherever the containment is supposed
@@ -63,7 +61,7 @@ const gate: { run: boolean; why: string } = (() => {
  * VPS. Unset on a laptop, where skipping on an unsupported platform is a fact
  * about the laptop and not a defect.
  */
-const containmentRequired = process.env['MUFFIN_REQUIRE_SANDBOX'] === '1';
+const containmentRequired = sandboxCap.required;
 
 function scaffold() {
   const base = mkdtempSync(join(tmpdir(), 'muffin-exec-test-'));
@@ -92,7 +90,7 @@ describe('the containment suite declares whether it ran', () => {
     }
     if (containmentRequired) {
       throw new Error(
-        `MUFFIN_REQUIRE_SANDBOX=1 and no real containment was executed on this host — ${gate.why}. ` +
+        `sandbox required (MUFFIN_REQUIRE_CAPABILITIES) and no real containment was executed on this host — ${gate.why}. ` +
           'This failure is the flag working: a skipped containment must never read as a pass.',
       );
     }
@@ -101,7 +99,9 @@ describe('the containment suite declares whether it ran', () => {
   });
 });
 
-describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate.why})`, () => {
+const titolo = withReason('sandboxed execution holds (real containment)', sandboxCap);
+
+describe.runIf(gate.run)(titolo, () => {
   const s = scaffold();
   const executor = new SandboxExecutor({
     denyWrite: [s.guarded, s.secrets],
@@ -313,7 +313,8 @@ describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate
     const r = await executor.run({
       command:
         'mkdir -p ordinary && printf ordinary > ordinary/file.txt && ' +
-        initNested + ' && printf tracked > nested/tracked.txt && ' +
+        initNested +
+        ' && printf tracked > nested/tracked.txt && ' +
         'git -C nested add tracked.txt',
       cwd: s.workspace,
       writeScope: [s.workspace],
@@ -333,7 +334,9 @@ describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate
         ? 'mkdir -p empty-template/hooks && git init --quiet --template=empty-template created-now'
         : 'git init --quiet created-now';
     const r = await executor.run({
-      command: initNested + ' && mkdir -p created-now/.git/hooks && ' +
+      command:
+        initNested +
+        ' && mkdir -p created-now/.git/hooks && ' +
         'if printf hook > created-now/.git/hooks/pre-commit; then echo WRITABLE; ' +
         'else echo DENIED; fi',
       cwd: s.workspace,
@@ -355,7 +358,9 @@ describe.runIf(gate.run)(`sandboxed execution holds (real containment — ${gate
         ? 'mkdir -p empty-template/hooks && git init --quiet --template=empty-template .'
         : 'git init --quiet .';
     const r = await executor.run({
-      command: initTopLevel + ' && mkdir -p .git/hooks && ' +
+      command:
+        initTopLevel +
+        ' && mkdir -p .git/hooks && ' +
         'if printf hook > .git/hooks/pre-commit; then echo WRITABLE; ' +
         'else echo DENIED; fi',
       cwd: s.workspace,
@@ -486,9 +491,9 @@ describe('when the sandbox is unavailable', () => {
 
   it('run() refuses instead of running unsandboxed', async () => {
     const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, unavailable);
-    await expect(
-      executor.run({ command: 'true', cwd: tmpdir(), writeScope: [] }),
-    ).rejects.toThrow(/sandbox unavailable/);
+    await expect(executor.run({ command: 'true', cwd: tmpdir(), writeScope: [] })).rejects.toThrow(
+      /sandbox unavailable/,
+    );
   });
 
   /**
@@ -513,8 +518,8 @@ describe('when the sandbox is unavailable', () => {
    */
   it('the refusal carries the reason and the remedy', async () => {
     const executor = new SandboxExecutor({ denyWrite: [], denyRead: [] }, unavailable);
-    await expect(
-      executor.run({ command: 'true', cwd: tmpdir(), writeScope: [] }),
-    ).rejects.toThrow(/userns_denied.*fix the host/s);
+    await expect(executor.run({ command: 'true', cwd: tmpdir(), writeScope: [] })).rejects.toThrow(
+      /userns_denied.*fix the host/s,
+    );
   });
 });

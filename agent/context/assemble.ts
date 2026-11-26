@@ -1,8 +1,13 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { type PromptVersion, paths } from '../../core/config/config.js';
 import type { CapabilityDecl, CapabilityId, Principal, TenantId } from '../../core/policy/types.js';
 import { renderTodos, type TodoItem } from '../../core/turns/todo.js';
+import type { SearchStartupBlocker } from '../tools/search.js';
+import {
+  authored,
+  renderUserOverlay,
+  resolveIdentityLayers,
+  USER_OVERLAY_TOKEN_BUDGET,
+} from './identity.js';
 import { estimateTokens, type PrefixBlockReport, prefixBreakdown } from './tokens.js';
 
 /**
@@ -233,6 +238,8 @@ export type IstanzaFacts = {
   jobAttivi: number;
   /** `null` quando il root of trust è integro — stessa condizione di `sys_inspect`, non un errore. */
   safeMode: { reason: string } | null;
+  /** Safe category, without the local diagnostic's paths and secret reference. */
+  webSearchUnavailable?: SearchStartupBlocker;
 };
 
 /**
@@ -330,7 +337,10 @@ export function ambienteSection(a: {
    */
   istanza?: IstanzaFacts;
 }): string {
-  const zona = a.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  // Solo il prompt di classe owner usa il fuso dell'installazione: in un
+  // gruppo o con un ospite il fuso locale direbbe dove vive l'owner.
+  const timeZone =
+    a.classe === 'owner' ? (a.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone) : 'UTC';
   // Locale esplicito: quello di sistema qui è `en-US` (misurato), e un agente
   // che parla italiano non deve leggere «Friday» per sapere che giorno è.
   const quando = new Intl.DateTimeFormat('it-IT', {
@@ -340,7 +350,7 @@ export function ambienteSection(a: {
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-    timeZone: zona,
+    timeZone,
   }).format(a.adesso);
   const dove = SUPERFICI[a.surface] ?? a.surface;
   const conChi =
@@ -356,7 +366,7 @@ export function ambienteSection(a: {
     // per chi legge e per il modello. Trovato facendole collidere.
     '## Questo turno',
     '',
-    `- Adesso: ${quando} — ${zona}, ${offsetUtc(a.adesso, zona)}.`,
+    `- Adesso: ${quando} — ${timeZone}, ${offsetUtc(a.adesso, timeZone)}.`,
     `- Superficie: ${dove}, ${conChi}.`,
     `- Ti sta eseguendo: ${a.model} (profilo ${a.profilo}).`,
   ];
@@ -388,6 +398,15 @@ function istanzaRighe(f: IstanzaFacts): string[] {
   return [
     `- Cartella di lavoro: ${f.cwd} — ${f.voci.length} element${f.voci.length === 1 ? 'o' : 'i'} di primo livello: ${elenco}.`,
     `- Istanza: ${f.provider} · ${f.jobAttivi} job attiv${f.jobAttivi === 1 ? 'o' : 'i'} · ${rot}.`,
+    ...(f.webSearchUnavailable === undefined
+      ? []
+      : [
+          f.webSearchUnavailable === 'credential'
+            ? '- Ricerca web indisponibile. La credenziale del servizio configurato manca o non è leggibile.'
+            : '- Ricerca web indisponibile. L’accesso di rete del servizio configurato non è autorizzato.',
+          '- Per leggere un URL già fornito usa http_get, con le regole di accesso del turno. Se manca dal menu e vedi capability_search, cerca lo strumento per la lettura di URL.',
+          '- Se ti serve trovare una fonte e non hai uno strumento di ricerca adatto, chiedi un URL. Per trovare o aprire fonti web evita il terminale e i tentativi sui file locali.',
+        ]),
   ];
 }
 
@@ -442,6 +461,9 @@ export type PromptBlock = { name: string; source: string; text: string; file?: s
  */
 export const PROMPT_BLOCK_BUDGETS: Readonly<Record<string, number>> = {
   identity: 1000,
+  // The owner overlay's own ceiling plus its label (ADR-0112). A file past
+  // `USER_OVERLAY_TOKEN_BUDGET` is left out whole, so this is never a cut.
+  user: USER_OVERLAY_TOKEN_BUDGET + 150,
   skills: 400,
   'work-rules': 1200,
   persona: 900,
@@ -477,10 +499,11 @@ export type SystemPromptBlocks = Readonly<Record<TenantClass, readonly PromptBlo
  * turn, and a per-turn rebuild would read three files off disk on every
  * message for a string that cannot have changed.
  *
- * `version` picks which character and which operational block the two classes
- * are built from — `v1` is the default and reads exactly the files it always
- * read, so an installation that says nothing keeps the prompt it has, byte for
- * byte (pinned by sha256 below in `assemble.test.ts`). See `promptSources`.
+ * `version` picks the operational block (`promptSources`). It does not
+ * pick the character. ADR-0107, which would drop `persona.md` and `voice.md`,
+ * is still waiting on the owner, so an installation that still has those
+ * files keeps them in the owner prompt. A missing file adds no block.
+ * Assembly never writes `rot/identity.md`, `user.md` or `defaults/`.
  */
 export function buildSystemPromptBlocks(
   home: string,
@@ -491,18 +514,14 @@ export function buildSystemPromptBlocks(
   const p = paths(home);
   const src = promptSources(version);
 
-  // One sealed file, not three registers of the same character.
-  //
-  // `rot/identity.md` is the pact: invariants, including that the register
-  // follows the moment. It lives under the seal, so changing it is an owner
-  // act, never a side effect of `prompt.version`. Examples of how to write
-  // (emoji thresholds, banned-phrase lists, length samples) are the `voce`
-  // skill: a catalogue line here, the body only when `skill_read` opens it.
-  //
-  // The order is deliberate and tested. There is no precedence mechanism —
-  // only string order. Identity comes first because that is the constitution;
-  // the operational block comes after because it is about this turn's tools.
-  const identity = authored(join(p.rot, 'identity.md'));
+  // The owner contract (ADR-0112): legacy persona, then the pact — the
+  // shipped foundation, or a hand-edited home copy that still replaces it —
+  // then legacy voice, then the owner's `user.md` overlay, most specific
+  // last and labelled with what it may not override. Nothing here writes.
+  const personaText = authored(p.persona);
+  const layers = resolveIdentityLayers(home);
+  const voiceText = authored(p.voice);
+  const userText = layers.user === null ? '' : renderUserOverlay(layers.user);
   const safeModeBlock = safeMode ? SAFE_MODE_NOTE : '';
   const workRules: PromptBlock = {
     name: 'work-rules',
@@ -515,22 +534,44 @@ export function buildSystemPromptBlocks(
     text: safeModeBlock,
   };
 
-  // Owner: the pact, the skill catalogue, the operating rules.
-  // Pinned by sha256 in `assemble.test.ts`: a one-byte change cold-starts
-  // every warm prefix.
+  // Pinned by sha256 in `assemble.test.ts` for a fresh home, which has no
+  // persona or voice file: a one-byte change cold-starts every warm prefix.
   const owner: PromptBlock[] = [
+    ...(personaText.length > 0
+      ? [
+          {
+            name: 'persona',
+            source: 'persona.md',
+            text: personaText,
+            file: p.persona,
+          },
+        ]
+      : []),
     {
       name: 'identity',
-      source: 'rot/identity.md',
-      text: identity,
-      file: join(p.rot, 'identity.md'),
+      source: layers.pact.source,
+      text: layers.pact.text,
+      file: layers.pact.file,
     },
+    ...(voiceText.length > 0
+      ? [
+          {
+            name: 'voice',
+            source: 'voice.md',
+            text: voiceText,
+            file: p.voice,
+          },
+        ]
+      : []),
+    ...(userText.length > 0 && layers.user !== null
+      ? [{ name: 'user', source: 'user.md', text: userText, file: layers.user.file }]
+      : []),
     { name: 'skills', source: 'core/skills (catalogo generato)', text: skillsSection },
     workRules,
     safe,
   ];
 
-  // Group. The owner's pact does not ship here — nobody else is party to it.
+  // Group. Neither the pact nor `user.md` ships here: nobody else is party to them.
   // The etiquette the room used to receive only because `voice.md` was copied
   // whole now lives in `GROUP_PERSONA`, which is code on purpose: a file the
   // owner is invited to edit would be a knob that turns the guest posture off.
@@ -612,7 +653,13 @@ function concat(parts: string[]): string {
  * 04/09 found four `agentic` fails whose turn stalled on "serve la tua
  * approvazione per sys.shell" where a dedicated tool already covered the
  * question ("che modello ti sta eseguendo" is `sys_inspect`, not a shell
- * command). Every tool's own description now says when to use it and when
+ * command). Since Parte 0 the same answer is already in the turn block
+ * («Ti sta eseguendo: …», `ambienteSection`), and the old wording — "per «che
+ * modello» concateni `sys_inspect`" — made a greeting that mentioned the model
+ * pay a second pass: measured 04/11/2026, the model called `sys_inspect` to
+ * read back the line it had just been given, and got ~1.2k tokens of doctor
+ * report for it (19.5k input instead of ~9k for «Ciao»). The line now points
+ * at the turn block first and keeps `sys_inspect` for what only it has. Every tool's own description now says when to use it and when
  * not to (Anthropic, *Define tools* — "when it should be used (and when it
  * shouldn't)"), but a model choosing between fourteen tool descriptions and
  * one instruction line reads the line first. The rule below is that line: it
@@ -644,7 +691,7 @@ const WORK_RULES = [
   '- Se il lavoro richiede più passaggi, dì in una riga cosa stai per fare prima di partire. Non a metà, e non a cose fatte.',
   '- Segui la richiesta del turno e le correzioni dell’owner. Il piano della conversazione è contesto: parlarne non significa concedere di eseguirlo.',
   '- Quando hai finito, rispondi e basta: non chiamare altri tool per abitudine.',
-  '- Il tool dedicato viene prima della shell: leggi con `fs_read`/`fs_search`, ispeziona con `sys_inspect` o `process_list`, e se il compito nomina un servizio esterno (Linear, GitHub, …) cerca un tool caricato con quel nome prima di guardare nell\'ambiente o in un file di config. `shell_run` (sola lettura) resta l\'ultima risorsa per quello che nessun tool copre, e chiede sempre il sì, come `shell_run_write` — per "che modello ti sta eseguendo" concateni `sys_inspect`, non un comando: `fs_read("config.json")` poi, se serve, `shell_run` sul risultato, non il contrario. «Dimentica X»: `memory_forget` con le parole esatte in `instruction`, poi gli id — mai shell, sqlite o file.',
+  '- Il tool dedicato viene prima della shell: leggi con `fs_read`/`fs_search`, ispeziona con `sys_inspect` o `process_list`, e se il compito nomina un servizio esterno (Linear, GitHub, …) cerca un tool caricato con quel nome prima di guardare nell\'ambiente o in un file di config. `shell_run` (sola lettura) resta l\'ultima risorsa per quello che nessun tool copre, e chiede sempre il sì, come `shell_run_write` — il modello che ti esegue è già in «Questo turno»: rispondi da lì, senza `sys_inspect`; per la shell, `fs_read("config.json")` poi `shell_run` sul risultato, non il contrario. «Dimentica X»: `memory_forget` con le parole esatte in `instruction`, poi gli id — mai shell, sqlite o file.',
   // La riga sul recinto. Sta qui e non in `persona.md` perché è una regola
   // operativa su cosa fare di un risultato, non un tratto di carattere; e sta
   // in **tutte e due** le versioni perché `promptVersion` di default è `v1`
@@ -714,7 +761,7 @@ const WORK_RULES_V2 = [
   '- Chiedo a parole solo quando la decisione è davvero sua: un tradeoff irreversibile, o due strade che portano a due lavori diversi. In quel caso porto le opzioni e la mia opinione, non una domanda aperta.',
   "- Prima di rifare una chiamata che ho già fatto, mi chiedo cosa è cambiato. Se non è cambiato niente, la risposta ce l'ho già.",
   '- I tool visibili sono quelli che posso chiamare adesso. Se vedo capability_search, lo uso per trovare una capability autorizzata che manca alla richiesta prima di dire che non esiste, anche quando i tool visibili coprono altre parti. Non invento tool, e non invento una policy o un permesso per nascondere un tool mancante.',
-  '- Il tool dedicato viene prima della shell: leggo con `fs_read`/`fs_search`, ispeziono con `sys_inspect` o `process_list`, e se il compito nomina un servizio esterno cerco un tool caricato con quel nome prima di guardare nell\'ambiente o in un file di config. `shell_run` (sola lettura) resta l\'ultima risorsa per quello che nessun tool copre, e chiede sempre il sì, come `shell_run_write` — per "che modello mi sta eseguendo" concateno `sys_inspect`, non un comando: prima `fs_read` sul file che mi serve, poi `shell_run` sul risultato se serve davvero, non il contrario. «Dimentica X»: `memory_forget` con le parole esatte in `instruction`, poi gli id — mai shell, sqlite o file.',
+  "- Il tool dedicato viene prima della shell: leggo con `fs_read`/`fs_search`, ispeziono con `sys_inspect` o `process_list`, e se il compito nomina un servizio esterno cerco un tool caricato con quel nome prima di guardare nell'ambiente o in un file di config. `shell_run` (sola lettura) resta l'ultima risorsa per quello che nessun tool copre, e chiede sempre il sì, come `shell_run_write` — il modello che mi esegue è già in «Questo turno»: rispondo da lì, senza `sys_inspect`; per la shell, prima `fs_read` sul file che mi serve, poi `shell_run` sul risultato se serve davvero, non il contrario. «Dimentica X»: `memory_forget` con le parole esatte in `instruction`, poi gli id — mai shell, sqlite o file.",
   '',
   '## Quello che leggo',
   '',
@@ -851,77 +898,3 @@ Quello che so fare è quello che i tool di questo turno mi permettono. In un con
 Distinguo quello che mi è stato detto da quello che ho dedotto, e si sente: «mi sembra che...», «ho l'impressione che...». Su un'inferenza non asserisco. Non ostento la memoria. Non profilo le persone della stanza: niente movimenti, niente umori, niente dossier.
 
 Non uso linguaggio da assistente generico: niente «come posso aiutarti?».`;
-
-/**
- * The authored part of a persona file: what the owner wrote, without the
- * scaffolding that told them how to write it.
- *
- * Both files ship as templates whose HTML comments address the owner —
- * "Questo file è tuo. Scrivilo com'è", "le righe qui sotto sono un punto di
- * partenza". Injected verbatim, as they were, those instructions became part of
- * the identity: on a fresh install the agent was handed a page explaining how a
- * human should fill in its character, and nothing else. Comments are stripped
- * here rather than removed from the files, because in the file they are the
- * thing that makes it writable.
- *
- * Headings left empty are dropped for the same reason. An untouched template
- * would otherwise contribute three bare titles with nothing under them, which
- * reads to a model as a section it is expected to have opinions about.
- */
-function authored(path: string): string {
-  if (!existsSync(path)) return '';
-  let text = readFileSync(path, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
-
-  // An unterminated `<!--` matches nothing, and the whole owner-facing block
-  // sails through into the prompt — the exact pre-existing defect, restored by
-  // deleting one `-->`. Cutting from the opener is the fail-safe direction:
-  // losing authored text is recoverable, shipping scaffolding as identity is
-  // what this function exists to stop. (Nested comments leave a stray `-->`,
-  // handled by the same cut.)
-  const orphan = text.indexOf('<!--');
-  if (orphan !== -1) text = text.slice(0, orphan);
-
-  const lines = text.split('\n');
-  const kept: string[] = [];
-  let fenced = false;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    if (/^\s*```/.test(line)) fenced = !fenced;
-
-    const heading = !fenced && /^(#{2,6})\s/.exec(line);
-    if (heading) {
-      const level = heading[1]!.length;
-      // A heading is unfilled only when it has neither direct content nor a
-      // subsection. Stopping at the next heading of *any* level deleted a
-      // parent whose content lived under `###` — and `identity.md` ships
-      // exactly such a heading, so an owner who answered it in subsections
-      // would have lost the question. A `#` opening a line inside a code fence
-      // is not a heading either, which is why the fence is tracked.
-      let j = i + 1;
-      let empty = true;
-      let innerFence = fenced;
-      for (; j < lines.length; j++) {
-        const ahead = lines[j]!;
-        if (/^\s*```/.test(ahead)) innerFence = !innerFence;
-        const aheadHeading = !innerFence && /^(#{1,6})\s/.exec(ahead);
-        if (aheadHeading) {
-          // A deeper heading is content: the section was answered below.
-          if (aheadHeading[1]!.length > level) empty = false;
-          break;
-        }
-        if (ahead.trim() !== '') empty = false;
-      }
-      if (empty) {
-        i = j - 1;
-        continue;
-      }
-    }
-    kept.push(line);
-  }
-
-  return kept
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}

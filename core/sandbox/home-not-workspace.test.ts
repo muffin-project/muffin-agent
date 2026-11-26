@@ -3,9 +3,9 @@ import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'n
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { capability, withReason } from '../../test-support/requires.js';
 import { mandatoryGuards } from '../rot/guards.js';
 import { SandboxExecutor } from './executor.js';
-import { probeSandbox } from './probe.js';
 
 /**
  * The Muffin home is not a workspace, proven the only way it is worth proving:
@@ -91,17 +91,14 @@ import { probeSandbox } from './probe.js';
 const host = platform();
 
 /** Same gate, and same reasoning, as `core/sandbox/executor.test.ts`. */
-const gate: { run: boolean; why: string } = (() => {
-  if (host === 'darwin') return { run: true, why: 'macOS: seatbelt is part of the OS' };
-  if (host === 'linux') {
-    const p = probeSandbox();
-    if (p.available) return { run: true, why: `linux: ${p.mechanism} contained a real probe` };
-    return { run: false, why: `linux: sandbox unavailable — ${p.reason}: ${p.detail}` };
-  }
-  return { run: false, why: `no OS-level sandbox on ${host}` };
-})();
+/**
+ * Il contenimento di produzione (`verify()`, hook Git compresi), misurato una
+ * volta per run dal globalSetup: `test-support/capabilities.ts`.
+ */
+const sandboxCap = capability('sandbox');
+const gate: { run: boolean; why: string } = { run: sandboxCap.ok, why: sandboxCap.reason };
 
-const containmentRequired = process.env['MUFFIN_REQUIRE_SANDBOX'] === '1';
+const containmentRequired = sandboxCap.required;
 
 /** The line every attack tries to leave behind. */
 const PWNED = 'pwned\n';
@@ -120,7 +117,13 @@ function scaffold(): { home: string; workspace: string; file: (rel: string) => s
   const base = mkdtempSync(join(tmpdir(), 'muffin-home-ws-'));
   const home = join(base, '.muffin');
   const workspace = join(base, 'muffin-workspace');
-  for (const dir of [join(home, 'rot'), join(home, 'sessions'), join(home, 'secrets'), join(home, 'profiles'), workspace]) {
+  for (const dir of [
+    join(home, 'rot'),
+    join(home, 'sessions'),
+    join(home, 'secrets'),
+    join(home, 'profiles'),
+    workspace,
+  ]) {
     mkdirSync(dir, { recursive: true });
   }
   const contents: Record<string, string> = {
@@ -149,7 +152,7 @@ describe('the containment suite declares whether it ran', () => {
     }
     if (containmentRequired) {
       throw new Error(
-        `MUFFIN_REQUIRE_SANDBOX=1 and no real containment was executed on this host — ${gate.why}.`,
+        `sandbox required (MUFFIN_REQUIRE_CAPABILITIES) and no real containment was executed on this host — ${gate.why}.`,
       );
     }
     expect(gate.why).not.toBe('');
@@ -172,47 +175,56 @@ const ROWS: [string, string][] = [
  * workspace can reach; it cannot say that production puts a turn there — see
  * the header for where that is proven.
  */
-describe.runIf(gate.run)('the shape the braces produce: a workspace scope reaches nothing in the installation', () => {
-  const s = scaffold();
-  const exec = new SandboxExecutor(mandatoryGuards(s.home, s.workspace));
+describe.runIf(gate.run)(
+  withReason(
+    'the shape the braces produce: a workspace scope reaches nothing in the installation',
+    sandboxCap,
+  ),
+  () => {
+    const s = scaffold();
+    const exec = new SandboxExecutor(mandatoryGuards(s.home, s.workspace));
 
-  for (const [label, rel] of ROWS) {
-    it(`denies a shell write to ${label}`, async () => {
-      const target = s.file(rel);
-      const before = readFileSync(target, 'utf8');
+    for (const [label, rel] of ROWS) {
+      it(`denies a shell write to ${label}`, async () => {
+        const target = s.file(rel);
+        const before = readFileSync(target, 'utf8');
+        const result = await exec.run({
+          command: `printf '${PWNED.trim()}\\n' > ${target}`,
+          cwd: s.workspace,
+          writeScope: [s.workspace],
+        });
+        expect(
+          readFileSync(target, 'utf8'),
+          `${label} was overwritten by a contained command`,
+        ).toBe(before);
+        expect(result.code, `${label}: the command should have failed`).not.toBe(0);
+      });
+    }
+
+    it('denies the conversation history too — the directory, not only the files in it today', async () => {
+      const nuovo = s.file('sessions/inventato.jsonl');
       const result = await exec.run({
-        command: `printf '${PWNED.trim()}\\n' > ${target}`,
+        command: `printf '${PWNED.trim()}\\n' > ${nuovo}`,
         cwd: s.workspace,
         writeScope: [s.workspace],
       });
-      expect(readFileSync(target, 'utf8'), `${label} was overwritten by a contained command`).toBe(before);
-      expect(result.code, `${label}: the command should have failed`).not.toBe(0);
+      expect(result.code).not.toBe(0);
+      expect(() => statSync(nuovo)).toThrow();
     });
-  }
 
-  it('denies the conversation history too — the directory, not only the files in it today', async () => {
-    const nuovo = s.file('sessions/inventato.jsonl');
-    const result = await exec.run({
-      command: `printf '${PWNED.trim()}\\n' > ${nuovo}`,
-      cwd: s.workspace,
-      writeScope: [s.workspace],
+    it('still lets the workspace be written, so the scope is a scope and not a wall', async () => {
+      const target = join(s.workspace, 'appunti.md');
+      const result = await exec.run({
+        command: `printf 'scritto\\n' > ${target}`,
+        cwd: s.workspace,
+        writeScope: [s.workspace],
+      });
+      expect(result.stderr).toBe('');
+      expect(result.code).toBe(0);
+      expect(readFileSync(target, 'utf8')).toBe('scritto\n');
     });
-    expect(result.code).not.toBe(0);
-    expect(() => statSync(nuovo)).toThrow();
-  });
-
-  it('still lets the workspace be written, so the scope is a scope and not a wall', async () => {
-    const target = join(s.workspace, 'appunti.md');
-    const result = await exec.run({
-      command: `printf 'scritto\\n' > ${target}`,
-      cwd: s.workspace,
-      writeScope: [s.workspace],
-    });
-    expect(result.stderr).toBe('');
-    expect(result.code).toBe(0);
-    expect(readFileSync(target, 'utf8')).toBe('scritto\n');
-  });
-});
+  },
+);
 
 /**
  * The belt, on the **pre-fix production configuration exactly**:
@@ -220,101 +232,115 @@ describe.runIf(gate.run)('the shape the braces produce: a workspace scope reache
  * `makeShellTool` when the gateway's cwd was the home. This is the judge's own
  * measurement, re-run against today's guards.
  */
-describe.runIf(gate.run)('the belt: the deny holds even when a write scope names the home', () => {
-  const s = scaffold();
-  const exec = new SandboxExecutor(mandatoryGuards(s.home, s.home));
-  const inHome = { cwd: s.home, writeScope: [s.home] as const };
+describe.runIf(gate.run)(
+  withReason('the belt: the deny holds even when a write scope names the home', sandboxCap),
+  () => {
+    const s = scaffold();
+    const exec = new SandboxExecutor(mandatoryGuards(s.home, s.home));
+    const inHome = { cwd: s.home, writeScope: [s.home] as const };
 
-  for (const [label, rel] of ROWS) {
-    it(`denies ${label} with the home itself as the write scope`, async () => {
-      const target = s.file(rel);
-      const before = readFileSync(target, 'utf8');
-      const result = await exec.run({ command: `printf '${PWNED.trim()}\\n' > ${target}`, ...inHome });
-      expect(readFileSync(target, 'utf8'), `${label} was overwritten inside an allow-write over the home`).toBe(before);
+    for (const [label, rel] of ROWS) {
+      it(`denies ${label} with the home itself as the write scope`, async () => {
+        const target = s.file(rel);
+        const before = readFileSync(target, 'utf8');
+        const result = await exec.run({
+          command: `printf '${PWNED.trim()}\\n' > ${target}`,
+          ...inHome,
+        });
+        expect(
+          readFileSync(target, 'utf8'),
+          `${label} was overwritten inside an allow-write over the home`,
+        ).toBe(before);
+        expect(result.code).not.toBe(0);
+      });
+    }
+
+    it('denies a grandchild shell — the deny is the kernel’s, not the first shell’s cooperation', async () => {
+      const target = s.file('nipote.md');
+      const result = await exec.run({
+        command: `sh -c "sh -c \\"printf '${PWNED.trim()}\\\\n' > ${target}\\""`,
+        ...inHome,
+      });
+      expect(readFileSync(target, 'utf8'), 'a grandchild shell overwrote a file in the home').toBe(
+        'nipote\n',
+      );
       expect(result.code).not.toBe(0);
     });
-  }
 
-  it('denies a grandchild shell — the deny is the kernel’s, not the first shell’s cooperation', async () => {
-    const target = s.file('nipote.md');
-    const result = await exec.run({
-      command: `sh -c "sh -c \\"printf '${PWNED.trim()}\\\\n' > ${target}\\""`,
-      ...inHome,
+    it('denies a freshly spawned interpreter, which never saw the shell at all', async () => {
+      const target = s.file('interprete.md');
+      // The quoting matters and was got wrong first: a `node -e "…"` whose inner
+      // path lost its quotes dies of `SyntaxError` before touching the disk, and
+      // an assertion on "the file is intact" would then pass against a sandbox
+      // with no deny list at all. Measured with `denyWrite: []`: this exact
+      // spelling writes the file, exit 0.
+      const result = await exec.run({
+        command: `node -e 'require("fs").writeFileSync("${target}", "pwned")'`,
+        ...inHome,
+      });
+      expect(
+        readFileSync(target, 'utf8'),
+        'a spawned interpreter overwrote a file in the home',
+      ).toBe('interprete\n');
+      expect(result.code).not.toBe(0);
     });
-    expect(readFileSync(target, 'utf8'), 'a grandchild shell overwrote a file in the home').toBe('nipote\n');
-    expect(result.code).not.toBe(0);
-  });
 
-  it('denies a freshly spawned interpreter, which never saw the shell at all', async () => {
-    const target = s.file('interprete.md');
-    // The quoting matters and was got wrong first: a `node -e "…"` whose inner
-    // path lost its quotes dies of `SyntaxError` before touching the disk, and
-    // an assertion on "the file is intact" would then pass against a sandbox
-    // with no deny list at all. Measured with `denyWrite: []`: this exact
-    // spelling writes the file, exit 0.
-    const result = await exec.run({
-      command: `node -e 'require("fs").writeFileSync("${target}", "pwned")'`,
-      ...inHome,
-    });
-    expect(readFileSync(target, 'utf8'), 'a spawned interpreter overwrote a file in the home').toBe('interprete\n');
-    expect(result.code).not.toBe(0);
-  });
-
-  /**
-   * A pty, because a terminal is a different code path in every shell and
-   * "it held for a pipe" is not the claim.
-   *
-   * The two mechanisms answer differently, and both answers were measured on
-   * 2026-09-03 with the deny list emptied, so that each says what it says
-   * about the pty and not about the deny:
-   *
-   * - **seatbelt (macOS 15)**: `script(1)` exists inside the sandbox and dies
-   *   at `script: openpty: Operation not permitted`. The sandbox refuses the
-   *   pty itself, so on this mechanism there is no pty-shaped escape at all.
-   * - **bubblewrap (Linux, node:22-bookworm, non-root)**: the pty allocates
-   *   and, with no deny, the write lands — `exit=0`, file `"pwned"`. So on the
-   *   platform Muffin actually lives on, this leg is a real test of the deny,
-   *   and it is green.
-   *
-   * This test therefore accepts exactly two outcomes and no third: the pty was
-   * refused, or it was allocated and the write was still denied. It never
-   * accepts "the file is intact" on its own, which is what a `script` failing
-   * for an unrelated reason would also produce.
-   */
-  it('a pty is either refused outright or does not get the write through', async () => {
-    const target = s.file('pty.md');
-    const pty = ptyCommand(`printf '${PWNED.trim()}\\n' > ${target}`);
-    if (pty === null) {
-      if (containmentRequired) {
-        throw new Error(
-          `MUFFIN_REQUIRE_SANDBOX=1 and no pty could be allocated on this host — script(1) not found on ${host}`,
-        );
+    /**
+     * A pty, because a terminal is a different code path in every shell and
+     * "it held for a pipe" is not the claim.
+     *
+     * The two mechanisms answer differently, and both answers were measured on
+     * 2026-09-03 with the deny list emptied, so that each says what it says
+     * about the pty and not about the deny:
+     *
+     * - **seatbelt (macOS 15)**: `script(1)` exists inside the sandbox and dies
+     *   at `script: openpty: Operation not permitted`. The sandbox refuses the
+     *   pty itself, so on this mechanism there is no pty-shaped escape at all.
+     * - **bubblewrap (Linux, node:22-bookworm, non-root)**: the pty allocates
+     *   and, with no deny, the write lands — `exit=0`, file `"pwned"`. So on the
+     *   platform Muffin actually lives on, this leg is a real test of the deny,
+     *   and it is green.
+     *
+     * This test therefore accepts exactly two outcomes and no third: the pty was
+     * refused, or it was allocated and the write was still denied. It never
+     * accepts "the file is intact" on its own, which is what a `script` failing
+     * for an unrelated reason would also produce.
+     */
+    it('a pty is either refused outright or does not get the write through', async () => {
+      const target = s.file('pty.md');
+      const pty = ptyCommand(`printf '${PWNED.trim()}\\n' > ${target}`);
+      if (pty === null) {
+        if (containmentRequired) {
+          throw new Error(
+            `sandbox required (MUFFIN_REQUIRE_CAPABILITIES) and no pty could be allocated on this host — script(1) not found on ${host}`,
+          );
+        }
+        // Declared, never silent: a skipped pty leg that looked like a pass is
+        // the shape of green this repository has shipped before.
+        expect(pty).toBeNull();
+        return;
       }
-      // Declared, never silent: a skipped pty leg that looked like a pass is
-      // the shape of green this repository has shipped before.
-      expect(pty).toBeNull();
-      return;
-    }
-    const result = await exec.run({ command: pty, ...inHome });
-    const refusedPty = /openpty|posix_openpt|ptmx|out of pty/i.test(result.stderr);
-    expect(readFileSync(target, 'utf8'), 'the write went through under a pty').toBe('pty\n');
-    expect(
-      refusedPty || result.code !== 0,
-      `the pty leg proved nothing: exit ${result.code}, stderr ${JSON.stringify(result.stderr.slice(0, 200))}`,
-    ).toBe(true);
-  });
-
-  it('still writes outside the home, so this block is not measuring a dead sandbox', async () => {
-    const target = join(s.workspace, 'fuori.md');
-    const result = await exec.run({
-      command: `printf 'fuori\\n' > ${target}`,
-      cwd: s.workspace,
-      writeScope: [s.workspace],
+      const result = await exec.run({ command: pty, ...inHome });
+      const refusedPty = /openpty|posix_openpt|ptmx|out of pty/i.test(result.stderr);
+      expect(readFileSync(target, 'utf8'), 'the write went through under a pty').toBe('pty\n');
+      expect(
+        refusedPty || result.code !== 0,
+        `the pty leg proved nothing: exit ${result.code}, stderr ${JSON.stringify(result.stderr.slice(0, 200))}`,
+      ).toBe(true);
     });
-    expect(result.code).toBe(0);
-    expect(readFileSync(target, 'utf8')).toBe('fuori\n');
-  });
-});
+
+    it('still writes outside the home, so this block is not measuring a dead sandbox', async () => {
+      const target = join(s.workspace, 'fuori.md');
+      const result = await exec.run({
+        command: `printf 'fuori\\n' > ${target}`,
+        cwd: s.workspace,
+        writeScope: [s.workspace],
+      });
+      expect(result.code).toBe(0);
+      expect(readFileSync(target, 'utf8')).toBe('fuori\n');
+    });
+  },
+);
 
 /**
  * `script(1)` allocating a real pty, or `null` when this host has none.

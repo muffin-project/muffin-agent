@@ -260,14 +260,14 @@ things until 2026-09-06:
   budget gate, and the fail-safe that *queues* a high-risk request from an
   autonomous `system`/`agent` principal instead of auto-approving it.
 - **`hardened` no longer skips one.** The `hardened && owner && taint === 0`
-  auto-allow is gone: `muffin rot harden` answers "who may rewrite the rules",
-  not "can this command be undone".
+  auto-allow is gone. OS hardening and effect approval are separate questions.
 
-Egress is a separate authority and is untouched by this: model-composed bytes
-riding out in a URL's query or fragment still ask the owner and refuse every
-other principal (ADR-0071), and a search's text answers to its own ceiling
-(ADR-0072). Both remain sources of an `ask` that has nothing to do with the
-rule above.
+Egress has its own checks. Above the parameter ceiling, a web-read URL with
+a path, userinfo, query or fragment needs approval unless the whole URL came
+from the sender's own words or an open-web read or search result (ADR-0090).
+The loop applies this rule to the authored portion of the current message,
+including a non-forwarded caption. Forwarded and quoted material stays
+available as context. Search text follows its own ceiling (ADR-0072).
 
 ### What the ceiling does above it (ADR-0075)
 
@@ -818,10 +818,13 @@ hook-path deny remains in force.
 Before shell execution, `SandboxExecutor` tests the real `SandboxManager` path
 with ordinary writes, nested `git init`/`git add`, every active hook name in
 a newly-created `nested/.git/hooks`, a hardlink install, a write through a
-pre-existing hooks symlink, and a rename into place. Linux uses Git's default
-templates, so `*.sample` files must remain writable; macOS uses an empty
-template because Seatbelt denies writes anywhere under the hook directory. If
-any gated hook install succeeds, the sandbox reports `git_hooks_unprotected`
+pre-existing hooks symlink, and a rename into place. The custom template's
+`pre-commit.sample` and the nested index must remain writable. If macOS
+finds Apple's `/usr/bin/git` shim on PATH, the witness resolves the selected
+Git executable before entering Seatbelt. This keeps the developer-directory
+selector outside the contained command's read scope; the same hook and file
+checks still run inside Seatbelt. If any gated hook install succeeds, the
+sandbox reports `git_hooks_unprotected`
 and refuses the caller's command. The production `shell_run_write` wiring test
 also checks `fsmonitor-watchmanv2` and the existing top-level hook deny.
 Ubuntu hosts without the matching profile therefore lose shell execution
@@ -933,29 +936,39 @@ execution.
 Delivery is an effect with its own uncertainty: completed computation and
 definitely delivered output are different facts.
 
+New deferred shell approvals whose argument payload survives checkpoint redaction
+bind the original invocation to the canonical workspace and working directory. On wake, the current kernel rules
+on that call, and one transaction consumes the consent and records the effect
+intent under the active turn claim. Only then can the existing contained
+executor run it. The original tool result is recovered from the journal when
+available. A consumed approval with an unfinished intent yields an uncertain
+result instead of invoking the shell again.
+[ADR-0109](../decisions/0109-resume-the-exact-approved-shell-call.md).
+
 For remote Nodes the same effect semantics cross the protocol. Lost connection
 after `started` but before outcome must remain uncertain; it must not become
 "never happened" merely because the Home did not receive the final frame.
 
 ## 12. Root of Trust
 
-**In two questions, before the formal prose** — because "root of trust",
-"seal", "safe mode" and "harden" are really the answer to only two questions,
-and `muffin doctor` (`cli/doctor.ts`) has to say it in these terms, not the
-four below, before it says anything else:
+**In two questions:**
 
 1. *Has anything touched these files?* If yes, and nobody confirmed it, Muffin
    restricts itself rather than trust a file it cannot vouch for — that is
    "safe mode". `reseal` is the owner saying "I changed that file on purpose;
    take the new version as true" — only he can say it, because that is exactly
    what distinguishes his edit from an intrusion.
-2. *Can anything touch these files?* Today, in `single-user`, Muffin
-   *detects* tampering but cannot *prevent* it, because a process running as
-   the owner can undo the read-only bits by itself. `rot harden` prints the OS
-   commands that make prevention real — it needs `sudo`, which is why it
-   prints them instead of running them. The consequence the owner feels every
-   day: without real prevention, no capability that cannot be undone can ever
-   become a silent allow — `sys.shell` always asks.
+2. *Can anything touch these files?* In `single-user`, another process running
+   as the same user can replace both rules and seal. For an existing `hardened`
+   deployment, `muffin doctor` reports the OS ownership and write-permission
+   checks separately from seal integrity. The manual `rot harden` recipe was
+   retired: it did not verify that the service could still read the seal or
+   boot after transferring ownership. The supported diagnostics are `muffin
+   doctor` and `muffin rot verify`. OS hardening does not reduce approvals.
+   Personal setup uses `muffin init` in single-user mode. The retired
+   `--hardened` flag only declared a mode and could leave an ordinary
+   installation refusing to start after an edit. Existing installations keep
+   their configured mode on rerunning setup.
 
 **A capability-setup verb (`muffin search <provider>`, `muffin mcp add
 --host`) may widen `rot/egress.json` and reseal, and that is the same act as
@@ -1018,8 +1031,9 @@ the unsealed copy, so a fallback would make the seal a suggestion.
 The seal is a detection boundary, not a prevention one: in `single-user` mode
 the sealed files share the owner's OS user and permissions, so a process that
 can rewrite `config.json` can also reseal a consistent chain, and that state is
-indistinguishable from a legitimate pairing. Only `hardened` mode (`muffin rot
-harden`) puts the seal out of that process's reach.
+indistinguishable from a legitimate pairing. A `hardened` deployment needs OS
+permissions that let its runtime identity read the seal without being able to
+replace it. A config flag alone cannot provide those permissions.
 
 A detected divergence moves the runtime toward conservative behaviour until the
 owner deliberately reseals/restarts as required by the implementation.

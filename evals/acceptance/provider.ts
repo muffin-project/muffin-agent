@@ -74,10 +74,10 @@ export type FakeProvider = {
 export type FakeProviderOptions = {
   /**
    * Replies for the main model, consumed in order across every process the
-   * scenario spawns. Past the end the last text repeats, so a turn that loops
-   * one more time than expected does not hang.
+   * scenario spawns. A callback can select a reply from the actual wire
+   * request when the scenario allows more than one tool-discovery path.
    */
-  main: ScriptedReply[];
+  main: ScriptedReply[] | ((request: RecordedRequest) => ScriptedReply);
   /**
    * HTTP-level failures for main-lane calls, consumed in order before the
    * scripted replies begin (#496: 429 + `Retry-After`). Each entry answers
@@ -130,7 +130,11 @@ function flattenContent(content: unknown): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content
-      .map((part) => (part && typeof part === 'object' && 'text' in part ? String((part as { text: unknown }).text) : ''))
+      .map((part) =>
+        part && typeof part === 'object' && 'text' in part
+          ? String((part as { text: unknown }).text)
+          : '',
+      )
       .join('\n');
   }
   return '';
@@ -175,14 +179,18 @@ function wordChunks(text: string): string[] {
 }
 
 function record(body: Body): RecordedRequest {
-  const raw = Array.isArray(body.messages) ? (body.messages as Array<{ role?: unknown; content?: unknown }>) : [];
+  const raw = Array.isArray(body.messages)
+    ? (body.messages as Array<{ role?: unknown; content?: unknown }>)
+    : [];
   const messages = raw.map((m) => ({ role: String(m.role ?? ''), content: m.content }));
   const system = messages
     .filter((m) => m.role === 'system')
     .map((m) => flattenContent(m.content))
     .join('\n');
   const tools = Array.isArray(body.tools)
-    ? (body.tools as Array<{ function?: { name?: unknown } }>).map((t) => String(t.function?.name ?? ''))
+    ? (body.tools as Array<{ function?: { name?: unknown } }>).map((t) =>
+        String(t.function?.name ?? ''),
+      )
     : [];
   return {
     model: String(body.model ?? ''),
@@ -224,7 +232,9 @@ async function listen(server: Server): Promise<{ host: string; port: number; bil
   if (v6 !== null) return { host: '[::1]', port: v6, billable: true };
   const v4 = await tryHost('127.0.0.1');
   if (v4 === null) throw new Error('nessun loopback disponibile per il provider finto');
-  process.stderr.write('! provider finto su 127.0.0.1: pricing.ts lo tratta come locale, la spesa sarà 0\n');
+  process.stderr.write(
+    '! provider finto su 127.0.0.1: pricing.ts lo tratta come locale, la spesa sarà 0\n',
+  );
   return { host: '127.0.0.1', port: v4, billable: false };
 }
 
@@ -275,8 +285,13 @@ export async function startFakeProvider(options: FakeProviderOptions): Promise<F
       // `config.embedder` at this same `baseUrl` (see C3's own fixture) and
       // never has to see this branch at all otherwise.
       if (req.url?.endsWith('/embeddings')) {
-        const inputs = Array.isArray(body.input) ? body.input : typeof body.input === 'string' ? [body.input] : [];
-        const dims = typeof body.dimensions === 'number' && body.dimensions > 0 ? body.dimensions : 8;
+        const inputs = Array.isArray(body.input)
+          ? body.input
+          : typeof body.input === 'string'
+            ? [body.input]
+            : [];
+        const dims =
+          typeof body.dimensions === 'number' && body.dimensions > 0 ? body.dimensions : 8;
         const data = inputs.map((text, index) => ({
           object: 'embedding',
           index,
@@ -306,6 +321,8 @@ export async function startFakeProvider(options: FakeProviderOptions): Promise<F
       let reply: ScriptedReply;
       if (isLight) {
         reply = options.light ? options.light(entry) : extraction([]);
+      } else if (typeof options.main === 'function') {
+        reply = options.main(entry);
       } else {
         reply = options.main[mainIndex] ?? { text: '(script del provider finto esaurito)' };
         if (mainIndex < options.main.length) mainIndex++;
@@ -337,7 +354,12 @@ export async function startFakeProvider(options: FakeProviderOptions): Promise<F
       const respond = (): void => {
         if (body.stream === true) {
           res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
-          const base = { id: `chatcmpl-${requests.length}`, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: entry.model };
+          const base = {
+            id: `chatcmpl-${requests.length}`,
+            object: 'chat.completion.chunk',
+            created: Math.floor(Date.now() / 1000),
+            model: entry.model,
+          };
           const send = (patch: Record<string, unknown>): void => {
             res.write(`data: ${JSON.stringify({ ...base, ...patch })}\n\n`);
           };
@@ -349,10 +371,41 @@ export async function startFakeProvider(options: FakeProviderOptions): Promise<F
           }
           const tc = toolCalls[0];
           if (tc) {
-            send({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: tc.id, type: 'function', function: { name: tc.function.name, arguments: '' } }] }, finish_reason: null }] });
-            send({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: tc.function.arguments } }] }, finish_reason: null }] });
+            send({
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: tc.id,
+                        type: 'function',
+                        function: { name: tc.function.name, arguments: '' },
+                      },
+                    ],
+                  },
+                  finish_reason: null,
+                },
+              ],
+            });
+            send({
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [{ index: 0, function: { arguments: tc.function.arguments } }],
+                  },
+                  finish_reason: null,
+                },
+              ],
+            });
           }
-          send({ choices: [{ index: 0, delta: {}, finish_reason: toolCalls.length > 0 ? 'tool_calls' : 'stop' }] });
+          send({
+            choices: [
+              { index: 0, delta: {}, finish_reason: toolCalls.length > 0 ? 'tool_calls' : 'stop' },
+            ],
+          });
           send({ choices: [], usage });
           res.write('data: [DONE]\n\n');
           res.end();
@@ -367,7 +420,11 @@ export async function startFakeProvider(options: FakeProviderOptions): Promise<F
           choices: [
             {
               index: 0,
-              message: { role: 'assistant', content, ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}) },
+              message: {
+                role: 'assistant',
+                content,
+                ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+              },
               finish_reason: toolCalls.length > 0 ? 'tool_calls' : 'stop',
             },
           ],

@@ -162,54 +162,27 @@ export function richFitsHard(message: OutboundRich): string | null {
 
 export type RichSize = { chars: number; blocks: number; depth: number };
 
-/**
- * The turn's one rich message: the process collapsed in a `details` block, the
- * answer as native blocks under it.
- *
- * This is the shape Telegram's own streaming-replies guidance points at: the
- * draft shows progress while the model works, and the final result is a single
- * structured message. `details` is collapsed by default, so what a person reads
- * is the answer, and the steps/reasoning are one tap away instead of buried in
- * the prose (or gone, which is what truncating them would be).
- *
- * Returns `null` only when there is nothing at all to show (no process, no
- * running step, no answer). `buildBlocks` never refuses, so any real answer —
- * image references and over-wide tables included — keeps the blocks shape.
- */
-export function turnRichMessage(input: {
-  /** I passi **già fatti**, in ordine, plus il preambolo — testo semplice, intero. */
-  process: readonly string[];
-  /**
-   * Il passo che sta succedendo **adesso**, visibile sotto «Processo» (solo
-   * bozza). Quello già successo entra dentro il `details`; questo no: il
-   * consuntivo si può chiudere, il presente deve vedersi.
-   */
-  running?: string | null;
-  /** The model's answer, markdown, exactly as it arrived. */
-  answer: string;
-}): OutboundRich | null {
-  const built = buildBlocks(input.answer, 0);
-  const blocks: InputRichBlock<never>[] = [];
+/** Native answer blocks, followed by the approval receipt if there is one. */
+export function turnRichMessage(
+  answer: string,
+  approvals: readonly string[] = [],
+): OutboundRich | null {
+  const blocks = buildBlocks(answer, 0).blocks;
   // Le righe vuote (le spaziature del markdown) non diventano paragrafi
   // vuoti: un blocco di testo vuoto non è una struttura, e Telegram rifiuta
   // un paragrafo senza testo. E un passo multi-riga (un comando su più righe)
   // è più righe, non un paragrafo solo: dentro un blocco il `\n` nudo
   // collassa, e il comando tornerebbe su una riga.
-  const process = input.process
+  const receipt = approvals
     .flatMap((line) => line.split('\n'))
     .filter((line) => line.trim() !== '');
-  if (process.length > 0) {
+  if (receipt.length > 0) {
     blocks.push({
       type: 'details',
-      summary: 'Processo',
-      blocks: process.map((line) => ({ type: 'paragraph' as const, text: line })),
+      summary: 'Approvazioni',
+      blocks: receipt.map((line) => ({ type: 'paragraph' as const, text: line })),
     });
   }
-  const running = input.running?.trim() ?? '';
-  for (const line of running.split('\n')) {
-    if (line.trim() !== '') blocks.push({ type: 'paragraph', text: line });
-  }
-  blocks.push(...built.blocks);
   if (blocks.length === 0) return null;
   return { blocks };
 }

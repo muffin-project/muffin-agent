@@ -1,15 +1,15 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
 import { describe } from 'vitest';
 import { EXIT_STOPPED } from '../../../core/gateway/service.js';
-import { planUnit } from '../../../core/gateway/unit.js';
+import { planUnit, systemdDiagnosticsForUnit } from '../../../core/gateway/unit.js';
 import { install, until } from '../harness.js';
-import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
-import { privateMessage, startFakeTelegram } from '../telegram.js';
-import { scenario } from '../scenario.js';
 import { shellNonDisponibileQui } from '../sandbox-host.js';
+import { scenario } from '../scenario.js';
+import { privateMessage, startFakeTelegram } from '../telegram.js';
+import { HEADLESS_TURN_TIMEOUT_SECONDS, headlessTestTimeoutMs } from '../turn-budget.js';
 
 /**
  * A10 · The owner's actual journey, one house, one scenario.
@@ -95,7 +95,8 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
         // `install()` already ran `muffin init` with the key on stdin. Every
         // other scenario in this suite takes that for granted; this is the one
         // that checks it instead of inheriting the assumption.
-        if (!existsSync(inst.home)) throw new Error(`home non creata da \`muffin init\`: ${inst.home}`);
+        if (!existsSync(inst.home))
+          throw new Error(`home non creata da \`muffin init\`: ${inst.home}`);
         if (!existsSync(join(inst.home, 'config.json'))) {
           throw new Error(`config.json assente dopo \`muffin init\` in ${inst.home}`);
         }
@@ -106,10 +107,17 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
         // call, `core/rot/readers.ts:262`) — its presence is what "sigillato"
         // means, not a folder that merely exists.
         if (!existsSync(join(inst.home, 'rot', 'manifest.json'))) {
-          throw new Error(`rot/manifest.json assente — il root of trust non risulta sigillato in ${inst.home}`);
+          throw new Error(
+            `rot/manifest.json assente — il root of trust non risulta sigillato in ${inst.home}`,
+          );
         }
         const homeSecretPath = join(inst.home, 'secrets', 'provider_api_key');
-        const expectedPersistentSecretPath = join(inst.xdg, 'muffin', 'secrets', 'provider_api_key');
+        const expectedPersistentSecretPath = join(
+          inst.xdg,
+          'muffin',
+          'secrets',
+          'provider_api_key',
+        );
 
         if (existsSync(homeSecretPath)) {
           throw new Error(
@@ -131,7 +139,9 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
           'sk-acceptance-persisted-key\n',
         );
         if (persisted.code !== 0) {
-          throw new Error(`secret set --persist non riuscito: exit ${persisted.code}\n${persisted.err}`);
+          throw new Error(
+            `secret set --persist non riuscito: exit ${persisted.code}\n${persisted.err}`,
+          );
         }
         if (!persisted.out.includes(expectedPersistentSecretPath)) {
           throw new Error(
@@ -139,10 +149,14 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
           );
         }
         if (existsSync(homeSecretPath)) {
-          throw new Error(`secret set ha creato una copia concorrente nella home: ${homeSecretPath}`);
+          throw new Error(
+            `secret set ha creato una copia concorrente nella home: ${homeSecretPath}`,
+          );
         }
         if (!existsSync(expectedPersistentSecretPath)) {
-          throw new Error(`la secret persistente è sparita dopo secret set: ${expectedPersistentSecretPath}`);
+          throw new Error(
+            `la secret persistente è sparita dopo secret set: ${expectedPersistentSecretPath}`,
+          );
         }
 
         // === 3. `muffin doctor`, green for the reason it should be =============
@@ -154,13 +168,12 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
         // What has to be true is that every warning is one of *these*, named,
         // and that nothing is an outright `fail`.
         const doctor = await inst.muffin(['doctor']);
-        if (doctor.code === 2) throw new Error(`doctor in fail al termine dell'installazione:\n${doctor.out}`);
+        if (doctor.code === 2)
+          throw new Error(`doctor in fail al termine dell'installazione:\n${doctor.out}`);
         const warnLines = doctor.out.split('\n').filter((l) => l.startsWith('! '));
         const expectedWarnNames = [
-          // single-user is the mode `muffin init` seals by default — the one
-          // declared warning the DAY-1 requirements inventory names for the owner's own, fully-run
-          // machine (detection without prevention).
-          'root of trust mode',
+          // ADR-0108: single-user is no longer a doctor warning. The check
+          // is ok and is asserted separately below.
           // No chunk has ever been indexed yet — nothing has been written to
           // recall from until ring 6.
           'vector index',
@@ -215,37 +228,52 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
         ];
         for (const line of warnLines) {
           if (!expectedWarnNames.some((name) => line.startsWith(`! ${name}`))) {
-            throw new Error(`doctor riporta un WARN non dichiarato a questo punto del giro: "${line}"\n\n${doctor.out}`);
+            throw new Error(
+              `doctor riporta un WARN non dichiarato a questo punto del giro: "${line}"\n\n${doctor.out}`,
+            );
           }
         }
         const defaultWarn = warnLines.find((l) => l.startsWith('! default'));
         if (defaultWarn) {
-          console.warn(`[A10] i default del checkout principale non sono quelli di questo build: ${defaultWarn.trim()}`);
+          console.warn(
+            `[A10] i default del checkout principale non sono quelli di questo build: ${defaultWarn.trim()}`,
+          );
         }
         const sandboxWarn = warnLines.find((l) => l.startsWith('! sandbox'));
         if (sandboxWarn) {
           // Dichiarato, non saltato: chi legge il log sa che il giro è passato
           // su una macchina senza contenimento, e quale ragione ha dato doctor.
-          console.warn(`[A10] questa macchina non contiene, e doctor lo dice prima di eseguire: ${sandboxWarn.trim()}`);
+          console.warn(
+            `[A10] questa macchina non contiene, e doctor lo dice prima di eseguire: ${sandboxWarn.trim()}`,
+          );
         }
         const shellWarn = warnLines.find((l) => l.startsWith('! capacità: shell_run'));
         if (shellNonDisponibileQui() !== null && !shellWarn) {
-          throw new Error(`shell host boundary non disponibile ma doctor non lo dichiara:\n${doctor.out}`);
+          throw new Error(
+            `shell host boundary non disponibile ma doctor non lo dichiara:\n${doctor.out}`,
+          );
         }
         if (shellWarn && !/bubblewrap|CVE-2026-87766|unverified/i.test(shellWarn)) {
           throw new Error(`doctor non spiega perché la shell è disabilitata:\n${shellWarn}`);
         }
-        if (!warnLines.some((l) => l.startsWith('! root of trust mode') && l.includes('single-user'))) {
-          throw new Error(`doctor non nomina "root of trust mode: single-user":\n${doctor.out}`);
+        if (!/✓ root of trust mode/.test(doctor.out)) {
+          throw new Error(`doctor non lascia 'root of trust mode' ok (ADR-0108):\n${doctor.out}`);
+        }
+        if (/! root of trust mode/.test(doctor.out)) {
+          throw new Error(`doctor tratta ancora root of trust mode come warn:\n${doctor.out}`);
         }
         // The content check ring 2 sets up: after resolving the duplicate, the
         // "api key" line names exactly ONE copy — the persistent one, since
         // that is what survived — never two.
         if (!/✓ api key\s+.*\(persistent\)/.test(doctor.out)) {
-          throw new Error(`doctor non risolve "api key" a una singola copia persistent dopo la pulizia:\n${doctor.out}`);
+          throw new Error(
+            `doctor non risolve "api key" a una singola copia persistent dopo la pulizia:\n${doctor.out}`,
+          );
         }
         if (doctor.out.includes('esiste anche')) {
-          throw new Error(`doctor nomina ancora due copie della chiave dopo che il doppione è stato risolto:\n${doctor.out}`);
+          throw new Error(
+            `doctor nomina ancora due copie della chiave dopo che il doppione è stato risolto:\n${doctor.out}`,
+          );
         }
 
         // === 4. `muffin gateway install` — the unit meets the real parser =====
@@ -296,19 +324,29 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
         // literally (`launchctl bootstrap … <path>`), so the two checks are
         // shaped differently on purpose, not an inconsistency.
         if (!systemdPlan.path.endsWith(join('systemd', 'user', 'muffin-gateway.service'))) {
-          throw new Error(`il percorso della unit systemd non ha la forma attesa: ${systemdPlan.path}`);
+          throw new Error(
+            `il percorso della unit systemd non ha la forma attesa: ${systemdPlan.path}`,
+          );
         }
         if (!systemdPlan.commands.some((c) => c.includes(dirname(systemdPlan.path)))) {
-          throw new Error(`i comandi stampati non creano la directory vera della unit:\n${systemdPlan.commands.join('\n')}`);
+          throw new Error(
+            `i comandi stampati non creano la directory vera della unit:\n${systemdPlan.commands.join('\n')}`,
+          );
         }
         if (!systemdPlan.commands.some((c) => c.includes(basename(systemdPlan.path)))) {
-          throw new Error(`i comandi systemctl non nominano il vero nome della unit:\n${systemdPlan.commands.join('\n')}`);
+          throw new Error(
+            `i comandi systemctl non nominano il vero nome della unit:\n${systemdPlan.commands.join('\n')}`,
+          );
         }
-        if (!launchdPlan.path.endsWith(join('Library', 'LaunchAgents', 'ai.muffin.gateway.plist'))) {
+        if (
+          !launchdPlan.path.endsWith(join('Library', 'LaunchAgents', 'ai.muffin.gateway.plist'))
+        ) {
           throw new Error(`il percorso del plist non ha la forma attesa: ${launchdPlan.path}`);
         }
         if (!launchdPlan.commands.some((c) => c.includes(launchdPlan.path))) {
-          throw new Error(`i comandi stampati non nominano il vero percorso del plist:\n${launchdPlan.commands.join('\n')}`);
+          throw new Error(
+            `i comandi stampati non nominano il vero percorso del plist:\n${launchdPlan.commands.join('\n')}`,
+          );
         }
         // Isolation itself, checked rather than assumed: neither plan may ever
         // point at this machine's real home — the exact failure mode ring 4's
@@ -316,7 +354,9 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
         const realHomeDir = homedir();
         for (const p of [systemdPlan.path, launchdPlan.path]) {
           if (p.startsWith(realHomeDir) && !p.startsWith(scratchHomeDir)) {
-            throw new Error(`la unit generata punta alla home reale di questa macchina, non allo scratch — ${p}`);
+            throw new Error(
+              `la unit generata punta alla home reale di questa macchina, non allo scratch — ${p}`,
+            );
           }
         }
 
@@ -336,9 +376,17 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
             const file = join(scratchHomeDir, 'muffin-gateway.service');
             writeFileSync(file, systemdPlan.text);
             const verify = spawnSync('systemd-analyze', ['verify', file], { encoding: 'utf8' });
-            if (`${verify.stdout ?? ''}${verify.stderr ?? ''}`.trim() !== '' || verify.status !== 0) {
+            // Host units that systemd walks are not this file. Ubuntu 26.04
+            // warns that CPUAccounting= was removed from xfs_scrub; those
+            // lines do not say the generated unit was rejected. A non-zero
+            // status still fails: install's verify on this image exits 0.
+            const relevant = systemdDiagnosticsForUnit(
+              file,
+              `${verify.stdout ?? ''}${verify.stderr ?? ''}`,
+            );
+            if (relevant !== '' || verify.status !== 0) {
               throw new Error(
-                `systemd-analyze verify rifiuta la unit generata:\n${verify.stdout}\n${verify.stderr}`,
+                `systemd-analyze verify rifiuta la unit generata:\n${relevant}\nexit ${String(verify.status)}`,
               );
             }
             linuxLegWhy = 'eseguita: systemd-analyze verify ha accettato la unit generata';
@@ -352,7 +400,8 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
           );
           linuxLegWhy = `saltata: piattaforma corrente è ${process.platform}, non linux (imposta MUFFIN_REQUIRE_SYSTEMD=1 su un runner Linux per forzarla)`;
         }
-        if (linuxLegWhy === '') throw new Error('la gamba Linux non ha dichiarato perché è stata eseguita o saltata');
+        if (linuxLegWhy === '')
+          throw new Error('la gamba Linux non ha dichiarato perché è stata eseguita o saltata');
 
         let darwinLegWhy = '';
         if (process.platform === 'darwin') {
@@ -360,14 +409,20 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
           writeFileSync(plistFile, launchdPlan.text);
           const lint = spawnSync('plutil', ['-lint', plistFile], { encoding: 'utf8' });
           if (!`${lint.stdout}${lint.stderr}`.includes('OK')) {
-            throw new Error(`plutil -lint rifiuta il plist generato:\n${lint.stdout}${lint.stderr}`);
+            throw new Error(
+              `plutil -lint rifiuta il plist generato:\n${lint.stdout}${lint.stderr}`,
+            );
           }
-          darwinLegWhy = 'eseguita: plutil -lint ha accettato il plist generato (solo il testo — vedi il docstring sopra: mai launchctl, mai il path reale)';
+          darwinLegWhy =
+            'eseguita: plutil -lint ha accettato il plist generato (solo il testo — vedi il docstring sopra: mai launchctl, mai il path reale)';
         } else {
-          console.warn(`[A10] gamba macOS (plutil -lint) SALTATA: piattaforma corrente è ${process.platform}, non darwin`);
+          console.warn(
+            `[A10] gamba macOS (plutil -lint) SALTATA: piattaforma corrente è ${process.platform}, non darwin`,
+          );
           darwinLegWhy = `saltata: piattaforma corrente è ${process.platform}, non darwin`;
         }
-        if (darwinLegWhy === '') throw new Error('la gamba macOS non ha dichiarato perché è stata eseguita o saltata');
+        if (darwinLegWhy === '')
+          throw new Error('la gamba macOS non ha dichiarato perché è stata eseguita o saltata');
         // Exactly one of the two live-parser legs must have actually run: this
         // machine has exactly one platform, and a report where both are
         // "skipped" would mean the gate silently proved nothing at all.
@@ -381,21 +436,30 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
         //
         // Surface + secret set up before the gateway boots — `SurfaceRegistry`
         // reads them at startup, same order as b-telegram-pairing.accept.ts.
-        const tok = await inst.muffin(['secret', 'set', 'telegram_token'], '123456:fake-acceptance-token');
-        if (tok.code !== 0) throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
+        const tok = await inst.muffin(
+          ['secret', 'set', 'telegram_token'],
+          '123456:fake-acceptance-token',
+        );
+        if (tok.code !== 0)
+          throw new Error(`secret set telegram_token: exit ${tok.code}\n${tok.err}`);
         const enable = await inst.muffin(['surface', 'enable', 'telegram', '--api-base', tg.url]);
-        if (enable.code !== 0) throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
+        if (enable.code !== 0)
+          throw new Error(`surface enable telegram: exit ${enable.code}\n${enable.err}`);
         const pairingCode = /\n\s{6}([A-Z0-9-]{4,})\n/.exec(enable.err)?.[1];
         if (!pairingCode) throw new Error(`nessun codice di pairing stampato:\n${enable.err}`);
 
         const gw = await inst.gateway();
+        let gatewayStopError: Error | undefined;
         try {
           await gw.waitFor(/muffin gateway/, 20_000);
 
           // Ring 5's own claim: the live process is up, and `gateway status`
           // — the command an owner actually types — sees it.
           const status = await inst.muffin(['gateway', 'status']);
-          if (status.code !== 0) throw new Error(`\`gateway status\` non vede il gateway vivo: exit ${status.code}\n${status.out}`);
+          if (status.code !== 0)
+            throw new Error(
+              `\`gateway status\` non vede il gateway vivo: exit ${status.code}\n${status.out}`,
+            );
           if (!/^attivo · pid \d+/.test(status.out)) {
             throw new Error(`\`gateway status\` non ha la forma attesa: ${status.out}`);
           }
@@ -409,7 +473,9 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
             throw new Error(`owner atteso 999, trovato ${String(ownerIdFromConfig(inst.home))}`);
           }
 
-          tg.deliver(privateMessage({ id: 999, name: 'Owner' }, 'qual è il mio piatto preferito da oggi?'));
+          tg.deliver(
+            privateMessage({ id: 999, name: 'Owner' }, 'qual è il mio piatto preferito da oggi?'),
+          );
           // By text, not by position: DAY-1 requirement B13 means a real turn can now
           // also send a `sendMessage` for its own progress status line (the
           // pairing confirmation above is a real message too) before the
@@ -422,40 +488,65 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
           await until(() => tg.messages().some((m) => m.text.includes('ricci di mare')), 20_000);
           const reply = tg.messages().find((m) => m.text.includes('ricci di mare'));
           if (!reply) {
-            throw new Error(`la risposta consegnata su Telegram non contiene il testo atteso: ${JSON.stringify(tg.messages())}`);
+            throw new Error(
+              `la risposta consegnata su Telegram non contiene il testo atteso: ${JSON.stringify(tg.messages())}`,
+            );
           }
 
           // The durable row, not just what the fake bot happened to receive:
           // `delivery` has to say `sent`, the way B8 proves the negative case.
-          const turnRow = inst.db((db) =>
-            db.prepare(`SELECT id, delivery, tenant, surface FROM turns ORDER BY created_at DESC LIMIT 1`).get() as
-              | { id: string; delivery: string | null; tenant: string; surface: string }
-              | undefined,
+          const turnRow = inst.db(
+            (db) =>
+              db
+                .prepare(
+                  `SELECT id, delivery, tenant, surface FROM turns ORDER BY created_at DESC LIMIT 1`,
+                )
+                .get() as
+                | { id: string; delivery: string | null; tenant: string; surface: string }
+                | undefined,
           );
           if (!turnRow) throw new Error('nessuna riga turns dopo la conversazione Telegram');
           if (turnRow.surface !== 'telegram' || turnRow.tenant !== 'host') {
-            throw new Error(`il turno non risulta sulla superficie/tenant attesi: ${JSON.stringify(turnRow)}`);
+            throw new Error(
+              `il turno non risulta sulla superficie/tenant attesi: ${JSON.stringify(turnRow)}`,
+            );
           }
           if (turnRow.delivery !== 'sent') {
-            throw new Error(`il turno Telegram non risulta consegnato (delivery=${String(turnRow.delivery)}): ${JSON.stringify(turnRow)}`);
+            throw new Error(
+              `il turno Telegram non risulta consegnato (delivery=${String(turnRow.delivery)}): ${JSON.stringify(turnRow)}`,
+            );
           }
 
           // === 7. The memory the journey should have left behind ==============
           //
           // First, the episode itself — durable, tenant-scoped evidence, not
           // an inference from what a later process happens to recall.
-          const episode = inst.db((db) =>
-            db
-              .prepare(`SELECT connector, role FROM episodes WHERE tenant_id = 'host' AND content LIKE '%ricci di mare%'`)
-              .get() as { connector: string; role: string } | undefined,
+          const episode = inst.db(
+            (db) =>
+              db
+                .prepare(
+                  `SELECT connector, role FROM episodes WHERE tenant_id = 'host' AND content LIKE '%ricci di mare%'`,
+                )
+                .get() as { connector: string; role: string } | undefined,
           );
-          if (!episode) throw new Error('nessun episodio con il fatto detto su Telegram — la memoria non lo ha acquisito');
+          if (!episode)
+            throw new Error(
+              'nessun episodio con il fatto detto su Telegram — la memoria non lo ha acquisito',
+            );
 
           // Then the property that actually matters to the owner: a second,
           // unrelated process remembers it — same shape as c-memory.accept.ts's
           // C1, reused here across a surface boundary instead of a session one.
-          const recall = await inst.muffin(['run', '--session', 'a10-recall', '--timeout', String(HEADLESS_TURN_TIMEOUT_SECONDS), 'qual è il mio piatto preferito?']);
-          if (recall.code !== 0) throw new Error(`il turno di richiamo: exit ${recall.code}\n${recall.err}`);
+          const recall = await inst.muffin([
+            'run',
+            '--session',
+            'a10-recall',
+            '--timeout',
+            String(HEADLESS_TURN_TIMEOUT_SECONDS),
+            'qual è il mio piatto preferito?',
+          ]);
+          if (recall.code !== 0)
+            throw new Error(`il turno di richiamo: exit ${recall.code}\n${recall.err}`);
           const sentToRecall = inst.provider.main().at(-1);
           if (!sentToRecall) throw new Error('il turno di richiamo non ha mai chiamato il modello');
           if (!sentToRecall.transcript.includes('ricci di mare')) {
@@ -466,11 +557,16 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
         } finally {
           // A real owner stops the gateway before wiping the home — never
           // leaves it running against a database that is about to disappear.
+          // The check is outside `finally`: a throw here would hide the
+          // journey error that biome (noUnsafeFinally) refuses to swallow.
           const exitCode = await gw.stop();
           if (exitCode !== EXIT_STOPPED) {
-            throw new Error(`atteso EXIT_STOPPED (${EXIT_STOPPED}) da un gateway drenato via SIGTERM, ricevuto ${exitCode}`);
+            gatewayStopError = new Error(
+              `atteso EXIT_STOPPED (${EXIT_STOPPED}) da un gateway drenato via SIGTERM, ricevuto ${exitCode}`,
+            );
           }
         }
+        if (gatewayStopError) throw gatewayStopError;
 
         // === 8. `muffin uninstall` — nothing left but what was `--persist`ed ==
         //
@@ -484,19 +580,28 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
         // which is the right behaviour for a destructive command and not a
         // gap this scenario needs to route around.
         const uninstall = await inst.muffin(['uninstall', '--yes']);
-        if (uninstall.code !== 0) throw new Error(`uninstall: exit ${uninstall.code}\n${uninstall.out}${uninstall.err}`);
-        if (existsSync(inst.home)) throw new Error(`la home esiste ancora dopo \`muffin uninstall --yes\`: ${inst.home}`);
+        if (uninstall.code !== 0)
+          throw new Error(`uninstall: exit ${uninstall.code}\n${uninstall.out}${uninstall.err}`);
+        if (existsSync(inst.home))
+          throw new Error(`la home esiste ancora dopo \`muffin uninstall --yes\`: ${inst.home}`);
 
         // The persisted copy (ring 2's own resolution: the one that survived
         // the duplicate, kept alive precisely for this check) is untouched —
         // ADR-0039's whole point.
         const persistentSecretPath = /→ (.+)\s*$/m.exec(persisted.out.trim())?.[1];
-        if (!persistentSecretPath) throw new Error(`impossibile risalire al percorso persistente dall'output del passo 2:\n${persisted.out}`);
+        if (!persistentSecretPath)
+          throw new Error(
+            `impossibile risalire al percorso persistente dall'output del passo 2:\n${persisted.out}`,
+          );
         if (!existsSync(persistentSecretPath)) {
-          throw new Error(`il segreto --persist non è sopravvissuto a \`muffin uninstall\` (ADR-0039): ${persistentSecretPath}`);
+          throw new Error(
+            `il segreto --persist non è sopravvissuto a \`muffin uninstall\` (ADR-0039): ${persistentSecretPath}`,
+          );
         }
         if (!uninstall.err.includes(persistentSecretPath)) {
-          throw new Error(`\`uninstall\` non dice che la chiave persistente resta, o non ne nomina il percorso:\n${uninstall.err}`);
+          throw new Error(
+            `\`uninstall\` non dice che la chiave persistente resta, o non ne nomina il percorso:\n${uninstall.err}`,
+          );
         }
       } finally {
         await inst.cleanup();

@@ -4,6 +4,11 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import DatabaseCtor from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
+import {
+  type IdentityLayers,
+  resolveIdentityLayers,
+  USER_OVERLAY_TOKEN_BUDGET,
+} from '../agent/context/identity.js';
 import { CONTINUATION_TTL_MS } from '../agent/loop.js';
 import {
   CONSERVATIVE,
@@ -15,7 +20,7 @@ import { audioAccettato, immagineAccettata } from '../agent/providers/modalita.j
 import { speaksReasoningEffort, wantsExplicitCache } from '../agent/providers/openai-compat.js';
 import { type VerificationResult, verifyInferenceRoute } from '../agent/providers/verify.js';
 import { baseToolOrder } from '../agent/runtime.js';
-import { diagnoseSearch } from '../agent/tools/search.js';
+import { diagnoseConfiguredSearch } from '../agent/search-readiness.js';
 import { type Prerequisito, prerequisitiTrascrizione } from '../core/audio/trascrivi.js';
 import { ChatGPTConnection } from '../core/config/chatgpt-oauth.js';
 import {
@@ -69,6 +74,7 @@ import { assessShellBoundary } from '../core/sandbox/shell-boundary.js';
 import type { StatoSuperficie } from '../core/surface/salute.js';
 import { describeInterrupted, readTurnHealth, readUndelivered } from '../core/turns/store.js';
 import { Vault, type VaultAudit, type VaultStore } from '../core/vault/vault.js';
+import { credentialRemedy, describeChain } from './fallback.js';
 import { secretStoreHint } from './prompt.js';
 import { PLAIN, type Style } from './ui.js';
 import { type BuildStamp, describeBuild, findCheckoutRoot } from './update.js';
@@ -300,8 +306,8 @@ export async function runDoctor(
   const p = paths(home);
   const checks: Check[] = [];
   const ok = (name: string, detail: string) => checks.push({ name, level: 'ok', detail });
-  const warn = (name: string, detail: string, remedy: string) =>
-    checks.push({ name, level: 'warn', detail, remedy });
+  const warn = (name: string, detail: string, remedy?: string) =>
+    checks.push({ name, level: 'warn', detail, ...(remedy === undefined ? {} : { remedy }) });
   const fail = (name: string, detail: string, remedy: string) =>
     checks.push({ name, level: 'fail', detail, remedy });
 
@@ -449,11 +455,11 @@ export async function runDoctor(
       'model profile',
       `${profileProblems.join(' · ')} — ${config.models.main} caduto sul profilo conservativo: ` +
         `thinking ${resolvedProfile.thinking}, sampling ${resolvedProfile.sampling}, ` +
-        // Due numeri distinti e per questo confondibili se non nominati per ciò che sono:
-        // `maxToolsExposed` è quanti tool il modello *vede*, `maxToolCallsPerTurn`
-        // è quante *chiamate* può fare; `null` lascia il conteggio libero e
-        // sono tempo e spesa a porre il limite.
-        `${resolvedProfile.maxToolsExposed} tool esposti, ${resolvedProfile.maxToolCallsPerTurn === null ? 'nessun tetto numerico di tool call' : `${resolvedProfile.maxToolCallsPerTurn} call/turno`}, ` +
+        // Il numero di tool visibili non è più un tetto: il nucleo resta in vista
+        // e il resto si carica. `maxToolCallsPerTurn` è quante *chiamate* può
+        // fare; `null` lascia il conteggio libero e sono tempo e spesa a porre
+        // il limite.
+        `tool caricati per pertinenza, ${resolvedProfile.maxToolCallsPerTurn === null ? 'nessun tetto numerico di tool call' : `${resolvedProfile.maxToolCallsPerTurn} call/turno`}, ` +
         `stampelle [${resolvedProfile.recovery.join(', ')}]`,
       `ripara o rimuovi il profilo scartato sopra, sotto ${cartelleCadute}`,
     );
@@ -465,6 +471,29 @@ export async function runDoctor(
       `${profileProblems.join(' · ')} — ${config.models.main} risolve comunque su "${resolvedProfile.name}" · ${provenienza}`,
       `ripara o rimuovi il profilo scartato sopra, sotto ${cartelleCadute}`,
     );
+  }
+
+  // The provider chains (ADR-0110): which link is serving and why the
+  // others are not. Silent when a lane has no fallbacks — nothing to say.
+  for (const lane of ['main', 'light'] as const) {
+    if (!config.fallbacks?.[lane]?.length) continue;
+    const chain = describeChain(config, lane, home);
+    const detail = chain.lines.join(' | ');
+    if (chain.degraded) {
+      warn(
+        `provider chain ${lane}`,
+        `${detail} — la connessione principale è in pausa: i messaggi vanno ai ripieghi`,
+        'si riprova da sola allo scadere della pausa; se hai già sistemato l’account: `muffin fallback reset`',
+      );
+    } else if (chain.missing.length > 0) {
+      warn(
+        `provider chain ${lane}`,
+        detail,
+        chain.missing.map((link) => credentialRemedy(link)).join(' · '),
+      );
+    } else {
+      ok(`provider chain ${lane}`, detail);
+    }
   }
 
   // I pin di routing che derivano da un'altra era del modello (issue #501):
@@ -521,11 +550,14 @@ export async function runDoctor(
   // current mode actually gives.
   const rot = verify(home, config.rot.mode);
   if (rot.ok) {
-    ok('root of trust', `${rot.fileCount} files verified, mode ${rot.mode}`);
-  } else if (rot.action === 'refuse') {
-    fail('root of trust', `${rot.reason}: ${rot.diverged.join(', ')}`, rot.remedy);
+    ok('root of trust', `${rot.fileCount} files in rot/, mode ${rot.mode}`);
   } else {
-    warn('root of trust', `${rot.reason}: ${rot.diverged.join(', ')} — safe mode`, rot.remedy);
+    ok(
+      'root of trust',
+      `rot/ è configurazione dell'owner (mode ${rot.mode}); un manifest rimasto segnala ${rot.reason}` +
+        (rot.diverged.length > 0 ? ` (${rot.diverged.join(', ')})` : '') +
+        ' — gli edit valgono senza sigillo (ADR-0108)',
+    );
   }
   ownerBindingCheck(ok, warn, fail, home, config, options.hardened);
 
@@ -558,7 +590,7 @@ export async function runDoctor(
     warn(
       'policy matrix',
       `fallback ai valori compilati (${matrix.note}) — le modifiche a rot/policy.json non hanno effetto`,
-      'ripristina il file dai default del repo e rifai `muffin rot reseal`',
+      'ripristina rot/policy.json dai default del repo, oppure correggi il file; un riavvio basta, senza sigillo',
     );
   }
 
@@ -591,7 +623,7 @@ export async function runDoctor(
     warn(
       'rot readers',
       readers.skipped.map((s) => `NON verificato — ${s.why}`).join('; '),
-      'run `muffin rot reseal`',
+      'è un avviso di lettura, non un sigillo da rifare',
     );
   } else if (readers.violations.length === 0) {
     ok('rot readers', `${readers.fileCount} file sigillati, ognuno con un lettore dichiarato`);
@@ -601,7 +633,7 @@ export async function runDoctor(
       'rot readers',
       readers.violations.map((v) => `${v.id}: ${v.sample.join(', ')}`).join(' · '),
       'sembra vincolante ma non lo è, perché nessun modulo lo legge davvero: dagli un lettore, oppure toglilo da rot/ ' +
-        '— poi rifai `muffin rot reseal` (è dentro il sigillo: per questo serve la tua conferma)',
+        "(è un file di confini: per toglierlo o dargli un lettore basta l'edit e un riavvio)",
     );
   }
 
@@ -611,12 +643,9 @@ export async function runDoctor(
   // into config.json, created no service user, and made the kernel *more*
   // permissive. The one mode that could be a lie was the one nobody checked.
   if (config.rot.mode === 'single-user') {
-    warn(
+    ok(
       'root of trust mode',
-      'ogni capability che non si annulla (`sys.shell` in testa) ti chiede sempre conferma e non diventa mai un allow ' +
-        'silenzioso: se qualcosa modifica questi file mentre gira come te, Muffin se ne accorge solo dopo, non lo ' +
-        'impedisce prima — è la modalità single-user: le manomissioni sono rilevate, non impedite',
-      '`muffin rot harden` stampa i comandi per rendere vero il blocco su questa macchina, e cosa cambia una volta fatto',
+      "rot/ è configurazione dell'owner: gli edit valgono al prossimo avvio. L'agente non può scriverci (`rot.write` è negato). Nessun sigillo da rinnovare (ADR-0108).",
     );
   } else {
     const hardening = hardeningHolds(home);
@@ -624,8 +653,8 @@ export async function runDoctor(
       ok(
         'root of trust mode',
         hardening.caveat
-          ? `hardened: prevention verified now, but narrower than usual — ${hardening.caveat}`
-          : 'hardened: this process cannot write the RoT — prevention, verified now',
+          ? `hardened: file checks passed with a limitation — ${hardening.caveat}`
+          : 'hardened: the checked files passed the OS ownership and write-permission checks',
       );
     } else {
       fail(
@@ -642,13 +671,18 @@ export async function runDoctor(
   // before this told the owner their copy had fallen behind. Measured on the
   // owner's own machine (docs/evidence/deriva-defaults-2026-08-26.md):
   // shipped files sat at their `init`-day content for weeks and nothing said
-  // so. persona.md and voice.md are no longer prompt sources (ADR-0107); the
-  // sealed identity and the skills still are. See defaultsDriftCheck below for the two
-  // opposite verdicts this can reach and why they must never be confused.
+  // so. While ADR-0107 is unaccepted, persona.md and voice.md stay prompt
+  // sources, as do the sealed identity and the skills. See defaultsDriftCheck
+  // below for the two opposite verdicts this can reach and why they must
+  // never be confused.
   const moduleDir = dirname(fileURLToPath(import.meta.url));
   const checkoutRoot =
     options.checkoutRoot !== undefined ? options.checkoutRoot : findCheckoutRoot(moduleDir);
-  const drift = diagnoseDefaultsDrift(home, checkoutRoot);
+  // `rot/identity.md` is the identity check's below (ADR-0112): its home
+  // copy is no longer the foundation, so "HEAD moved on" is not drift there.
+  const drift = diagnoseDefaultsDrift(home, checkoutRoot).filter(
+    (d) => d.path !== 'rot/identity.md',
+  );
   if (drift.length === 0) {
     warn(
       'defaults',
@@ -671,17 +705,17 @@ export async function runDoctor(
     if (sealedAdoptable.length >= 2) sealedDriftGroupCheck(warn, sealedAdoptable);
   }
 
-  const leftoverPrompt = [
+  const installedCharacter = [
     existsSync(p.persona) ? 'persona.md' : null,
     existsSync(p.voice) ? 'voice.md' : null,
   ].filter((name): name is string => name !== null);
-  if (leftoverPrompt.length > 0) {
-    warn(
+  if (installedCharacter.length > 0) {
+    ok(
       'prompt sources',
-      `${leftoverPrompt.join(' e ')} ${leftoverPrompt.length === 1 ? 'è ancora nella home' : 'sono ancora nella home'} ma non ${leftoverPrompt.length === 1 ? 'è più una sorgente' : 'sono più sorgenti'} del prompt. Il carattere è rot/identity.md.`,
-      'per adottare il patto spedito, `muffin rot reseal` su rot/identity.md. Questi file si possono lasciare: non vengono letti e non vengono cancellati.',
+      `${installedCharacter.join(' e ')} ${installedCharacter.length === 1 ? 'è nel prompt owner' : 'sono nel prompt owner'}, insieme al patto. Assemblare il prompt non riscrive il sigillo.`,
     );
   }
+  identityCheck(ok, warn, resolveIdentityLayers(home));
 
   // The caps that bind, and which file they came from. Same shape of invisible
   // fact as the policy matrix above and worse in consequence: for months the
@@ -698,14 +732,14 @@ export async function runDoctor(
     warn(
       'tetto di spesa',
       `valori compilati (${budgets.caps.monthlyUsd}/${budgets.caps.perTenantDailyUsd} USD) — ${budgets.notes.join(' · ')}`,
-      'ripristina rot/budgets.json dai default del repo e rifai `muffin rot reseal`',
+      'correggi rot/budgets.json oppure lancia `muffin rot migrate` per i campi additivi; il fuso già impostato resta, e non serve un sigillo',
     );
   }
   if (budgets.quietSource === 'fallback') {
     warn(
       'quiet hours',
       `finestra compilata ${budgets.quietHours.from}-${budgets.quietHours.to} ${budgets.quietHours.timezone} — ${budgets.notes.join(' · ')}`,
-      'ripristina rot/budgets.json dai default del repo e rifai `muffin rot reseal`',
+      'correggi rot/budgets.json oppure lancia `muffin rot migrate` per i campi additivi; il fuso già impostato resta, e non serve un sigillo',
     );
   }
   // Shown only when there is something to say: declarations come from the
@@ -725,7 +759,7 @@ export async function runDoctor(
     warn(
       'endpoint non conteggiati',
       `sezione unmetered non valida (${budgets.notes.join(' · ')}) — tutto resta a consumo`,
-      'correggi rot/budgets.json e rifai `muffin rot reseal`',
+      'correggi rot/budgets.json e riavvia; non serve un sigillo',
     );
   }
 
@@ -752,11 +786,30 @@ export async function runDoctor(
     if (connection.kind === 'openai-chatgpt') {
       try {
         const session = new ChatGPTConnection(home).session();
-        if (session?.connected)
+        if (session?.planLimited)
+          credentialFail(
+            'ChatGPT',
+            `Plan usage limit reached${session.planLimitedAt === undefined ? '' : ` (last refusal ${new Date(session.planLimitedAt).toLocaleString('it-IT')})`}: replies fail until it resets. Cleared by the next successful reply.`,
+            'check https://chatgpt.com/settings/usage',
+          );
+        else if (session?.usable)
           credentialOk(
             'ChatGPT',
             'Account connected; plan quota and credits are managed at https://chatgpt.com/settings/usage',
           );
+        else if (session?.renewable)
+          credentialOk(
+            'ChatGPT',
+            'ChatGPT will attempt to refresh the saved authorization on the next request.',
+          );
+        else if (session?.needsLogin)
+          credentialFail(
+            'ChatGPT',
+            'Refresh was refused (authorization expired or revoked).',
+            'muffin chatgpt login',
+          );
+        else if (session?.accessExpired)
+          credentialFail('ChatGPT', 'Access token is expired.', 'muffin chatgpt login');
         else
           credentialFail(
             'ChatGPT',
@@ -878,6 +931,7 @@ export async function runDoctor(
     // this repository and none of them was ever *consulted* — which is the same
     // failure they were written to prevent, one layer out.
     const chunks = countOrNull(db, 'chunks');
+    const vectorsDisabled = config?.embedder?.enabled === false;
 
     // **Prima** dei conteggi, non dentro il ramo dei conteggi coerenti.
     //
@@ -902,8 +956,9 @@ export async function runDoctor(
     let configurato: Embedder | undefined;
     let configRotta: string | undefined;
     try {
-      configurato =
-        config === null ? undefined : makeEmbedder(config.embedder, (ref) => readSecret(ref, home));
+      if (config !== null && !vectorsDisabled) {
+        configurato = makeEmbedder(config.embedder, (ref) => readSecret(ref, home));
+      }
     } catch (error) {
       // Una config di embedder incompleta non deve far cadere `doctor`: è
       // proprio il momento in cui serve. Ma nemmeno sparire: qui stava un
@@ -918,7 +973,9 @@ export async function runDoctor(
       configRotta = error instanceof Error ? error.message : String(error);
     }
 
-    if (configRotta !== undefined) {
+    if (vectorsDisabled) {
+      ok('vector index', 'embedding disattivati · ricerca testuale attiva');
+    } else if (configRotta !== undefined) {
       fail(
         'vector index',
         `${chunks === null ? 'nessuna tabella chunks' : `${chunks} chunks`}, e config.embedder non è ` +
@@ -1048,35 +1105,16 @@ export async function runDoctor(
     } else {
       const last = consolidation.last;
       const when = last.ranAt.toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' });
-      // Nothing got through: every episode the extractor attempted failed *and*
-      // the batch added no fact. Three conjuncts, each load-bearing.
-      //
-      // `episodes` counts attempts, not successes (`ingest.ts` §`marked`), which
-      // is what makes it comparable to `errors` at all. A failed extraction is
-      // deliberately left unmarked so the next fire retries it — so a *minority*
-      // of errors is a lane that is healing itself, and escalating that to a
-      // non-zero exit would train the owner to ignore the line. What does not
-      // heal is a batch where nothing came through: those same episodes fail
-      // again next run, and again, forever (`ingest.ts` §`fetched`).
-      //
-      // `facts === 0` is not decoration. The maintenance sweep pushes its own
-      // failure into `report.errors` (`consolidator.ts` §sweep), so a run of one
-      // episode that succeeded and then tripped the sweep would otherwise land
-      // here reading as total failure — a warn over a batch that worked.
-      //
-      // **La soglia è la maggioranza, non la totalità**, e la differenza è
-      // stata misurata sull'installazione dell'owner il 27/08: gli ultimi tre
-      // giri erano 3 errori su 3 episodi, 10 su 11 e 13 su 14, tutti con zero
-      // fatti — la corsia era morta dal cambio di modello del 25/08. Il primo
-      // avvisava; gli altri due leggevano `ok` **verdi**, perché un solo
-      // episodio che non ha lanciato bastava a far fallire `errors >= episodes`
-      // per uno. Il commento sopra dice «una *minoranza* di errori è una corsia
-      // che si sta curando»: 13 su 14 non è una minoranza, quindi era la
-      // soglia a essere sbagliata, non la forma. E `facts === 0` continua a
-      // fare il lavoro che il caso dello sweep chiede — un giro che ha
-      // prodotto un fatto non arriva qui comunque.
-      const nothingGotThrough =
-        last.episodes > 0 && last.facts === 0 && last.errors * 2 > last.episodes;
+      const counts =
+        `${last.episodes} ${last.episodes === 1 ? 'episodio' : 'episodi'} · ` +
+        `${last.facts} ${last.facts === 1 ? 'fatto' : 'fatti'} · ` +
+        `${last.indexed} indicizzati · ${consolidation.runs} run in totale`;
+      // The log combines extraction, judge, indexing and maintenance errors.
+      // The count cannot tell which stage failed or how many episodes failed.
+      const batchErrors =
+        last.errors > 0
+          ? ` · ${last.errors} ${last.errors === 1 ? 'errore' : 'errori'} nel batch (fase non registrata)`
+          : '';
 
       // `ConsolidationOutcome` is a closed union of four (`ran | budget | busy
       // | error`); a `switch` with an exhaustive `default` is what makes a
@@ -1094,58 +1132,23 @@ export async function runDoctor(
             // The cap moved into the seal, so the remedy moved with it: telling the
             // owner to edit config.json would now send them to a field that no
             // longer exists.
-            'alza `monthlyUsd` in rot/budgets.json e fai `muffin rot reseal`, o aspetta il mese nuovo',
+            'alza `monthlyUsd` in rot/budgets.json e riavvia, o aspetta il mese nuovo',
           );
           break;
         case 'error':
-          // The batch threw, so `execute` wrote a *blank* row — zero episodi, zero
-          // fatti, and the message only ever went to stderr. Printed through `ok`
-          // (as it was until this branch existed) that row read exactly like the
-          // quiet week above: same shape, same zeroes, green. Telling a dead lane
-          // from a quiet one is the single confusion this whole check exists to
-          // remove, so this is the one outcome that has to be a `fail`.
+          // A thrown run may have made partial progress; the row keeps the counts.
           fail(
             'consolidamento',
-            `ultimo giro ${when} (${last.trigger}) fallito: gli episodi non diventano fatti ` +
-              `e il recall resta solo-keyword · ${consolidation.runs} run in totale`,
-            "run `muffin memory extract`: rifà il giro in primo piano e stampa l'errore, che la riga non conserva",
+            `ultimo giro ${when} (${last.trigger}) fallito · ${counts}${batchErrors}`,
+            'controlla i log del processo che ha eseguito il giro per il dettaglio dell’errore',
           );
           break;
         case 'ran':
         case 'busy': {
-          if (nothingGotThrough) {
-            // Unreachable on `busy`: that outcome never accumulates episodes
-            // (`ingest.ts` returns before touching `pendingEpisodes` once the
-            // lock refuses), so this branch is a `ran`-only concern in
-            // practice even though the case is shared.
-            warn(
-              'consolidamento',
-              `ultimo giro ${when} (${last.trigger}) · ${last.errors} errori su ${last.episodes} episodi: ` +
-                `il giro è andato a vuoto e quegli episodi tornano al prossimo · ${consolidation.runs} run in totale`,
-              'run `muffin memory extract`: rifà il giro in primo piano e stampa ogni errore per esteso',
-            );
-            break;
-          }
-          ok(
-            'consolidamento',
-            `ultimo giro ${when} (${last.trigger}/${last.outcome}) · ${last.episodes} episodi · ` +
-              `${last.facts} fatti · ${consolidation.runs} run in totale` +
-              // Named even when the verdict stays green, which was the defect: a
-              // third of a batch could fail to extract and the owner read a line
-              // with nothing on it but the successes. `muffin memory stats` had
-              // been surfacing its own error count for exactly this reason
-              // (`reviewLine`); this line had not.
-              //
-              // Gated to `ran`: on `busy`, `last.errors` is the lock-refusal
-              // message `ingest.ts` pushes onto `report.errors` when
-              // `acquireIngestLock` refuses, not a per-episode extraction
-              // failure — every `busy` row has `errors >= 1`, so without this
-              // gate a lock refusal always read as "N falliti" on a run that
-              // never attempted a single episode.
-              (last.outcome === 'ran' && last.errors > 0
-                ? ` · ${last.errors} falliti, riprovati al prossimo giro`
-                : ''),
-          );
+          const summary = `ultimo giro ${when} (${last.trigger}/${last.outcome}) · ${counts}`;
+          // The busy count can include the lock refusal itself.
+          if (last.outcome === 'ran' && batchErrors) warn('consolidamento', summary + batchErrors);
+          else ok('consolidamento', summary);
           break;
         }
         default: {
@@ -1549,7 +1552,9 @@ export async function runDoctor(
   } catch {
     egressPerRicerca = { allow: [] };
   }
-  const ricerca = diagnoseSearch(config, egressPerRicerca, (ref) => readSecret(ref, home));
+  const ricerca = diagnoseConfiguredSearch(config, egressPerRicerca, home, (ref) =>
+    readSecret(ref, home),
+  );
   if (config.search !== undefined) {
     if (ricerca.on) {
       ok('capacità: web_search', `${ricerca.backend.id} — attivo`);
@@ -1581,28 +1586,17 @@ export async function runDoctor(
     );
   }
 
-  // #469 changes what the profile ceiling means. It still bounds the
-  // model-visible schemas in one round, but an authorized native capability
-  // beyond the initial projection remains reachable through capability_search.
-  // baseToolOrder describes the native catalogue; the discovery meta-tool is
-  // not itself counted as a user capability in the under-cap fast path.
+  // baseToolOrder is the native catalogue doctor counts. Each turn projects
+  // that catalogue according to its authority and access to discovery.
   const ordineBase = baseToolOrder({
     sandboxAvailable: boundary.usable,
     searchOn: ricerca.on,
     sendFileAvailable: true,
   }).filter((name) => name !== 'capability_search');
-  const oltreProiezione = Math.max(0, ordineBase.length - resolvedProfile.maxToolsExposed);
-  if (oltreProiezione === 0) {
-    ok(
-      'capacità: tetto tool',
-      `${ordineBase.length} capability native entro la proiezione di ${resolvedProfile.maxToolsExposed} del profilo "${resolvedProfile.name}"`,
-    );
-  } else {
-    ok(
-      'capacità: tetto tool',
-      `${ordineBase.length} capability native, proiezione massima ${resolvedProfile.maxToolsExposed} del profilo "${resolvedProfile.name}": ${oltreProiezione} restano caricabili su richiesta via capability_search`,
-    );
-  }
+  ok(
+    'capacità: tool',
+    `${ordineBase.length} capability native nel profilo "${resolvedProfile.name}". Quando il turno può usare capability_search, il nucleo resta visibile e le altre si caricano su richiesta. Senza la ricerca, il modello vede l'intero catalogo consentito.`,
+  );
 
   // #213 upstream (cited in ADR-0026): on Linux the sandbox bridges its
   // egress proxy through a Unix-domain socket inside TMPDIR, and a TMPDIR
@@ -1689,6 +1683,11 @@ export async function runDoctor(
         'note vocali',
         `${modello} non accetta audio: si trascrive in casa — ` +
           prerequisiti.map((x) => (x.ok ? `${x.cosa} ${x.dove}` : x.cosa)).join(' · '),
+      );
+    } else if (mancanti.every((x) => x.cosa === 'modello whisper')) {
+      ok(
+        'note vocali',
+        `${modello} non accetta audio. Muffin proverà a scaricare il modello locale alla prima nota da trascrivere.`,
       );
     } else {
       warn(
@@ -1787,23 +1786,20 @@ export function formatReport(report: DoctorReport, style: Style = PLAIN): string
  * The remedy text for one or more sealed (`rot/`) files that are both
  * safe to adopt: what happens, what to type, only then the word for it.
  *
- * Consequence first, action second, vocabulary last — an owner who does not
- * know what "the seal" is must still know what to do, per the 03/09/2026 UX
- * pass (he called this exact line confusing while reading real `doctor`
- * output). Truthful, not softened: adopting genuinely drops the install into
- * `safe mode` until `muffin rot reseal`, and that word is who decides — never
- * automatic, same posture as `core/rot/harden.ts`'s printed-not-run plan.
+ * ADR-0108: drift against shipped defaults is information, not an incident.
+ * The remedy names `muffin rot migrate` (additive fields, timezone and
+ * identity preserved) and never a reseal or a safe-mode consequence.
  *
  * Takes a list so `sealedDriftGroupCheck` below can reuse it for several
  * files at once: one explanation, one list, one command sequence — not the
  * same paragraph repeated per file.
  */
 function sealedAdoptRemedy(files: { path: string; cmd: string }[]): string {
-  const commands = files.map((f) => f.cmd).join(' — poi ');
+  const names = files.map((f) => f.path).join(', ');
   return (
-    `aggiornarl${files.length === 1 ? 'o' : 'i'} blocca l'installazione in safe mode finché non dici tu che va bene ` +
-    `così — mai in automatico. Per farlo, in ordine: ${commands} — quindi \`muffin rot reseal\` una sola volta, alla ` +
-    `fine (${files.length === 1 ? 'questo file è' : 'sono'} dentro il sigillo, rot/: per questo serve la tua parola esplicita)`
+    `HEAD è andato avanti rispetto a ${names}. Non li sovrascrivo da solo e non serve un sigillo (ADR-0108). ` +
+    `\`muffin rot migrate\` applica solo i campi additivi (per esempio unmetered nei budget) e conserva il fuso e identity.md già presenti. ` +
+    `Per sostituire identity.md serve una tua scelta esplicita, non una copia dai default.`
   );
 }
 
@@ -1813,7 +1809,7 @@ function sealedAdoptRemedy(files: { path: string; cmd: string }[]): string {
  * "questo file è dentro il sigillo" again. Same consequence, same remedy
  * shape every time, so one grouped check replaces the repetition: one
  * explanation, one list of files, one command sequence in the order the
- * owner runs it, `muffin rot reseal` exactly once at the end.
+ * owner can run it, `muffin rot migrate` once, without a reseal.
  *
  * Only called for 2+ files (see the call site in `runDoctor`) — a single
  * diverging sealed file already gets this shape from `defaultsDriftCheck`
@@ -1836,6 +1832,71 @@ function sealedDriftGroupCheck(
 }
 
 /**
+ * Which layers make up the owner's identity on this home (ADR-0112), read
+ * from the same resolver the prompt is built from. Informational, like every
+ * identity line since ADR-0108: no safe mode, no reseal, no `cp`.
+ *
+ * The one ordinary warn is the legacy home copy: a hand-edited
+ * `rot/identity.md` that still *replaces* the shipped foundation, so character
+ * updates never reach this install. The remedy is a cut-over the owner
+ * chooses (creating `user.md`), never a copy over their text.
+ */
+export function identityCheck(
+  ok: (name: string, detail: string) => void,
+  warn: (name: string, detail: string, remedy?: string) => void,
+  layers: IdentityLayers,
+): void {
+  switch (layers.mode) {
+    case 'foundation':
+      ok(
+        'identità',
+        'fondazione letta dal prodotto (defaults/rot/identity.md): gli aggiornamenti arrivano con `muffin update`. Nessun ~/.muffin/user.md.',
+      );
+      return;
+    case 'foundation+user': {
+      const user = layers.user;
+      if (user?.overBudget) {
+        warn(
+          'identità',
+          `~/.muffin/user.md supera il tetto (${String(user.tokens)} token stimati su ${String(USER_OVERLAY_TOKEN_BUDGET)}) e non viene caricato`,
+          'accorcialo: tieni solo direttive stabili su come vuoi essere aiutato; i fatti vanno in memoria',
+        );
+        return;
+      }
+      const ignored =
+        layers.ignoredHomeCopy === null
+          ? ''
+          : ' ~/.muffin/rot/identity.md resta su disco ma non è più letto.';
+      ok(
+        'identità',
+        `fondazione dal prodotto + ~/.muffin/user.md (${String(user?.tokens ?? 0)} token stimati).${ignored}`,
+      );
+      return;
+    }
+    case 'legacy-home':
+      if (layers.foundationMissing) {
+        warn(
+          'identità',
+          'questa build non contiene defaults/rot/identity.md: il patto viene solo da ~/.muffin/rot/identity.md e user.md non è caricato',
+          'reinstalla o aggiorna Muffin (`muffin update`): il pacchetto è incompleto',
+        );
+        return;
+      }
+      warn(
+        'identità',
+        '~/.muffin/rot/identity.md è stato modificato a mano e sostituisce la fondazione spedita: gli aggiornamenti del carattere non arrivano a questa installazione',
+        'quando vuoi: sposta in ~/.muffin/user.md solo le righe davvero tue (come vuoi essere aiutato, al massimo ~4000 caratteri). ' +
+          'Da quel momento la fondazione arriva dal prodotto e rot/identity.md non è più letto; niente sigillo da rifare (ADR-0108, ADR-0112).',
+      );
+      return;
+    default: {
+      const _exhaustive: never = layers.mode;
+      throw new Error(`identità: modo non gestito (${String(_exhaustive)})`);
+    }
+  }
+}
+
+/**
  * One `DefaultDrift` (core/config/defaults-drift.ts) turned into one line.
  *
  * `'up-to-date'` and `'owner-modified'` are both `ok`: there is nothing to
@@ -1844,12 +1905,8 @@ function sealedDriftGroupCheck(
  * `'adoptable'` and `'unknown'` carry a remedy — the first a real command,
  * the second an honest "I cannot tell" (ADR-0008: declared, never guessed).
  *
- * `'adoptable'` under `rot/` gets the safe-mode consequence stated BEFORE
- * the command, never silently: copying into a sealed path makes
- * `verify()`'s hash check diverge (`core/rot/verify.ts`), which drops the
- * install into safe mode until `muffin rot reseal` — an act of the owner's
- * own authority, so this only ever names it, never runs it (same posture as
- * `core/rot/harden.ts`'s printed plan). When several such files drift
+ * `'adoptable'` under `rot/` points at `muffin rot migrate`, never at a
+ * blind `cp` plus reseal (ADR-0108). When several such files drift
  * together, the caller in `runDoctor` routes them to `sealedDriftGroupCheck`
  * instead of calling this once per file — see there for why.
  */
@@ -1868,8 +1925,7 @@ function defaultsDriftCheck(
       // Il rimedio nomina il verbo che **registra** (`cli/adopt.ts`), non
       // `muffin init`: init lo ricrea davvero, ma rifa' anche config, database
       // e sigillo per un file che manca. Sotto `rot/` il verbo giusto resta
-      // init, perche' e' l'unico che copia dentro il sigillo e risigilla nello
-      // stesso giro — altrimenti l'installazione resta in safe mode.
+      // init, perche' e' l'unico che copia dentro rot/ in un giro solo.
       //
       // Un default che manca non e' quasi mai una scelta: e' una casa nata
       // prima che quel default esistesse (misurato sull'installazione
@@ -2253,8 +2309,8 @@ function ownerBindingCheck(
   if (sealed.source === 'refused') {
     fail(
       'owner binding',
-      `${sealed.note ?? 'il legame sigillato non si verifica'} — nessuna superficie riconosce più un owner`,
-      'guarda cosa è cambiato in rot/owner.json; se la modifica è tua `muffin rot reseal`, altrimenti rifai `muffin surface enable telegram --owner <id>`',
+      `${sealed.note ?? 'rot/owner.json non è leggibile'} — nessuna superficie riconosce più un owner`,
+      'guarda cosa è cambiato in rot/owner.json; se la modifica è tua, un riavvio basta, altrimenti rifai `muffin surface enable telegram --owner <id>`',
     );
     return;
   }
@@ -2270,23 +2326,23 @@ function ownerBindingCheck(
   // dei due mi riconosce», e la risposta va detta, non dedotta.
   const diverse: string[] = [];
   if (tgSealed !== undefined && tgConfig !== undefined && tgSealed !== tgConfig) {
-    diverse.push(`telegram: sigillo ${tgSealed}, config.json ${tgConfig}`);
+    diverse.push(`telegram: rot/owner.json ${tgSealed}, config.json ${tgConfig}`);
   }
   if (dcSealed !== undefined && dcConfig !== undefined && dcSealed !== dcConfig) {
-    diverse.push(`discord: sigillo ${dcSealed}, config.json ${dcConfig}`);
+    diverse.push(`discord: rot/owner.json ${dcSealed}, config.json ${dcConfig}`);
   }
 
   if (sigillati.length > 0 && diverse.length > 0) {
     warn(
       'owner binding',
-      `${diverse.join(' · ')} — vince il sigillo, e il campo in config.json non viene nemmeno letto`,
-      "se l'owner giusto è quello sigillato non devi fare niente; se non lo è, `muffin surface enable telegram --owner <id>` lo riscrive e risigilla",
+      `${diverse.join(' · ')} — vince rot/owner.json, e il campo in config.json non viene nemmeno letto`,
+      "se l'owner giusto è quello in rot/owner.json non devi fare niente; se non lo è, `muffin surface enable telegram --owner <id>` lo riscrive (backup automatico, nessun sigillo)",
     );
     return;
   }
 
   if (sigillati.length > 0) {
-    ok('owner binding', `rot/owner.json — ${sigillati.join(', ')}, dentro il sigillo`);
+    ok('owner binding', `rot/owner.json — ${sigillati.join(', ')}`);
     // Una superficie legata solo in config.json accanto a una già sigillata
     // resta legacy: va detta lo stesso, o la riga verde qui sopra coprirebbe
     // metà della verità.
@@ -2306,11 +2362,11 @@ function ownerBindingCheck(
   const hardened = hardenedOverride ?? hardeningHolds(home).holds;
   warn(
     'owner binding legacy',
-    `${legacy.join(', ')} — il legame vive solo in config.json, fuori dal sigillo: qualunque processo che gira come te ` +
-      'può riscriverlo e diventare owner, e nessun hash se ne accorgerebbe' +
+    `${legacy.join(', ')} — il legame vive solo in config.json, non in rot/owner.json: qualunque processo che gira come te ` +
+      'può riscriverlo e diventare owner' +
       (sealed.note === undefined ? '' : ` (${sealed.note})`),
     hardened
-      ? 'rot/ non è scrivibile da questo processo (hardened): `muffin surface enable telegram` (o `discord`) da solo non può scrivere rot/owner.json né risigillare — rieseguilo con il privilegio che possiede rot/, e sarà quel giro a scrivere e risigillare'
-      : 'rifai `muffin surface enable telegram` (o `discord`): scrive rot/owner.json e risigilla nello stesso giro',
+      ? 'rot/ non è scrivibile da questo processo (hardened): `muffin surface enable telegram` (o `discord`) da solo non può scrivere rot/owner.json — rieseguilo con il privilegio che possiede rot/, e sarà quel giro a scrivere (backup automatico, nessun sigillo)'
+      : 'rifai `muffin surface enable telegram` (o `discord`): scrive rot/owner.json nello stesso giro (backup automatico, nessun sigillo)',
   );
 }

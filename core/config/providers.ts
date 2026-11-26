@@ -8,7 +8,7 @@
  */
 
 /** Gli id dei provider conosciuti. Un `enum` di stringhe, così un id sconosciuto in config non passa lo schema. */
-export type ProviderId = 'openrouter' | 'chatgpt' | 'anthropic';
+export type ProviderId = 'openrouter' | 'chatgpt' | 'anthropic' | 'xai';
 
 export type ProviderEntry = {
   id: ProviderId;
@@ -120,6 +120,22 @@ export const PROVIDERS: Readonly<Record<ProviderId, ProviderEntry>> = {
     catalogueNeedsKey: true,
     secretName: 'anthropic_api_key',
   },
+  /**
+   * xAI's developer API: OpenAI-compatible Chat Completions, billed per token
+   * from console.x.ai credits. Not the SuperGrok/X Premium subscription: that
+   * one is served by a different host behind a borrowed Grok CLI OAuth client,
+   * and ADR-0110 keeps it out until the owner decides on it.
+   */
+  xai: {
+    id: 'xai',
+    label: 'xAI API',
+    kind: 'openai-compat',
+    baseUrl: 'https://api.x.ai/v1',
+    keysUrl: 'https://console.x.ai',
+    modelsPath: '/models',
+    catalogueNeedsKey: true,
+    secretName: 'xai_api_key',
+  },
 };
 
 /**
@@ -211,6 +227,12 @@ export function providerFor(provider: {
  * selezione automatica e nessuna modalità senza chiave: il motore lo nomina
  * l'owner, e con lui la destinazione delle sue query.
  */
+export const CHATGPT_SEARCH_PROVIDER = {
+  id: 'chatgpt',
+  label: 'ChatGPT',
+  endpoint: 'https://api.openai.com/v1/responses',
+} as const;
+
 export type SearchProviderId = 'tavily' | 'keenable';
 
 export type SearchProviderEntry = {

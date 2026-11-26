@@ -34,6 +34,10 @@ on:
   # Required public check: every PR materializes this workflow. Optimize later
   # with job-level conditions, never trigger-level path filters.
   pull_request:
+  # Native merge queue: the queue runs the same required checks on the group
+  # it is about to merge. Without this trigger they never report there.
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
     paths:

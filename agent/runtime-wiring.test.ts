@@ -20,8 +20,8 @@ import { loadConfig, paths, saveConfig, secretDir } from '../core/config/config.
 import { muffinWorkspace } from '../core/config/workspace.js';
 import type { Principal } from '../core/policy/types.js';
 import { seal } from '../core/rot/verify.js';
-import { probeSandbox } from '../core/sandbox/probe.js';
 import { UndoJournal } from '../core/undo/journal.js';
+import { capability, withReason } from '../test-support/requires.js';
 import { enqueueTurn, type LoopDeps, runTurn, type ToolContext } from './loop.js';
 import { OpenAICompatProvider } from './providers/openai-compat.js';
 import type { ChatCall, ChatResult, Provider } from './providers/types.js';
@@ -82,14 +82,24 @@ const member: Principal = {
   externalId: 'u1',
 };
 
-const productionSandboxAvailable =
-  probeSandbox().available || process.env.MUFFIN_REQUIRE_SANDBOX === '1';
+/**
+ * The shell `buildRuntime` registers: production containment (`verify()`, Git
+ * hooks included) plus the shared shell boundary, measured once per run by the
+ * globalSetup (`test-support/capabilities.ts`). CI requires it; the AppArmor
+ * mutation step forces it (`MUFFIN_FORCE_CAPABILITIES`) so this test runs and
+ * fails for the real reason.
+ */
+const shellBoundary = capability('shell-boundary');
+const productionSandboxAvailable = shellBoundary.ok;
 
 describe('the registered shell write tool contains Git hooks through the production runtime', () => {
   const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
 
   it.runIf(productionSandboxAvailable)(
-    'one real turn keeps ordinary writes and nested Git tracking while denying new nested and top-level hooks',
+    withReason(
+      'one real turn keeps ordinary writes and nested Git tracking while denying new nested and top-level hooks',
+      shellBoundary,
+    ),
     async () => {
       const home = homeAllowing('ok.example.com');
       const workspace = mkdtempSync(join(tmpdir(), 'muffin-wiring-shell-hooks-'));
@@ -655,7 +665,7 @@ describe('the cap that binds comes from inside the seal', () => {
     expect(runtime.budget.status().monthlyCapUsd).toBe(80);
     // And the owner is told, at boot, that the number they had stopped counting.
     expect(runtime.bootLines.join('\n')).toContain('monthlyUsd 500');
-    expect(runtime.bootLines.join('\n')).toContain('rot reseal');
+    expect(runtime.bootLines.join('\n')).toContain('riavvia');
     runtime.close();
   });
 });
@@ -2077,19 +2087,19 @@ describe('registered memory proposals derive owner authorship from ingress, neve
           provider: new Scripted([
             {
               text: null,
-                toolCalls: [
-                  {
-                    id: 'producer-forgery',
-                    name: 'memory_propose',
-                    args: {
-                      subject: 'owner',
-                      predicate,
-                      object,
-                      instruction: text,
-                      ...(predicate === 'like' ? {} : { kind: 'owner-stated' }),
-                    },
+              toolCalls: [
+                {
+                  id: 'producer-forgery',
+                  name: 'memory_propose',
+                  args: {
+                    subject: 'owner',
+                    predicate,
+                    object,
+                    instruction: text,
+                    ...(predicate === 'like' ? {} : { kind: 'owner-stated' }),
                   },
-                ],
+                },
+              ],
               stopReason: 'tool_use',
               usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
               model: 't',
@@ -2175,25 +2185,27 @@ describe('registered forget consumes owner source and independent target resolut
         recordedAt: '2026-10-13T00:00:00Z',
       });
       const cancellation = new AbortController();
-      const spy = vi.spyOn(OpenAICompatProvider.prototype, 'chat').mockImplementation(async (call) => {
-        if (_scene === 'cancelled') {
-          expect(call.signal).toBeDefined();
-          cancellation.abort('user_stop');
-          expect(call.signal?.aborted).toBe(true);
-        }
-        return ({
-        text: JSON.stringify({
-          status: allowed || _scene === 'cancelled' ? 'match' : 'none',
-          facts: allowed || _scene === 'cancelled' ? [fact] : [],
-          episodes: [],
-          sourceOnlyTargets: allowed || _scene === 'cancelled',
-        }),
-        toolCalls: [],
-        stopReason: 'end',
-        model: 't-light',
-        usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      const spy = vi
+        .spyOn(OpenAICompatProvider.prototype, 'chat')
+        .mockImplementation(async (call) => {
+          if (_scene === 'cancelled') {
+            expect(call.signal).toBeDefined();
+            cancellation.abort('user_stop');
+            expect(call.signal?.aborted).toBe(true);
+          }
+          return {
+            text: JSON.stringify({
+              status: allowed || _scene === 'cancelled' ? 'match' : 'none',
+              facts: allowed || _scene === 'cancelled' ? [fact] : [],
+              episodes: [],
+              sourceOnlyTargets: allowed || _scene === 'cancelled',
+            }),
+            toolCalls: [],
+            stopReason: 'end',
+            model: 't-light',
+            usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          };
         });
-      });
       let drains = 0;
       let outcome: { content: string; isError?: boolean } | undefined;
       const tools = runtime.deps.tools.map((tool) =>
@@ -2268,8 +2280,7 @@ describe('registered forget consumes owner source and independent target resolut
         // consumed steering fail byte/authority checks up front. A quoted
         // instruction passes the kernel (its bytes are there) and is refused
         // by the judge instead — one call, no retirement.
-        if (_scene === 'external' || _scene === 'steered')
-          expect(spy).not.toHaveBeenCalled();
+        if (_scene === 'external' || _scene === 'steered') expect(spy).not.toHaveBeenCalled();
       } finally {
         runtime.close();
         spy.mockRestore();

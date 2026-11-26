@@ -3,7 +3,8 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 import { ensurePrivateDir, tightenPrivateFile } from './private-fs.js';
-import { SEARCH_PROVIDER_IDS } from './providers.js';
+import { clearChainPauses } from './provider-chain.js';
+import { CHATGPT_SEARCH_PROVIDER, SEARCH_PROVIDER_IDS } from './providers.js';
 import { REASONING_DIALECTS, THINKING_VALUES } from './thinking.js';
 
 /**
@@ -165,11 +166,37 @@ export const InferenceProviderSchema = z
     }
   });
 
+/**
+ * One extra link of a lane's provider chain (ADR-0110): a connection and the
+ * model to ask it for. The model travels with the link because a slug is only
+ * meaningful on its own endpoint (`gpt-6.2-sol` does not exist on OpenRouter).
+ */
+export const FallbackLinkSchema = z.object({
+  provider: InferenceProviderSchema,
+  model: z.string().min(1),
+});
+
+/** At most a handful of links: each failed link costs one round trip. */
+const FALLBACK_CHAIN_MAX = 4;
+
 export const ConfigSchema = z.object({
   schemaVersion: z.number().int().positive(),
   /** Main inference connection; light is independent after legacy normalization. */
   provider: InferenceProviderSchema,
   lightProvider: InferenceProviderSchema.optional(),
+  /**
+   * Ordered fallback links per lane, tried after the lane's own connection
+   * when it is out of quota, signed out, rate limited or down (ADR-0110).
+   * Absent or empty = the lane has one link, exactly as before. Written by
+   * `muffin fallback`, never by a conversational command: a link names an
+   * endpoint and a secret reference, the same trust as `provider`.
+   */
+  fallbacks: z
+    .object({
+      main: z.array(FallbackLinkSchema).max(FALLBACK_CHAIN_MAX).optional(),
+      light: z.array(FallbackLinkSchema).max(FALLBACK_CHAIN_MAX).optional(),
+    })
+    .optional(),
   models: z.object({
     main: z.string().min(1),
     light: z.string().min(1),
@@ -226,18 +253,18 @@ export const ConfigSchema = z.object({
    * costs the owner money per call does not get switched on by a default.
    */
   search: z
-    .object({
-      /**
-       * Quale motore. `z.enum` costruito dal catalogo
-       * (`core/config/providers.ts`) e non un letterale scritto qui: due
-       * elenchi degli stessi id sono due elenchi che il giorno del secondo
-       * provider si scoprono diversi.
-       */
-      provider: z.enum(SEARCH_PROVIDER_IDS),
-      /** `secret://name`, like the model key. Never the key itself. */
-      apiKeyRef: z.string().min(1),
-      maxResults: z.number().int().min(1).max(20).optional(),
-    })
+    .discriminatedUnion('provider', [
+      z.object({
+        provider: z.enum(SEARCH_PROVIDER_IDS),
+        /** `secret://name`, like the model key. Never the key itself. */
+        apiKeyRef: z.string().min(1),
+        maxResults: z.number().int().min(1).max(20).optional(),
+      }),
+      z.strictObject({
+        provider: z.literal(CHATGPT_SEARCH_PROVIDER.id),
+        maxResults: z.number().int().min(1).max(20).optional(),
+      }),
+    ])
     .optional(),
   /**
    * Quale embedder indicizza la memoria. Assente = Ollama locale coi suoi
@@ -260,6 +287,8 @@ export const ConfigSchema = z.object({
   embedder: z
     .object({
       kind: z.enum(['ollama', 'openai-compat']),
+      /** Pause vector recall and indexing while keeping the selected route. */
+      enabled: z.boolean().optional(),
       model: z.string().min(1).optional(),
       /**
        * Obbligatoria per `openai-compat`: la dimensione è cotta nel DDL della
@@ -461,6 +490,22 @@ export function inferenceProvider(
   return lane === 'light' ? (config.lightProvider ?? config.provider) : config.provider;
 }
 
+export type FallbackLink = z.infer<typeof FallbackLinkSchema>;
+
+/**
+ * A lane's links in priority order: its own connection and model first, then
+ * the configured fallbacks. Always at least one element.
+ */
+export function inferenceChain(
+  config: Config,
+  lane: InferenceLane = 'main',
+): [FallbackLink, ...FallbackLink[]] {
+  return [
+    { provider: inferenceProvider(config, lane), model: config.models[lane] },
+    ...(config.fallbacks?.[lane] ?? []),
+  ];
+}
+
 /** Capture both connections before changing one, so the other cannot follow an inherited default. */
 export function withInferenceProvider(
   config: Config,
@@ -508,10 +553,8 @@ export const paths = (home = muffinHome()) => ({
   /**
    * Dove va il modello whisper, quando `config.audio.whisperModel` non lo dice.
    *
-   * Un percorso e non un file: qui non lo scrive nessuno. Lo scarica l'owner —
-   * 142 MiB per `ggml-base.bin` — oppure `init`, `surface enable` e il primo
-   * uso (`core/audio/trascrivi.ts`), che lo assicurano quando una superficie
-   * vocale è accesa; se manca comunque, `trascrivi` stampa il `curl` esatto.
+   * Local transcription prepares the model when it first needs it.
+   * If that fails, the audio path reports the manual remedy.
    * Dentro la home e non in `rot/`: non e' una cosa dell'identita', e' un
    * pezzo di macchina rimpiazzabile.
    */
@@ -521,9 +564,16 @@ export const paths = (home = muffinHome()) => ({
   // lives under rot/ and stays fixed. One entry here rather than the same
   // join() written out at each call site.
   voice: join(home, 'voice.md'),
-  // Pure muffin — the character every install shares. `identity.md` under rot/
-  // is the owner's overlay on top of it and is read after, so it wins.
+  // Legacy owner character file, still read when present (ADR-0107 pending).
+  // Not shipped any more; the shared character is `defaults/rot/identity.md`.
   persona: join(home, 'persona.md'),
+  /**
+   * The owner's own standing instructions (ADR-0112, layer 3): optional,
+   * outside `rot/` because it is the owner's profile, not product policy.
+   * Loaded after the shipped foundation, owner class only, own budget.
+   * Nothing in the product writes it: not init, update, adopt or migrate.
+   */
+  user: join(home, 'user.md'),
   /**
    * Il semaforo che dice «fermo di proposito, non morto».
    *
@@ -582,7 +632,7 @@ function migrateV1(
       `config.json era schemaVersion 1: "budget" non vive più qui — il tetto viene da rot/budgets.json, ` +
         `dentro il sigillo. I valori che c'erano (monthlyUsd ${String(b.monthlyUsd)}, ` +
         `perTenantDailyUsd ${String(b.perTenantDailyUsd)}) non sono stati copiati: se vuoi quel tetto, ` +
-        `scrivilo in rot/budgets.json e fai \`muffin rot reseal\`.`,
+        `scrivilo in rot/budgets.json e riavvia.`,
     );
   }
   return { ...rest, schemaVersion: 2 };
@@ -801,6 +851,13 @@ export function writeAuthoritativeSecret(name: string, value: string, home = muf
   // acquires a replacement. Once it does, keeping a shadow would make the
   // winner depend on precedence instead of the owner's latest action.
   rmSync(join(secretDir('home', home), name), { force: true });
+  // A new credential is the owner fixing an account: its paused chain links
+  // are used again at once, not after the cooldown (ADR-0110).
+  try {
+    clearChainPauses(home, { apiKeyRef: `secret://${name}` });
+  } catch {
+    // advisory state; the secret is what the owner asked for
+  }
   return persistent;
 }
 

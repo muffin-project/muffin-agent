@@ -4,6 +4,7 @@ import type { CapabilityId, Decision, DecisionRequest } from '../../core/policy/
 import { redactText, scrubResourceEchoes } from '../../core/tracing/redact.js';
 import { ATTR, type AttributeValue } from '../../core/tracing/types.js';
 import type { ContinuableClass } from '../../core/turns/store.js';
+import { CAPABILITY_DISCOVERY_GUIDANCE } from '../capability-exposure.js';
 import { checkCompletion } from '../completion.js';
 import { minimalSystemPrompt, type TenantClass } from '../context/assemble.js';
 import { placeCacheBreakpoints } from '../context/cache-breakpoints.js';
@@ -11,6 +12,7 @@ import { compactToolResults } from '../context/compact.js';
 import { type RecoveryFailure, recoveryStep } from '../profiles/recovery.js';
 import {
   ReasoningConfigurationError,
+  type ReasoningResolution,
   reasoningFromLegacyThinking,
 } from '../providers/reasoning.js';
 import {
@@ -37,6 +39,7 @@ import type {
 } from './execution-budget.js';
 import {
   harnessMessage,
+  isHarnessMessage,
   isPartialMessage,
   ownerMessage,
   partialMessage,
@@ -60,6 +63,7 @@ import {
   TOOL_RESULT_BUDGET_CHARS,
   type TurnResult,
 } from './types.js';
+import { sanitizeWorkCall } from './work-message.js';
 
 /**
  * What the provider said before a call failed, on the span that failed.
@@ -535,11 +539,21 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       });
     }
 
-    // #469: a capability search stages schemas during a tool batch and changes
-    // the provider-visible projection only at the following model boundary.
-    // Execution authority is deliberately unchanged: a directly named
-    // registered tool still goes through runTool + the kernel.
-    toolContext.capabilityDiscovery?.activatePending();
+    // A tool result can raise the taint enough to close discovery this round.
+    // Project the full eligible catalogue and drop only the lease's now-stale
+    // guidance when the model cannot use discovery to expand a partial menu.
+    const discovering = toolContext.capabilityDiscovery?.activatePending() === true;
+    const messages = discovering
+      ? compacted.messages
+      : compacted.messages.filter((message) => {
+          const [block] = message.content;
+          return !(
+            isHarnessMessage(message) &&
+            message.content.length === 1 &&
+            block?.type === 'text' &&
+            block.text === CAPABILITY_DISCOVERY_GUIDANCE
+          );
+        });
 
     const reasoning = reasoningFromLegacyThinking(deps.profile.thinking);
     // Interactive is the conversation. Minimal is a task: a job, or a future
@@ -549,9 +563,22 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       input.promptMode === 'minimal'
         ? (deps.minimalPrompt ?? minimalSystemPrompt(false))
         : deps.systemPrompts[turnClass];
+    // A stored goal can retain how the owner asked to schedule it. The
+    // durable job lineage tells the worker that this turn is that execution.
+    const jobContext =
+      input.jobId !== undefined &&
+      input.principal.kind === 'system' &&
+      input.principal.source === 'scheduler'
+        ? '\n\nYou are executing an already scheduled job. Do the work in the goal during this run. ' +
+          'Any request to schedule this work or run it in the background refers to this job. ' +
+          'Report what happened in this run. The scheduler handles delivery.'
+        : '';
     // One breakpoint on the fixed prefix, up to three on the last messages,
     // never more than four. Copies: the session transcript is not a cache map.
-    const placed = placeCacheBreakpoints([{ type: 'text', text: systemText }], compacted.messages);
+    const placed = placeCacheBreakpoints(
+      [{ type: 'text', text: systemText + jobContext }],
+      messages,
+    );
     const call: ChatCall = {
       model: deps.model,
       system: placed.system,
@@ -618,29 +645,6 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       },
       turn,
     );
-    const reasoningResolution = await deps.provider.resolveReasoning?.(call);
-    if (reasoningResolution !== undefined) {
-      chatSpan.setAttributes({
-        'muffin.chat_call.reasoning_capability_source': reasoningResolution.capabilitySource,
-        'muffin.chat_call.reasoning_effective_mode':
-          reasoningResolution.effective?.mode ?? 'omitted',
-        ...(reasoningResolution.effective?.effort === undefined
-          ? {}
-          : {
-              'muffin.chat_call.reasoning_effective_effort': reasoningResolution.effective.effort,
-            }),
-        ...(reasoningResolution.effective?.maxTokens === undefined
-          ? {}
-          : {
-              'muffin.chat_call.reasoning_effective_max_tokens':
-                reasoningResolution.effective.maxTokens,
-            }),
-        'muffin.chat_call.reasoning_constraint_degraded': reasoningResolution.status !== 'applied',
-        ...(reasoningResolution.reason === undefined
-          ? {}
-          : { 'muffin.chat_call.reasoning_resolution_reason': reasoningResolution.reason }),
-      });
-    }
     // `chatSpan`'s own clock is not readable back from `SpanHandle` (it only
     // exposes `setAttributes`/`end`), so `ms` for the `model` progress event
     // below is timed here, at the same call site that starts the span it
@@ -720,7 +724,10 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
      * request that never finished, so what the surface already showed of it
      * is closed as `'superseded'` before the replacement starts arriving.
      */
-    const invoke = async (stream: boolean): Promise<ChatResult> => {
+    const invoke = async (
+      stream: boolean,
+      reasoningResolution: ReasoningResolution | undefined,
+    ): Promise<ChatResult> => {
       const lease = execution.beginModelCall(input.signal, (progress) => {
         input.onProgress?.({ type: 'model_status', ...progress });
       });
@@ -765,10 +772,12 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       }
     };
 
-    const requestChatResult = async (): Promise<ChatResult> => {
-      if (!call.stream || !deps.provider.chatStream) return invoke(false);
+    const requestChatResult = async (
+      reasoningResolution: ReasoningResolution | undefined,
+    ): Promise<ChatResult> => {
+      if (!call.stream || !deps.provider.chatStream) return invoke(false, reasoningResolution);
       try {
-        return await invoke(true);
+        return await invoke(true, reasoningResolution);
       } catch (error) {
         if (!(error instanceof ProviderStreamError)) throw error;
         closeLive('superseded');
@@ -776,13 +785,37 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
           'muffin.stream.fell_back_to_non_stream': true,
           'muffin.stream.partial': error.partial,
         });
-        return invoke(false);
+        return invoke(false, reasoningResolution);
       }
     };
 
     let result: ChatResult;
     try {
-      result = await requestChatResult();
+      const reasoningResolution = await deps.provider.resolveReasoning?.(call);
+      if (reasoningResolution !== undefined) {
+        chatSpan.setAttributes({
+          'muffin.chat_call.reasoning_capability_source': reasoningResolution.capabilitySource,
+          'muffin.chat_call.reasoning_effective_mode':
+            reasoningResolution.effective?.mode ?? 'omitted',
+          ...(reasoningResolution.effective?.effort === undefined
+            ? {}
+            : {
+                'muffin.chat_call.reasoning_effective_effort': reasoningResolution.effective.effort,
+              }),
+          ...(reasoningResolution.effective?.maxTokens === undefined
+            ? {}
+            : {
+                'muffin.chat_call.reasoning_effective_max_tokens':
+                  reasoningResolution.effective.maxTokens,
+              }),
+          'muffin.chat_call.reasoning_constraint_degraded':
+            reasoningResolution.status !== 'applied',
+          ...(reasoningResolution.reason === undefined
+            ? {}
+            : { 'muffin.chat_call.reasoning_resolution_reason': reasoningResolution.reason }),
+        });
+      }
+      result = await requestChatResult(reasoningResolution);
     } catch (error) {
       const abortReason = lastAbortReason;
       chatSpan.setAttributes({
@@ -925,7 +958,16 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       model: result.model,
       // The route it was asked with, for the billing contract: the ledger
       // identity stays `result.model`, and the price seam decides (#499).
-      requestedModel: deps.model,
+      requestedModel: result.route?.model ?? deps.model,
+      // Which chain link served it (ADR-0110), so a fallback is priced as itself.
+      ...(result.route === undefined
+        ? {}
+        : {
+            route: {
+              kind: result.route.kind,
+              ...(result.route.baseUrl === undefined ? {} : { baseUrl: result.route.baseUrl }),
+            },
+          }),
       // Attribuzione, non contabilità: la riga di spesa porta il job da cui
       // il turno è nato, così il tetto per-job ha un contatore da leggere.
       ...(input.jobId === undefined ? {} : { jobId: input.jobId }),
@@ -1351,12 +1393,13 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     // the model's and the contents are opaque. A `?? []` because an adapter
     // may legitimately have none (openai-compat says so with `[]`), not
     // because absence is expected here.
+    const toolCalls = result.toolCalls.map((call) => sanitizeWorkCall(run, call));
     run.messages.push({
       role: 'assistant',
       content: [
         ...(result.thinking ?? []),
         ...(result.text ? [{ type: 'text' as const, text: result.text }] : []),
-        ...result.toolCalls.map((c) => ({
+        ...toolCalls.map((c) => ({
           type: 'tool_use' as const,
           id: c.id,
           name: c.name,
@@ -1393,7 +1436,7 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     if (!checkpoint(scope)) return finish(scope, 'error', '');
 
     const results: ContentBlock[] = [];
-    for (const call_ of result.toolCalls) {
+    for (const [index, call_] of toolCalls.entries()) {
       // Checked between tools, not only before the next model call: a Ctrl+C
       // during a run of tool calls used to do nothing visible until the batch
       // finished, which for a slow batch is indistinguishable from being
@@ -1422,7 +1465,12 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       }
       run.toolCallsMade += 1;
       try {
-        const outcome = await runTool(deps, snapshot, turn, call_, input, exposed, toolContext);
+        const outcome = await runTool(deps, snapshot, turn, call_, input, exposed, toolContext, {
+          record,
+          run,
+          size: toolCalls.length,
+          index,
+        });
         results.push(outcome);
         noteSensitiveResourceEcho(call_, outcome);
       } catch (error) {

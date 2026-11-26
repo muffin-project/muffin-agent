@@ -1,11 +1,12 @@
 import { z } from 'zod';
+import { forwardIdOf } from '../../core/gateway/forward.js';
 import { armingTier, type CapabilityDecl } from '../../core/policy/types.js';
 import { type Job, JobError, type JobStore } from '../../core/scheduler/jobs.js';
 import type { RegisteredTool } from '../loop.js';
 import type { ToolSpec } from '../providers/types.js';
 
 /**
- * `schedule_recurring` — la porta conversazionale sui job ricorrenti.
+ * Conversational scheduling uses the same JobStore as the CLI.
  *
  * Fino a oggi `JobStore.add` aveva un solo chiamante fuori da test ed eval:
  * `muffin jobs add --cron`, digitato dall'owner a un terminale
@@ -30,9 +31,11 @@ import type { ToolSpec } from '../providers/types.js';
  *   l'intrinseco esclude per costruzione il caso differito) sulla riga;
  * - il giro futuro parte da quel taint, in quel tenant, attribuito al job
  *   (`agent/scheduler-run.ts` legge la riga invece del letterale 0);
- * - il canale di consegna NON è un argomento: è `ctx.replyChannel` o il
- *   default di superficie. Un destinatario scelto dal modello sarebbe un nuovo
- *   recipient — effetto `outward` — dentro una capability `context`.
+ * - delivery goes to the originating conversation's `ctx.replyChannel`. An
+ *   owner request from a place that cannot receive a later result (the plain
+ *   terminal, or a terminal command forwarded to the gateway) goes to the
+ *   owner's primary surface: its bare id, which each surface resolves to the
+ *   owner's own room. Never a chat chosen by the model, never another chat.
 + *
 + * Contratto di cardinalità: one accepted durable schedule effect → one Job.
 + * Due chiamate distinte con gli stessi argomenti sono due richieste
@@ -108,8 +111,8 @@ const scheduleSpec: ToolSpec = {
     'Takes a 5-field cron expression and the reminder text, validates both deterministically, and each accepted call persists ' +
     'one durable job on the same store as `muffin jobs add` — the job survives restarts and fires on schedule. ' +
     "`timezone` is an IANA zone and defaults to the owner's own zone; never guess one from the process environment. " +
-    "Delivery goes to this conversation's surface. " +
-    'Not for one-shots ("il 3 ottobre devo…": that is `todo` + `due`) or for waiting inside this turn (that is `wait`). ' +
+    "Delivery goes to this conversation's surface; from the terminal it goes to the owner's primary messaging surface. " +
+    'Not for independent one-shot objectives, dated reminders, or resuming this turn. Use `schedule_once`, `todo` + `due`, or `wait`, respectively. ' +
     'Never emulate this with a shell command: there is no shell path to the scheduler.',
   inputSchema: {
     type: 'object',
@@ -138,24 +141,50 @@ const scheduleArgs = z.object({
   timezone: z.string().min(1).max(60).optional(),
 });
 
-export function makeScheduleTool(deps: {
-  jobs: JobStore;
-  /** La zona dell'owner dal RoT sigillato — mai quella del processo. */
-  defaultTimezone: string;
-  /**
-   * Dove recapitare quando il turno non ha un canale vivo (CLI in-band).
-   *
-   * Una funzione e non un valore, per la stessa ragione di `CommitmentLaneDeps.channel`:
-   * `surfaces.default` si gira con `muffin surface default` da un altro
-   * processo mentre il gateway resta acceso — un valore letto al boot
-   * obbedirebbe per sempre a un ieri. `config.json` è fuori dal sigillo, una
-   * rilettura non attraversa nessun confine di fiducia.
-   */
-  defaultChannel: string | (() => string);
-}): RegisteredTool {
+const onceSpec: ToolSpec = {
+  name: 'schedule_once',
+  description:
+    'Arm an independent background objective once, due on the next gateway tick ("fallo in background una sola volta"). ' +
+    'Use it when the owner explicitly asks to delegate one run. The job survives restart and reports back to this conversation. ' +
+    "From the terminal, results go to the owner's primary messaging surface. " +
+    'Not for a dated reminder or resuming the current turn. Use `todo` + `due` or `wait`, respectively.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      goal: {
+        type: 'string',
+        description: "The owner's objective, in their words (max 500 chars)",
+      },
+    },
+    required: ['goal'],
+    additionalProperties: false,
+  },
+};
+
+const onceArgs = z.strictObject({ goal: scheduleArgs.shape.goal }).transform(({ goal }) => ({
+  goal,
+  cron: undefined,
+  timezone: undefined,
+}));
+
+export function makeScheduleTool(
+  deps: {
+    jobs: JobStore;
+    /** La zona dell'owner dal RoT sigillato — mai quella del processo. */
+    defaultTimezone: string;
+    /**
+     * The owner's primary surface id (`surfaces.default`, e.g. `telegram`), read
+     * at call time because `muffin surface default` can change it while the
+     * gateway runs. Used only for owner requests with no surviving reply channel.
+     */
+    ownerPrimarySurface?: () => string | undefined;
+  },
+  mode: 'recurring' | 'once' = 'recurring',
+): RegisteredTool {
+  const once = mode === 'once';
   return {
     capability: scheduleCapability.id,
-    spec: scheduleSpec,
+    spec: once ? onceSpec : scheduleSpec,
     /**
      * `throwTier: 0`. L'handler è sincrono, valida con `safeParse`, e gli unici
      * throw raggiungibili sono `JobError` tradotto in `isError` qui sotto e un
@@ -164,7 +193,7 @@ export function makeScheduleTool(deps: {
      */
     throwTier: 0,
     handler: (args, ctx) => {
-      const parsed = scheduleArgs.safeParse(args ?? {});
+      const parsed = (once ? onceArgs : scheduleArgs).safeParse(args ?? {});
       if (!parsed.success) {
         const issue = parsed.error.issues[0];
         return {
@@ -173,18 +202,11 @@ export function makeScheduleTool(deps: {
           tier: CLEAN,
         };
       }
-      const goal = parsed.data.cron.trim() === '' ? '' : parsed.data.goal.trim();
+      const cron = parsed.data.cron?.trim();
+      const goal = cron === '' ? '' : parsed.data.goal.trim();
       if (goal === '') {
         return {
           content: 'il testo del promemoria è vuoto — dimmi cosa devo ricordare',
-          isError: true,
-          tier: CLEAN,
-        };
-      }
-      const cron = parsed.data.cron.trim();
-      if (cron === '') {
-        return {
-          content: 'espressione cron vuota — serve un cron a 5 campi, per esempio "0 9 * * *"',
           isError: true,
           tier: CLEAN,
         };
@@ -204,39 +226,38 @@ export function makeScheduleTool(deps: {
       // Il canale è dove è nata la conversazione, mai un destinatario scelto
       // dal modello: quello sarebbe un nuovo recipient dentro una capability
       // `context`.
-      const fallback =
-        typeof deps.defaultChannel === 'function' ? deps.defaultChannel() : deps.defaultChannel;
-      const channel =
-        typeof ctx.replyChannel === 'string' && ctx.replyChannel !== ''
-          ? ctx.replyChannel
-          : fallback;
-      const surface = channel.split(':')[0] ?? fallback;
-      const timezone = parsed.data.timezone?.trim()
-        ? parsed.data.timezone.trim()
-        : deps.defaultTimezone;
+      const channel = deliveryChannel(ctx.replyChannel, principal.kind, deps.ownerPrimarySurface);
+      if (channel === undefined) {
+        return {
+          content:
+            'This conversation has no address for a later result and no primary messaging surface is connected. No job was created. Offer to do the work now, or ask the owner to connect a messaging surface (`muffin surface enable`).',
+          isError: true,
+          tier: CLEAN,
+        };
+      }
+      const surface = channel.split(':', 1)[0] ?? channel;
+      const timezone = parsed.data.timezone?.trim() || deps.defaultTimezone;
+      const jobInput = {
+        timezone,
+        channel,
+        goal,
+        origin: { tenant, surface, principal: principal.kind, turnId, tier: arming },
+      };
       let job: Job;
       try {
-        // `JobStore.add` valida (cron + timezone) PRIMA di qualunque scrittura
-        // e lancia `JobError`: nessun ramo qui sotto conferma ciò che non è
-        // stato persistito.
-        job = deps.jobs.add({
-          cron,
-          timezone,
-          channel,
-          goal,
-          origin: {
-            tenant,
-            surface,
-            principal: principal.kind,
-            turnId,
-            tier: arming,
-          },
-        });
+        job =
+          cron === undefined ? deps.jobs.addOnce(jobInput) : deps.jobs.add({ ...jobInput, cron });
       } catch (error) {
         if (error instanceof JobError) {
           return { content: `promemoria non creato: ${error.message}`, isError: true, tier: CLEAN };
         }
         throw error;
+      }
+      if (job.once) {
+        return {
+          content: `job ${job.id.slice(0, 8)} armato una volta (${job.id}) — in coda per il prossimo giro\n${goal}`,
+          tier: CLEAN,
+        };
       }
       const next = job.nextFireAt.toLocaleString('it-IT', {
         timeZone: job.timezone,
@@ -251,4 +272,23 @@ export function makeScheduleTool(deps: {
       };
     },
   };
+}
+
+/**
+ * Where a deferred result goes. The conversation's own channel when it can
+ * receive later messages. Otherwise, for the owner only, the bare id of the
+ * owner's primary surface: a surface resolves its bare id to the owner's own
+ * room (for Telegram, the paired private chat), so this fallback can never
+ * name another chat. The terminal is not a destination for later results.
+ */
+export function deliveryChannel(
+  replyChannel: string | null | undefined,
+  principalKind: string,
+  ownerPrimarySurface: (() => string | undefined) | undefined,
+): string | undefined {
+  if (replyChannel && forwardIdOf(replyChannel) === null) return replyChannel;
+  if (principalKind !== 'owner') return undefined;
+  const primary = ownerPrimarySurface?.()?.split(':', 1)[0]?.trim();
+  if (!primary || primary === 'cli' || forwardIdOf(primary) !== null) return undefined;
+  return primary;
 }

@@ -1,4 +1,9 @@
-import { APPROVAL_WINDOW_MS } from '../../core/approvals/store.js';
+import { createHash } from 'node:crypto';
+import {
+  APPROVAL_WINDOW_MS,
+  type ApprovalInvocation,
+  type ApprovalStore,
+} from '../../core/approvals/store.js';
 import { sleep } from '../../core/net/sleep.js';
 import type { PermissionSnapshot, TrustTier } from '../../core/policy/types.js';
 import type { SessionMessage } from '../../core/session/store.js';
@@ -6,8 +11,10 @@ import { redactText } from '../../core/tracing/redact.js';
 import type { SpanHandle } from '../../core/tracing/types.js';
 import { ATTR } from '../../core/tracing/types.js';
 import type { EffectDecision, EffectMetadata } from '../../core/turns/effects.js';
+import type { WaitSpec } from '../../core/turns/wait.js';
 import { reserveActivityAttempt } from '../providers/activity-allowance.js';
 import type { ContentBlock } from '../providers/types.js';
+import { WORK_MESSAGE_TOOL_NAME } from '../tools/work-message.js';
 import { denyText, resourceFor } from './permissions.js';
 import {
   type ApprovalRequest,
@@ -20,6 +27,7 @@ import {
   type TurnEvent,
   type TurnInput,
 } from './types.js';
+import { type WorkMessageBatch, workMessagePort } from './work-message.js';
 
 /**
  * `runTool` and the cluster of helpers it alone uses — moved out of
@@ -164,6 +172,22 @@ async function eseguiConRitentativi(
   return outcome;
 }
 
+function approvalInvocation(
+  call: {
+    id: string;
+    name: string;
+    args: unknown;
+  },
+  scope: string,
+): ApprovalInvocation {
+  return {
+    callId: call.id,
+    digest: createHash('sha256')
+      .update(JSON.stringify([call.name, call.args ?? null, scope]))
+      .digest('hex'),
+  };
+}
+
 export async function runTool(
   deps: LoopDeps,
   snapshot: PermissionSnapshot,
@@ -174,6 +198,8 @@ export async function runTool(
   exposed: RegisteredTool[],
   /** The turn a handler is running in: identity, and the suspension barrier. */
   ctx: ToolContext,
+  workBatch?: WorkMessageBatch,
+  replay?: { approvalId: string; claimToken: string | null },
 ): Promise<ContentBlock> {
   const span = deps.tracer.start(
     'muffin.tool_call',
@@ -217,6 +243,7 @@ export async function runTool(
   }
 
   const args = (call.args ?? {}) as Record<string, unknown>;
+  const isWorkMessage = call.name === WORK_MESSAGE_TOOL_NAME;
   const capability = tool.capability;
   // Reported only from here on — an unknown tool (`!tool` above) never gets a
   // `tool_start`, because it never had a `capability` to report and no call
@@ -226,14 +253,21 @@ export async function runTool(
   // `span`'s clock back to its caller, so `ms` below is measured at the same
   // call site that reports the start it is measuring from, not guessed at.
   const toolCallStartedAt = Date.now();
-  input.onProgress?.({ type: 'tool_start', name: call.name, capability, args });
+  const progressArgs = isWorkMessage ? {} : { args };
+  input.onProgress?.({
+    type: 'tool_start',
+    name: call.name,
+    capability,
+    callId: call.id,
+    ...progressArgs,
+  });
   const emitToolEnd = (isError: boolean): void => {
     input.onProgress?.({
       type: 'tool_end',
       name: call.name,
       ms: Date.now() - toolCallStartedAt,
       isError,
-      args,
+      ...progressArgs,
     });
   };
   // The kernel decides on a *resource*, so anything it is supposed to gate has
@@ -265,6 +299,19 @@ export async function runTool(
   });
   decisionSpan.end();
 
+  // Same-origin replies require allow. Do not open an approval prompt as a
+  // side effect of a guessed tool call when the reply door was closed.
+  if (isWorkMessage && (decision.effect === 'ask' || decision.effect === 'draft')) {
+    span.end({ status: 'error', error: 'reply_refused' });
+    emitToolEnd(true);
+    return {
+      type: 'tool_result',
+      toolCallId: call.id,
+      isError: true,
+      content: 'Work message refused by the reply policy.',
+    };
+  }
+
   // A `switch` over `decision.effect` with an explicit `default`, not the
   // `if`-chain this used to be. The chain fell through to execution for
   // anything it did not have a branch for — which is exactly how `draft` used
@@ -279,6 +326,19 @@ export async function runTool(
   // `core/policy/decide.ts`'s own `switch (decl.risk)` already gets for free
   // from its non-void return type; this one needs to say so, because `ask`'s
   // approved path does not return here, it falls through to execution below.
+  if (replay !== undefined && decision.effect !== 'ask' && decision.effect !== 'deny') {
+    span.end({ status: 'error', error: 'approval_policy_changed' });
+    emitToolEnd(true);
+    return {
+      type: 'tool_result',
+      toolCallId: call.id,
+      content:
+        'La policy è cambiata dopo la richiesta di approvazione. Chiamata sospesa non eseguita.',
+      isError: true,
+    };
+  }
+  let approved: Parameters<ApprovalStore['startInvocation']>[0] | undefined;
+  let approvedScope: string | undefined;
   switch (decision.effect) {
     case 'deny':
       span.end({ status: 'error', error: decision.code });
@@ -286,7 +346,10 @@ export async function runTool(
       return {
         type: 'tool_result',
         toolCallId: call.id,
-        content: denyText(decision),
+        content:
+          replay === undefined
+            ? denyText(decision)
+            : `La policy attuale rifiuta la chiamata approvata (${decision.code}). Non è stata eseguita.`,
         isError: true,
       };
     case 'draft': {
@@ -350,31 +413,56 @@ export async function runTool(
         // Keep the loop independent of the filesystem module: the resolver's
         // existing PathDenied carries this discriminant only for containment.
         // A similarly shaped failure from undo.take is never a path rejection.
-        if (
+        const outsideScope =
           !effectPathResolved &&
           error instanceof Error &&
           error.name === 'PathDenied' &&
           'reason' in error &&
-          error.reason === 'outside_scope'
-        ) {
+          error.reason === 'outside_scope';
+        if (outsideScope) {
           span.setAttributes({ 'muffin.effect.preflight_rejection': 'outside_scope' });
         }
-        span.end({ status: 'error', error: 'draft_snapshot_failed' });
+        const content = outsideScope
+          ? 'Il percorso richiesto è fuori dalla cartella di lavoro. ' +
+            'Nessun file è stato modificato da questa operazione. ' +
+            'Riferisci il limite e, se il lavoro dipende dalla scrittura, chiedi una destinazione nella cartella di lavoro. ' +
+            'Riprovare lo stesso percorso non può sbloccare la scrittura.'
+          : `Non ho potuto salvare una copia di quel file prima di modificarlo ` +
+            `(${error instanceof Error ? error.message : String(error)}). Non eseguito: senza copia non si torna indietro.`;
+        span.end({
+          status: 'error',
+          error: outsideScope ? 'outside_scope' : 'draft_snapshot_failed',
+        });
         emitToolEnd(true);
-        return {
-          type: 'tool_result',
-          toolCallId: call.id,
-          content:
-            `Non ho potuto salvare una copia di quel file prima di modificarlo ` +
-            `(${error instanceof Error ? error.message : String(error)}). Non eseguito: senza copia non si torna indietro.`,
-          isError: true,
-        };
+        return { type: 'tool_result', toolCallId: call.id, content, isError: true };
       }
       void 0;
       span.setAttributes({ 'muffin.policy.undo_window_s': decision.undo.windowSeconds });
       break; // fotografato: si esegue, come 'allow'
     }
     case 'ask': {
+      let invocation: ApprovalInvocation | undefined;
+      let preparedScope: string | undefined;
+      try {
+        preparedScope = tool.approvalScope?.(call.args);
+        // A checkpoint deliberately redacts secrets. Leave a consent for a
+        // command that cannot be recovered exactly on the existing retry path.
+        if (preparedScope !== undefined) {
+          const checkpointArgs = JSON.stringify(call.args ?? null);
+          if (redactText(checkpointArgs) === checkpointArgs) {
+            invocation = approvalInvocation(call, preparedScope);
+          }
+        }
+      } catch (error) {
+        span.end({ status: 'error', error: 'approval_resource_unavailable' });
+        emitToolEnd(true);
+        return {
+          type: 'tool_result',
+          toolCallId: call.id,
+          content: error instanceof Error ? error.message : String(error),
+          isError: true,
+        };
+      }
       const request: ApprovalRequest = {
         capability,
         prompt: conProvenienza(
@@ -404,6 +492,28 @@ export async function runTool(
           : { description: descriptionOf(call.args) }),
         taint: snapshot.currentTaint(),
       };
+      if (replay !== undefined) {
+        if (invocation === undefined) {
+          span.end({ status: 'error', error: 'approval_scope_unavailable' });
+          emitToolEnd(true);
+          return {
+            type: 'tool_result',
+            toolCallId: call.id,
+            content: "La chiamata approvata non ha più l'ambito richiesto. Non l'ho eseguita.",
+            isError: true,
+          };
+        }
+        approvedScope = preparedScope;
+        approved = {
+          id: replay.approvalId,
+          turnId: ctx.turnId,
+          capability,
+          resource: request.resource,
+          invocation,
+          claimToken: replay.claimToken,
+        };
+        break;
+      }
       const nega = (): ContentBlock => {
         span.end({ status: 'error', error: 'ask_denied' });
         emitToolEnd(true);
@@ -511,6 +621,7 @@ export async function runTool(
             ...(request.resource === undefined ? {} : { resource: request.resource }),
             prompt: request.prompt,
             taint: request.taint,
+            invocation,
           },
           adesso,
         );
@@ -589,10 +700,11 @@ export async function runTool(
           span.end({ status: 'ok' });
           // Né `✓` né `✗`: la chiamata è ferma sull'owner, e le altre due
           // parole sarebbero tutte e due false (vedi `TurnEvent`).
-          input.onProgress?.({ type: 'ask', name: call.name, capability });
+          input.onProgress?.({ type: 'ask', name: call.name, capability, callId: call.id });
           return {
             type: 'tool_result',
             toolCallId: call.id,
+            ...(invocation === undefined ? {} : { deferredApprovalId: approvalId }),
             content:
               `Ho chiesto la sua approvazione per "${capability}"${request.resource ? ` su ${request.resource}` : ''} ` +
               `e sto aspettando che risponda. Non l'ho fatto. Non richiederlo e non cercare un'altra strada per farlo ` +
@@ -604,15 +716,13 @@ export async function runTool(
         // consumata nello stesso momento, o un secondo `sys.shell` più avanti
         // nello stesso turno la troverebbe libera e passerebbe senza chiedere.
         if (deps.approvals !== undefined && approvalId !== undefined) {
-          deps.approvals.decide(approvalId, answer, (deps.now ?? (() => new Date()))());
-          deps.approvals.take(
-            {
-              turnId: ctx.turnId,
-              capability,
-              ...(request.resource === undefined ? {} : { resource: request.resource }),
-            },
-            (deps.now ?? (() => new Date()))(),
-          );
+          const now = (deps.now ?? (() => new Date()))();
+          deps.approvals.decide(approvalId, answer, now);
+          if (
+            deps.approvals.get(approvalId)?.decision !== answer ||
+            !deps.approvals.consumeInline(approvalId, now)
+          )
+            return nega();
         }
         if (answer === 'deny') return nega();
       }
@@ -728,23 +838,47 @@ export async function runTool(
   const effect: EffectMetadata = {
     row: decl?.effect ?? null,
     reversible: decl?.reversible ?? null,
-    resource: effectResource(risolto, resource, call.args),
+    resource: isWorkMessage ? null : effectResource(risolto, resource, call.args),
     decision: decision.effect as EffectDecision,
   };
-  const intentError = recordIntent(
-    deps,
-    ctx.turnId,
-    span,
-    {
-      callId: call.id,
-      tool: call.name,
-      capability,
-      rerunnable: decl?.rerunnable === true,
-      args,
-      effect,
-    },
-    ctx,
-  );
+  const invocation = {
+    callId: call.id,
+    tool: call.name,
+    capability,
+    rerunnable: decl?.rerunnable === true,
+    args,
+    effect,
+  };
+  if (approved !== undefined) {
+    let decision: ReturnType<ApprovalStore['startInvocation']> | undefined;
+    try {
+      if (input.signal?.aborted !== true) {
+        decision = deps.approvals?.startInvocation(
+          approved,
+          (deps.now ?? (() => new Date()))(),
+          () => deps.turns.startToolCall(ctx.turnId, invocation),
+        );
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      ctx.durability?.fail(reason);
+      span.setAttributes({ 'muffin.turn.record_error': reason });
+    }
+    if (decision !== 'allow') {
+      span.end({ status: 'error', error: 'deferred_approval_not_applied' });
+      emitToolEnd(true);
+      const content =
+        decision === 'deny'
+          ? "L'owner ha rifiutato la chiamata. Non è stata eseguita."
+          : decision === 'expired'
+            ? "L'approvazione è arrivata dopo la scadenza. La chiamata non è stata eseguita."
+            : "Non ho potuto applicare l'approvazione a questa chiamata. Non è stata eseguita.";
+      return { type: 'tool_result', toolCallId: call.id, content, isError: true };
+    }
+    span.setAttributes({ 'muffin.policy.approval': 'allow' });
+  }
+  const intentError =
+    approved === undefined ? recordIntent(deps, ctx.turnId, span, invocation, ctx) : null;
   if (intentError !== null) {
     // EFFECT WAL, a DAY-1 readiness invariant: the write above did not land, so
     // the handler must not run — a missing intent row has to mean "never
@@ -808,10 +942,28 @@ export async function runTool(
     // would have (it is built from exactly those, plus `turnId`, `sessionId`,
     // `taint` and `suspend` — see `toolContext` above), so the handler gets one
     // object with the whole contract rather than two overlapping ones.
+    // The question is an in-memory candidate until the call's outcome is
+    // recorded. A failed result write must not arm a publishable wait.
+    const candidate: { wait?: WaitSpec } = {};
+    const workContext =
+      isWorkMessage && workBatch !== undefined
+        ? {
+            workMessage: workMessagePort(deps, input, call, workBatch),
+            suspend: (spec: WaitSpec) => {
+              candidate.wait = spec;
+            },
+          }
+        : {};
     const outcome = await eseguiConRitentativi(
       tool,
       args,
-      { ...ctx, signal: input.signal, ...(risolto === undefined ? {} : { effectPath: risolto }) },
+      {
+        ...ctx,
+        ...workContext,
+        signal: input.signal,
+        ...(risolto === undefined ? {} : { effectPath: risolto }),
+        ...(approvedScope === undefined ? {} : { approvedScope }),
+      },
       decl?.rerunnable === true,
       call.name,
       input.onProgress,
@@ -918,6 +1070,9 @@ export async function runTool(
     }
     const durabilityFailure = ctx.durability?.failure() ?? null;
     const resultIsError = outcome.isError === true || !outcomeRecorded || !sessionRecorded;
+    const questionNotArmed =
+      candidate.wait !== undefined && (resultIsError || durabilityFailure !== null);
+    if (candidate.wait !== undefined && !questionNotArmed) ctx.suspend(candidate.wait);
     span.end({ status: resultIsError ? 'error' : 'ok' });
     emitToolEnd(resultIsError);
     if (giaFatte > 0 && outcome.isError !== true) {
@@ -949,18 +1104,20 @@ export async function runTool(
        * conta solo righe con `is_error = 0`, `fallimentiIdentici` solo righe
        * con `is_error = 1`, e questa stessa chiamata e o l'uno o l'altro.
        */
-      content: !outcomeRecorded
-        ? `${safeContent}\n\nL'azione potrebbe essere riuscita, ma non ho potuto salvarne l'esito. Non eseguirò altre chiamate agli strumenti in questo turno.`
-        : !sessionRecorded
-          ? `${safeContent}\n\nL'esito è nel record del turno, ma non nella trascrizione. La persistenza è degradata e non eseguirò altre chiamate agli strumenti in questo turno.`
-          : durabilityFailure !== null
-            ? `${safeContent}\n\nLa persistenza è degradata; non eseguirò altre chiamate agli strumenti in questo turno.`
-            : giaFatte > 0 && outcome.isError !== true
-              ? `${safeContent}\n\n${avvisoRipetizione(call.name, giaFatte)}`
-              : fallimentiIdentici > 0
-                ? `${safeContent}\n\n${avvisoFallimentoRipetuto(call.name, fallimentiIdentici)}`
-                : safeContent,
-      ...(resultIsError ? { isError: true } : {}),
+      content: questionNotArmed
+        ? 'The question was not sent: the wait could not be recorded. Continue without waiting.'
+        : !outcomeRecorded
+          ? `${safeContent}\n\nL'azione potrebbe essere riuscita, ma non ho potuto salvarne l'esito. Non eseguirò altre chiamate agli strumenti in questo turno.`
+          : !sessionRecorded
+            ? `${safeContent}\n\nL'esito è nel record del turno, ma non nella trascrizione. La persistenza è degradata e non eseguirò altre chiamate agli strumenti in questo turno.`
+            : durabilityFailure !== null
+              ? `${safeContent}\n\nLa persistenza è degradata; non eseguirò altre chiamate agli strumenti in questo turno.`
+              : giaFatte > 0 && outcome.isError !== true
+                ? `${safeContent}\n\n${avvisoRipetizione(call.name, giaFatte)}`
+                : fallimentiIdentici > 0
+                  ? `${safeContent}\n\n${avvisoFallimentoRipetuto(call.name, fallimentiIdentici)}`
+                  : safeContent,
+      ...(resultIsError || questionNotArmed ? { isError: true } : {}),
     };
   } catch (error) {
     // A failing tool is information for the model, not a crash for the turn.

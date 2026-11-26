@@ -57,7 +57,6 @@ import { reviewBootLine } from '../core/memory/maintenance.js';
 import { Pausa } from '../core/runtime/pausa.js';
 import { type Deliver, Scheduler } from '../core/scheduler/scheduler.js';
 import { makeTraceRetentionTick } from '../core/scheduler/trace-retention.js';
-import type { SurfaceRegistry } from '../core/surface/registry.js';
 import type { SaluteSuperfici } from '../core/surface/salute.js';
 import { notDelivered } from '../core/surface/types.js';
 import { type LaneEvent, TurnLane } from '../core/turns/lane.js';
@@ -66,8 +65,9 @@ import { attachSendFile, connectSurfaces } from './surface.js';
 import {
   currentGatewayPid,
   describeBuild,
+  type GatewayRestartOptions,
   restartCommand,
-  restartVerdict,
+  restartSupervisedGateway,
   run,
   waitForGatewayPid,
 } from './update.js';
@@ -542,38 +542,18 @@ export async function cmdGatewayStop(home: string): Promise<number> {
  * Prima erano due passi a mano: `launchctl kickstart -k …` (o `systemctl
  * --user restart …`) e poi guardare `muffin gateway status` per credergli.
  *
- * Non un comando nuovo che parla al supervisore a modo suo: `restartCommand`,
- * `waitForGatewayPid` e `restartVerdict` sono gli stessi tre pezzi che
- * `cli/update.ts`'s `offerGatewayRestart` usa dopo uno `swing` — importati, non
- * riscritti — così un `launchctl kickstart` scritto storto si romperebbe in un
- * solo posto, non in due che potrebbero disallinearsi. La sola differenza è la
- * cornice: `offerGatewayRestart` chiede il permesso (o lo dà per scontato con
- * `--yes`) dentro il flusso di un aggiornamento e parla di "codice nuovo";
- * questo è il comando che l'owner digita apposta per riavviare adesso, quindi
- * parte senza chiedere, come `gateway start`.
- *
- * **Verificato sullo stato, mai sull'exit code** — la regola di casa
- * ("verifica lo stato dopo, non l'output"), e il difetto che l'ha resa
- * esplicita è lo stesso `restartVerdict` già ripara: le tre frasi diverse per
- * pid-cambiato / comando-ok-ma-pid-uguale / comando-fallito, decise da un pid
- * letto DOPO e confrontato con quello di PRIMA, mai dal solo `status === 0`
- * del comando che ha toccato il supervisore.
+ * Standalone restart shares the supervisor request and PID verification with
+ * the restart offered by `muffin update`.
  */
 export async function cmdGatewayRestart(
   home: string,
   deps: {
     platform?: NodeJS.Platform;
     supervisorProbes?: Partial<SupervisorProbes>;
-    restart?: (argv: string[]) => { status: number; stdout: string; stderr: string };
-    readGatewayPid?: () => number | null;
-    sleep?: (ms: number) => Promise<void>;
-    verifyAttempts?: number;
-    verifyIntervalMs?: number;
-  } = {},
+  } & GatewayRestartOptions = {},
 ): Promise<number> {
   const platform = deps.platform ?? process.platform;
   const readGatewayPid = deps.readGatewayPid ?? (() => currentGatewayPid(home));
-  const restart = deps.restart ?? ((argv: string[]) => run(argv[0]!, argv.slice(1), home, 30_000));
 
   const status = checkSupervisor(platform, home, readGatewayPid() !== null, {
     ...realSupervisorProbes(),
@@ -584,17 +564,10 @@ export async function cmdGatewayRestart(
     return 1;
   }
 
-  const { printable, argv } = restartCommand(platform);
-  process.stderr.write(`${printable}\n`);
-  const pidBefore = readGatewayPid();
-  const r = restart(argv);
-  const commandDetail = (r.stderr || r.stdout).trim();
-  const pidAfter = await waitForGatewayPid(readGatewayPid, pidBefore, {
-    attempts: deps.verifyAttempts,
-    intervalMs: deps.verifyIntervalMs,
-    sleep: deps.sleep,
+  const verdict = await restartSupervisedGateway(home, restartCommand(platform), {
+    ...deps,
+    readGatewayPid,
   });
-  const verdict = restartVerdict({ pidBefore, pidAfter, commandOk: r.status === 0, commandDetail });
   if (verdict.restarted) {
     process.stdout.write(`${verdict.line}\n`);
     return 0;
@@ -1055,16 +1028,10 @@ export async function cmdGatewayRun(
   runtime.approvers.set('cli', (request, where) => forward.approve(request, where));
 
   /**
-   * The registry exists only after the claim is won — `connectSurfaces` starts
-   * polling Telegram, and a second gateway must not do that before it finds out
-   * it lost. So the scheduler is handed an indirection rather than the registry,
-   * and the window before surfaces are up reports itself as what it is.
-   *
-   * "Not connected yet" is a *state*, not the old lie: it comes back as
-   * `{ delivered: false }`, so a job that somehow fires in that window is
-   * recorded as undelivered instead of silently marked run.
+   * Attach delivery only after winning the claim and starting the surfaces.
+   * A job that fires during startup gets an explicit disconnected outcome.
    */
-  let registry: SurfaceRegistry | null = null;
+  let deliverToChannel: Deliver | null = null;
   /**
    * Assegnato dopo, letto pigramente dal socket: il canale di controllo si apre
    * **prima** delle superfici di proposito (vedi `serveControlSocket` qui
@@ -1072,10 +1039,10 @@ export async function cmdGatewayRun(
    * domanda arriva, non nel momento in cui il gestore viene costruito.
    */
   let saluteSuperfici: SaluteSuperfici | null = null;
-  const deliver: Deliver = async (channel, text) =>
-    registry === null
+  const deliver: Deliver = async (channel, text, turn) =>
+    deliverToChannel === null
       ? notDelivered('le superfici non sono ancora connesse')
-      : registry.deliver(channel, text);
+      : deliverToChannel(channel, text, turn);
 
   const pausa = new Pausa(runtime.db);
   /**
@@ -1130,6 +1097,8 @@ export async function cmdGatewayRun(
     (e) => {
       if (e.kind === 'delivery_failed') {
         process.stderr.write(`job ${e.job.id.slice(0, 8)}: consegna fallita (${e.error})\n`);
+      } else if (e.kind === 'delivery_uncertain') {
+        process.stderr.write(`job ${e.job.id.slice(0, 8)}: consegna incerta (${e.error})\n`);
       } else if (e.kind === 'yielded') {
         // P21 (1b)/(2) MEDIUM: an aborted job retries every tick and a job
         // whose fire was declined by `stillOwner` mid-run both used to reach
@@ -1216,9 +1185,11 @@ export async function cmdGatewayRun(
   };
   const turnLane = new TurnLane({
     turns: runtime.deps.turns,
+    pendingReply: () =>
+      runtime.jobFires.pendingTelegramReply() ?? runtime.deps.turns.pendingOwnerQuestionFinal()?.id,
     run: makeLaneRunner(
       runtime.deps,
-      (turn, text) => deliverFromLane(turn, text),
+      (turn, text, recovered) => deliverFromLane(turn, text, recovered),
       laneLog,
       (record) => attachStreamFromLane?.(record),
       // The spend counter behind autonomous continuation grants (#598 S2):
@@ -1381,7 +1352,7 @@ export async function cmdGatewayRun(
   attachStreamFromLane = surfaces.attachStream;
   // The scheduler has been holding an indirection to this since before the
   // claim; from here on a due job reaches whatever is actually connected.
-  registry = surfaces.registry;
+  deliverToChannel = surfaces.deliverToChannel;
   saluteSuperfici = surfaces.salute;
   // DAY-1 requirement B14, same as runRepl: a file the model produces during a job's
   // turn can reach the owner as a real attachment. I canali `forward:<id>` non

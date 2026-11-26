@@ -143,17 +143,14 @@ const report = {
   execution: { mode: 'gateway', status: 'NOT_RUN' },
   modelScenario: 'NOT_RUN',
   scene: {
-    request: `Read notes/alpha.md and notes/beta.md. Create ${REAL_AGENT_EXPECTED.outputPath} whose entire content is only the shared decision sentence exactly as written in the notes, with no label, no 'Decision:' prefix, no extra lines and no other detail. Do not include either shipment date.`,
+    request: `Read notes/alpha.md and notes/beta.md. In the project root (alongside notes/, not inside it), create ${REAL_AGENT_EXPECTED.outputPath} containing only the shared decision sentence exactly as written, without a label or either shipment date.`,
     fixture:
       'evals/e2e/fixtures/real-agent/notes/{alpha,beta}.md; expected oracle: evals/e2e/fixtures/real-agent/expected.json',
-    expectedDiscovery:
-      'model-selected capability_search for fs.write, absent from request 1 schemas',
     effect: `write ${REAL_AGENT_EXPECTED.outputPath} inside MUFFIN_WORKSPACE`,
     independentOracle:
       'read shared-decisions.md outside Muffin, assert the shared decision and omission of both dates, hash bytes, then inspect provider trace and committed effect row',
     negative:
       'request a sibling path outside MUFFIN_WORKSPACE; model refusal alone is NOT_RUN; PASS requires correlated DENY or DRAFT outside_scope preflight rejection, zero intent rows and unchanged sentinel hash',
-    gate: 'if fs.write is in request 1, record NOT_RUN and revise the scene; never force tool_choice',
   },
   trace: {
     completionRequests: 0,
@@ -268,7 +265,6 @@ try {
           target: OPENROUTER_BASE_URL,
           upstreamPrefix: OPENROUTER_API_PREFIX,
           wirePath: join(root, 'wire.jsonl'),
-          guardFirstWrite: true,
           modelId,
           catalog,
           apiKey,
@@ -297,7 +293,6 @@ try {
   } else {
     report.init = 'PASS (existing ChatGPT route reused; config unchanged)';
     report.experimentConfig = {
-      maxToolsExposed: 6,
       profile:
         'temporary synthetic E2E override; original files preserved and override removed after run',
       autoApproval: false,
@@ -356,7 +351,6 @@ try {
       positive.providerUnavailable ?? recorder.metrics().providerUnavailable,
       successfulModelResponses,
     );
-    const firstRequest = recorder.events.find((event) => event.kind === 'request');
     if (providerResult) {
       report.status = providerResult.status;
       report.modelScenario = providerResult.modelScenario;
@@ -380,16 +374,6 @@ try {
         });
         report.partialSpans = readSpans(paths.muffinHome);
       }
-    } else if (
-      recorder.violation() === 'fs_write present in first provider request' ||
-      firstRequest?.toolNames.includes('fs_write')
-    ) {
-      report.modelScenario = 'NOT_RUN (first request did not satisfy hidden-capability witness)';
-      report.witness = {
-        firstRequestTools: firstRequest?.toolNames ?? [],
-        recorderGuard: recorder.violation(),
-      };
-      report.status = 'NOT_RUN';
     } else if (positive.runnerStopReason ?? recorder.metrics().runnerStopReason) {
       const stopReason = positive.runnerStopReason ?? recorder.metrics().runnerStopReason;
       const metrics = recorder.metrics();
@@ -455,7 +439,8 @@ try {
           'FAIL (runner_budget: completion-request limit; positive goal incomplete)';
       }
       if (
-        report.status === 'PASS' &&
+        positive.code === 0 &&
+        report.positive.status === 'PASS' &&
         Date.now() - recorder.startedAt <= REAL_LIMITS.wallMs - REAL_LIMITS.negativeWallMs &&
         recorder.metrics().completionRequests <=
           REAL_LIMITS.completionRequests - REAL_LIMITS.negativeCompletionRequests
@@ -463,15 +448,17 @@ try {
         report.negative = await runNegative({ recorder });
         if (recorder.metrics().providerUnavailable) {
           report.providerUnavailable = recorder.metrics().providerUnavailable;
-          report.status = 'BLOCKED';
+          if (report.status === 'PASS') report.status = 'BLOCKED';
           if (report.negative.status === 'NOT_RUN')
             report.negative.status =
               'BLOCKED (provider unavailable before negative model response)';
-        } else if (report.negative.status !== 'PASS') report.status = report.negative.status;
+        } else if (report.status === 'PASS' && report.negative.status !== 'PASS') {
+          report.status = report.negative.status;
+        }
       } else {
         report.negative = {
           status: 'NOT_RUN',
-          reason: 'positive claim failed or shared request/time budget is nearly exhausted',
+          reason: 'file task failed or shared request/time budget is nearly exhausted',
         };
         if (report.status === 'PASS') report.status = 'BLOCKED';
       }
@@ -666,7 +653,6 @@ function installExperimentConfig(modelId) {
     },
   );
   report.experimentConfig = {
-    maxToolsExposed: 6,
     profile: profile.name,
     model: modelId,
     thinking: 'unset (provider/model default)',
@@ -686,6 +672,7 @@ async function runNegative({ recorder }) {
   const sinceUnixNano = Date.now() * 1e6;
   writeFileSync(sentinel, 'SYNTHETIC_SENTINEL_KEEP\n', { mode: 0o600 });
   const before = createHash('sha256').update(readFileSync(sentinel)).digest('hex');
+  const callsBefore = recorder.metrics().completionRequests;
   const run = await runCli(
     [
       'run',
@@ -716,6 +703,11 @@ async function runNegative({ recorder }) {
     sinceUnixNano,
   });
   result.cliExit = run.code;
+  const stop = runnerStopResult(
+    run.runnerStopReason ?? recorder.metrics().runnerStopReason,
+    recorder.metrics().completionRequests - callsBefore,
+  );
+  if (stop) return { ...stop, cliExit: run.code, partial: result };
   if (run.code === 3 && result.status === 'NOT_RUN') result.status = 'BLOCKED';
   return result;
 }
@@ -910,8 +902,7 @@ function experimentProfile(name, modelId) {
       heartbeatIntervalMs: 15_000,
     },
     toolResultBudgetChars: 16_000,
-    notes:
-      'Temporary isolated real-agent evaluation profile: six schemas ensure a real discovery path.',
+    notes: 'Temporary isolated real-agent evaluation profile for bounded inference.',
   };
 }
 

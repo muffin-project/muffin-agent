@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { capability, withReason } from '../../test-support/requires.js';
 import { SandboxExecutor } from './executor.js';
-import { probeSandbox } from './probe.js';
 
 /**
  * **I falsificatori dell'integrità dell'esito shell, eseguiti.**
@@ -43,17 +43,14 @@ import { probeSandbox } from './probe.js';
 const host = platform();
 
 /** Stesso cancello di `executor.test.ts`, e per le stesse ragioni: vedi lì. */
-const gate: { run: boolean; why: string } = (() => {
-  if (host === 'darwin') return { run: true, why: 'macOS: seatbelt is part of the OS' };
-  if (host === 'linux') {
-    const p = probeSandbox();
-    if (p.available) return { run: true, why: `linux: ${p.mechanism} contained a real probe` };
-    return { run: false, why: `linux: sandbox unavailable — ${p.reason}: ${p.detail}` };
-  }
-  return { run: false, why: `no OS-level sandbox on ${host}` };
-})();
+/**
+ * Il contenimento di produzione (`verify()`, hook Git compresi), misurato una
+ * volta per run dal globalSetup: `test-support/capabilities.ts`.
+ */
+const sandboxCap = capability('sandbox');
+const gate: { run: boolean; why: string } = { run: sandboxCap.ok, why: sandboxCap.reason };
 
-const containmentRequired = process.env['MUFFIN_REQUIRE_SANDBOX'] === '1';
+const containmentRequired = sandboxCap.required;
 
 describe('shell outcome integrity dichiara se è stata provata', () => {
   it('o la prova è girata, o lo skip è dichiarato — e dove era richiesta, uno skip è un guasto', () => {
@@ -63,7 +60,7 @@ describe('shell outcome integrity dichiara se è stata provata', () => {
     }
     if (containmentRequired) {
       throw new Error(
-        `MUFFIN_REQUIRE_SANDBOX=1 e nessun contenimento reale è girato su questo host — ${gate.why}.`,
+        `sandbox richiesta (MUFFIN_REQUIRE_CAPABILITIES) e nessun contenimento reale è girato su questo host — ${gate.why}.`,
       );
     }
     console.warn(`[sandbox] shell-outcome NON provato — ${gate.why}`);
@@ -71,7 +68,9 @@ describe('shell outcome integrity dichiara se è stata provata', () => {
   });
 });
 
-describe.runIf(gate.run)(`shell outcome integrity (real containment — ${gate.why})`, () => {
+const titolo = withReason('shell outcome integrity (real containment)', sandboxCap);
+
+describe.runIf(gate.run)(titolo, () => {
   const base = mkdtempSync(join(tmpdir(), 'muffin-shell-outcome-'));
   const workspace = join(base, 'workspace');
   mkdirSync(workspace, { recursive: true });
@@ -117,7 +116,9 @@ describe.runIf(gate.run)(`shell outcome integrity (real containment — ${gate.w
       const probe = await executor.runReadOnly({ command: 'git --version', cwd: workspace });
       if (probe.code !== 0) {
         if (containmentRequired) {
-          throw new Error('MUFFIN_REQUIRE_SANDBOX=1 ma git non è eseguibile nel sandbox.');
+          throw new Error(
+            'sandbox richiesta (MUFFIN_REQUIRE_CAPABILITIES) ma git non è eseguibile nel sandbox.',
+          );
         }
         console.warn('[sandbox] git assente nel sandbox — scenario git non provato');
         return;

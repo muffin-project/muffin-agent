@@ -1,5 +1,5 @@
-import { realpathSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { realpathSync, statSync } from 'node:fs';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { CapabilityDecl, TrustTier } from '../../core/policy/types.js';
 import {
@@ -7,6 +7,7 @@ import {
   EXEC_DEFAULT_TIMEOUT_MS,
   EXEC_MAX_TIMEOUT_MS,
   type ExecResult,
+  type ReadOnlyExecRequest,
   type SandboxExecutor,
 } from '../../core/sandbox/executor.js';
 import type { RegisteredTool } from '../loop.js';
@@ -31,12 +32,12 @@ import { DISK_TIER, fenceDisk } from './fs.js';
  *  - **`shell_run` / `sys.shell`** — the sandbox confines writes to session
  *    scratch and disables direct IP networking (`SandboxExecutor.runReadOnly`).
  *    On Linux a contained command cannot open Unix-domain sockets at all (the
-  *    filter is requested and verified); the Muffin gateway socket is
-  *    additionally deny-listed. Reads are allow-scoped to the workspace, the
-  *    session scratch and explicit system paths (recorded in SECURITY's
-  *    “Shell read scope and sandbox patch posture” section, §9.2): stdout
-  *    reaches
-  *    the model and disclosure has no undo.
+ *    filter is requested and verified); the Muffin gateway socket is
+ *    additionally deny-listed. Reads are allow-scoped to the workspace, the
+ *    session scratch and explicit system paths (recorded in SECURITY's
+ *    “Shell read scope and sandbox patch posture” section, §9.2): stdout
+ *    reaches
+ *    the model and disclosure has no undo.
  *    `reversible: 'no'`, `risk: 'high'`, and the kernel asks every time
  *    (ADR-0091 plus the AF_UNIX recovery correction below).
  *  - **`shell_run_write` / `sys.shell.write`** — writes into the workspace,
@@ -253,6 +254,59 @@ type WriteExec = Pick<SandboxExecutor, 'run'>;
  */
 const THROW_TIER = 0 satisfies TrustTier;
 
+function withinWorkspace(root: string, path: string): boolean {
+  const fromRoot = relative(root, path);
+  return fromRoot !== '..' && !fromRoot.startsWith(`..${sep}`) && !isAbsolute(fromRoot);
+}
+
+function shellInvocation(root: string, args: unknown) {
+  const parsed = shellArgs.safeParse(args);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    throw new Error(
+      `invalid arguments: ${issue?.path.join('.') ?? '?'} — ${issue?.message ?? 'unparseable'}`,
+    );
+  }
+  const requested = parsed.data.cwd ?? '.';
+  const cwd = resolve(root, requested);
+  let rootResolved: string;
+  let cwdResolved: string;
+  let scope: string;
+  const invalid = () =>
+    new Error(
+      `cwd escapes the project or is unavailable: ${requested}. Use "." for the project root.`,
+    );
+  try {
+    rootResolved = realpathSync(root);
+    if (!withinWorkspace(root, cwd) && !withinWorkspace(rootResolved, cwd)) throw invalid();
+    cwdResolved = realpathSync(cwd);
+    // The canonical check precedes stat. A symlink cannot make its outside
+    // target a permitted directory or reveal whether that target exists.
+    if (!withinWorkspace(rootResolved, cwdResolved)) throw invalid();
+    const workspace = statSync(rootResolved, { bigint: true });
+    const directory = statSync(cwdResolved, { bigint: true });
+    if (!workspace.isDirectory() || !directory.isDirectory()) throw invalid();
+    scope = JSON.stringify([
+      rootResolved,
+      workspace.dev.toString(),
+      workspace.ino.toString(),
+      cwdResolved,
+      directory.dev.toString(),
+      directory.ino.toString(),
+    ]);
+  } catch {
+    throw invalid();
+  }
+  return {
+    command: parsed.data.command,
+    cwd,
+    timeoutMs: parsed.data.timeout_ms,
+    cwdResolved,
+    rootResolved,
+    scope,
+  };
+}
+
 /**
  * Everything the two lanes share: parse, keep the cwd inside the project, hand
  * the command to whichever executor door the caller passed, format the result.
@@ -260,78 +314,67 @@ const THROW_TIER = 0 satisfies TrustTier;
  * The lane is the `esegui` closure and nothing else — one function per tool,
  * captured at construction, never a branch on an argument the model wrote.
  */
+class ApprovedShellUnavailable extends Error {}
+
 function makeLane(
   spec: ToolSpec,
   capability: CapabilityDecl,
   scope: ShellScope,
-  esegui: (req: { command: string; cwd: string; timeoutMs?: number }) => Promise<ExecResult>,
+  esegui: (req: ReadOnlyExecRequest, workspaceRoot: string) => Promise<ExecResult>,
 ): RegisteredTool {
   return {
     capability: capability.id,
     spec,
     throwTier: THROW_TIER,
-    handler: async (args) => {
-      const parsed = shellArgs.safeParse(args);
-      if (!parsed.success) {
-        const issue = parsed.error.issues[0];
-        return {
-          content: `invalid arguments: ${issue?.path.join('.') ?? '?'} — ${issue?.message ?? 'unparseable'}`,
-          isError: true,
-          // Nothing ran, so nothing came back. The command never reached the
-          // sandbox and this string is ours.
-          tier: 0,
-        };
-      }
-
-      // cwd stays inside the project. This bounds where the process *starts*,
-      // not what it can write — writes are the sandbox's job — but a cwd outside
-      // the root would also anchor srt's profile generation somewhere we did not
-      // mean (upstream #432 made that mistake load-bearing).
-      //
-      // The escape check must run on canonical paths (B1): `execute()`
-      // (`core/sandbox/executor.ts`) feeds `cwd` to `buildReadScope` →
-      // `resolveReadRoot` → `realpathSync`, so a lexical-only check here lets
-      // a symlink inside the project pointing outside through, and the
-      // resolved outside tree lands in `allowRead` on both lanes. Resolve the
-      // root and the candidate and re-apply the escape check on the resolved
-      // spellings; fail closed when either cannot be resolved.
-      //
-      // The *request* still carries the lexical spelling, on purpose: the
-      // executor realpaths it into the read scope and the process working
-      // directory, so the safety is the check we just ran, not the string we
-      // hand downstream. Passing the resolved spelling back would move every
-      // `cwd` on macOS (`/var` → `/private/var`) and change a contract the
-      // lane never agreed to change.
-      const cwd = resolve(scope.root, parsed.data.cwd ?? '.');
-      let rootResolved: string;
+    approvalScope: (args) => shellInvocation(scope.root, args).scope,
+    handler: async (args, ctx) => {
+      let invocation: ReturnType<typeof shellInvocation>;
       try {
-        rootResolved = realpathSync(scope.root);
-      } catch {
-        return { content: `cwd escapes the project: ${parsed.data.cwd ?? '.'}`, isError: true, tier: 0 };
-      }
-      let cwdResolved: string;
-      try {
-        cwdResolved = realpathSync(cwd);
-      } catch {
+        invocation = shellInvocation(scope.root, args);
+      } catch (error) {
         return {
-          content: `cwd escapes the project: ${parsed.data.cwd ?? '.'} (unresolvable)`,
+          content: error instanceof Error ? error.message : String(error),
           isError: true,
           tier: 0,
         };
       }
-      const escape = relative(rootResolved, cwdResolved);
-      if (escape === '..' || escape.startsWith('..') || isAbsolute(escape)) {
-        return { content: `cwd escapes the project: ${parsed.data.cwd}`, isError: true, tier: 0 };
-      }
+      const approvedScope = ctx.approvedScope;
+      const validateScope =
+        approvedScope === undefined
+          ? undefined
+          : () => {
+              if (ctx.signal?.aborted) {
+                throw new ApprovedShellUnavailable(
+                  'Il comando è stato annullato prima di partire.',
+                );
+              }
+              try {
+                if (shellInvocation(scope.root, args).scope === approvedScope) return;
+              } catch {
+                // A removed directory is also a change to the approved scope.
+              }
+              throw new ApprovedShellUnavailable(
+                'La cartella approvata è cambiata. Non ho eseguito il comando.',
+              );
+            };
+      const { command, timeoutMs } = invocation;
 
       let result: ExecResult;
       try {
-        result = await esegui({
-          command: parsed.data.command,
-          cwd,
-          ...(parsed.data.timeout_ms !== undefined ? { timeoutMs: parsed.data.timeout_ms } : {}),
-        });
+        validateScope?.();
+        result = await esegui(
+          {
+            command,
+            cwd: approvedScope === undefined ? invocation.cwd : invocation.cwdResolved,
+            ...(timeoutMs === undefined ? {} : { timeoutMs }),
+            ...(validateScope === undefined ? {} : { validateScope }),
+          },
+          approvedScope === undefined ? scope.root : invocation.rootResolved,
+        );
       } catch (error) {
+        if (error instanceof ApprovedShellUnavailable) {
+          return { content: error.message, isError: true, tier: 0 };
+        }
         // `ensureInit()` throws `sandbox unavailable: …` when containment
         // cannot be proved on this host — the case ADR-0074 punto 4 names by hand:
         // *«dove il sandbox non può garantire il confine, la shell in sola
@@ -347,7 +390,7 @@ function makeLane(
         };
       }
 
-      return formatExecOutcome(parsed.data.command, result);
+      return formatExecOutcome(command, result);
     },
   };
 }
@@ -359,8 +402,8 @@ export function makeShellTool(executor: ReadOnlyExec, scope: ShellScope): Regist
 
 /** `shell_run_write` — the writing lane, with the workspace as its write scope. */
 export function makeShellWriteTool(executor: WriteExec, scope: ShellScope): RegisteredTool {
-  return makeLane(shellWriteSpec, shellWriteCapability, scope, (req) =>
-    executor.run({ ...req, writeScope: [scope.root] }),
+  return makeLane(shellWriteSpec, shellWriteCapability, scope, (req, root) =>
+    executor.run({ ...req, writeScope: [root] }),
   );
 }
 

@@ -4,7 +4,6 @@ import { dirname, join } from 'node:path';
 import { isatty } from 'node:tty';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { assicuraVoce } from '../core/audio/trascrivi.js';
 import { rememberKeyProfile } from '../core/config/auth-profile.js';
 import {
   ConfigError,
@@ -18,8 +17,7 @@ import {
 import { ALL_API_KEY_NAMES, LEGACY_API_KEY_NAME } from '../core/config/providers.js';
 import { checkTemporalWindow, EVERY_INSTANT, normaliseDate } from '../core/memory/recall.js';
 import type { TrustTier } from '../core/policy/types.js';
-import { buildHardenPlan, formatHardenPlan } from '../core/rot/harden.js';
-import { seal, verify } from '../core/rot/verify.js';
+import { verify } from '../core/rot/verify.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { cmdAdopt } from './adopt.js';
 import { cmdAuth } from './auth.js';
@@ -29,6 +27,7 @@ import { allHelp, canonicalCommand, completion, primaryHelp } from './command-su
 import { cmdConfig } from './config.js';
 import { formatReport, runDoctor } from './doctor.js';
 import { cmdEffects } from './effects.js';
+import { cmdFallback } from './fallback.js';
 import {
   cmdGatewayInstall,
   cmdGatewayRestart,
@@ -88,6 +87,7 @@ import { cmdOrientamento } from './orientamento.js';
 import { promptLine, promptSecret, resolveSecretInput, secretStoreHint } from './prompt.js';
 import { cmdPromptShow, cmdPromptVersion, PROMPT_USAGE } from './prompt-show.js';
 import { runRepl } from './repl.js';
+import { runRotMigrate } from './rot-migrate.js';
 import { runHeadless } from './run.js';
 import { cmdSearch } from './search-setup.js';
 import {
@@ -229,6 +229,10 @@ async function main(rawArgv: string[]): Promise<number> {
         interactive: isatty(0),
       });
     }
+    case 'fallback':
+      return cmdFallback(paths().home, rest, {
+        out: (line) => process.stdout.write(`${line}\n`),
+      });
     case 'search':
       // `readKey` legge stdin **solo** quando un motore e' stato nominato: senza
       // questa pigrizia, `muffin search` da solo si bloccherebbe su un
@@ -439,6 +443,14 @@ async function cmdInit(argv: string[]): Promise<number> {
     },
     allowPositionals: true,
   });
+
+  if (values.hardened) {
+    process.stderr.write(
+      'The --hardened option is retired. Use `muffin init` for a personal install, ' +
+        'or `muffin doctor` to inspect OS hardening on an existing install.\n',
+    );
+    return 78;
+  }
 
   if (!values.local && positionals.length > 0) {
     process.stderr.write(
@@ -741,7 +753,6 @@ async function cmdInit(argv: string[]): Promise<number> {
   let steps: InitStep[];
   try {
     steps = runInit({
-      ...(values.hardened ? { hardened: true } : {}),
       ...(values.force ? { force: true } : {}),
       provider: effProvider,
       ...(effBaseUrl ? { baseUrl: effBaseUrl } : {}),
@@ -788,19 +799,6 @@ async function cmdInit(argv: string[]): Promise<number> {
       );
       return 1;
     }
-  }
-
-  // Il fallback vocale, assicurato una volta sola e mai a sorpresa: solo se
-  // una superficie vocale è accesa (una CLI sola non scarica 142 MiB per
-  // niente), e senza far fallire l'init se la rete non c'è — il rimedio
-  // rumoroso a runtime resta l'ultima spiaggia.
-  try {
-    const riga = await assicuraVoce(home, loadConfig(home));
-    if (riga !== null) process.stderr.write(`${riga}\n`);
-  } catch (error) {
-    process.stderr.write(
-      `voce: controllo modello whisper saltato (${error instanceof Error ? error.message : String(error)})\n`,
-    );
   }
 
   if (values.local) {
@@ -974,63 +972,38 @@ function cmdRot(argv: string[]): number {
   if (sub === 'verify') {
     const outcome = verify(paths().home, mode);
     if (outcome.ok) {
-      process.stdout.write(
-        `root of trust intact: ${outcome.fileCount} files, mode ${outcome.mode}\n`,
-      );
+      process.stdout.write(`rot/: ${outcome.fileCount} files, mode ${outcome.mode}\n`);
       return 0;
     }
-    process.stderr.write(
-      `root of trust diverged (${outcome.reason}):\n` +
+    process.stdout.write(
+      `rot/ diagnostic (${outcome.reason}), mode ${outcome.mode} — not an incident (ADR-0108):\n` +
         outcome.diverged.map((f) => `  ${f}\n`).join('') +
-        `→ ${outcome.remedy}\n`,
+        'Edits take effect without a seal. `muffin rot migrate` applies additive shipped fields and keeps timezone and identity.\n',
     );
-    return outcome.action === 'refuse' ? 2 : 1;
+    return 0;
   }
 
   if (sub === 'reseal') {
-    // The one failure this command was built to produce, and the only one it
-    // used to answer with a Node stack trace.
-    //
-    // `muffin rot harden` tells the owner, correctly, that after hardening
-    // "`muffin rot reseal` ti servirà un privilegio che oggi non ti serve"
-    // (`core/rot/harden.ts`). Following that advice and forgetting `sudo` is
-    // therefore the expected mistake, not an exotic one — and `main()` has no
-    // top-level catch, so the reward for doing what we asked was a raw
-    // `Error: EACCES` with a stack. Named by the judge on PR #138.
-    try {
-      const manifest = seal(paths().home, '1', new Date());
-      process.stdout.write(
-        `resealed ${manifest.files.length} files — the change is now yours and declared\n`,
-      );
-      return 0;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === 'EACCES' || code === 'EPERM') {
-        process.stderr.write(
-          `non posso riscrivere il sigillo in ${paths().home}/rot: permesso negato.\n` +
-            'Se hai reso vera la modalità hardened, il RoT non è più tuo ed è voluto: ' +
-            'rifai questo comando con il privilegio che serve (es. `sudo`).\n',
-        );
-        return 77; // EX_NOPERM
-      }
-      process.stderr.write(`reseal fallito: ${(error as Error).message}\n`);
-      return 74; // EX_IOERR
-    }
+    process.stderr.write(
+      'The data-tier seal ceremony is retired (ADR-0108). Edits to rot/ take effect on the next load. There is nothing to reseal.\n' +
+        'Use `muffin rot migrate` to apply additive shipped fields without overwriting timezone or identity.\n',
+    );
+    return 78;
+  }
+
+  if (sub === 'migrate') {
+    return runRotMigrate(paths().home);
   }
 
   if (sub === 'harden') {
-    // Explains and proposes, never executes — see core/rot/harden.ts. Every
-    // line of the plan goes to stdout ("stdout carries the answer", this
-    // file's own header above), the same as `muffin doctor`: this command's
-    // whole job is the printed report, not a side comment on some other
-    // action.
-    const plan = buildHardenPlan(paths().home, mode);
-    process.stdout.write(formatHardenPlan(plan));
-    if (!plan.owner.known) return 2;
-    return plan.done ? 0 : 1;
+    process.stderr.write(
+      'The manual hardening recipe is retired. OS hardening does not change approvals. ' +
+        'Use `muffin doctor` to inspect this installation.\n',
+    );
+    return 78;
   }
 
-  process.stderr.write(`usage: muffin rot verify | reseal | harden\n`);
+  process.stderr.write(`usage: muffin rot verify | migrate\n`);
   return 78;
 }
 

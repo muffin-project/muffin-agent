@@ -17,7 +17,10 @@ import type { TurnStopped, TurnStore } from '../../core/turns/store.js';
 import type { TodoStore } from '../../core/turns/todo.js';
 import type { WaitSpec } from '../../core/turns/wait.js';
 import type { UndoJournal } from '../../core/undo/journal.js';
-import type { CapabilityDiscoveryPort } from '../capability-exposure.js';
+import type {
+  CapabilityDiscoveryPort,
+  CapabilityExposureSnapshot,
+} from '../capability-exposure.js';
 import type { IstanzaFacts, SystemPrompts } from '../context/assemble.js';
 import type { Profile, ProfileOrigin } from '../profiles/profile.js';
 import type { AudioBlock, ImageBlock, Provider, ToolSpec } from '../providers/types.js';
@@ -109,6 +112,8 @@ export type ToolContext = {
    * percorso. Non chiude la finestra per magia — la rende una finestra sola.
    */
   effectPath?: string;
+  /** Canonical scope of an exact deferred approval being applied. */
+  approvedScope?: string;
   /**
    * Arm the runtime's suspension barrier.
    *
@@ -120,18 +125,22 @@ export type ToolContext = {
    * is the same semantics the prior art landed on independently (Hermes parks
    * the *next* turn, ADR-0035's `steer` injects after the next tool call).
    *
-   * Only `wait` calls it. It is on every context rather than injected into one
-   * tool because a tool is registered once at boot and shared by every turn,
-   * so the barrier has to travel with the turn — not with the tool.
+   * The barrier travels with the turn rather than a tool shared between turns.
    */
   suspend: (spec: WaitSpec) => void;
-  /**
-   * Turn-local progressive capability projection (#469).
-   *
-   * Absent when the authority-filtered catalogue already fits the profile cap.
-   * The handler may only search/load the eligible catalogue the engine built
-   * before the model call; execution still goes through runTool + the kernel.
-   */
+  /** Trusted, call-local port; never populated from model arguments. */
+  workMessage?: {
+    available: () => boolean;
+    messageId: string;
+    solo: boolean;
+    withinBudget: boolean;
+    questionWakeAt: () => string | null;
+    sanitize: (text: string) => string;
+    send: (text: string) => ReturnType<NonNullable<LoopDeps['sendWorkMessage']>>;
+  };
+  /** The schema menu the turn last sent to the model, including in flat mode. */
+  capabilityExposure?: (() => CapabilityExposureSnapshot) | undefined;
+  /** Search and stage schemas from the eligible catalogue when discovery is configured. */
   capabilityDiscovery?: CapabilityDiscoveryPort | undefined;
   /** Durability guard for this turn: a write failure disables later tools. */
   durability?: {
@@ -391,6 +400,12 @@ export type SpendEntry = {
    * this field existed.
    */
   requestedModel?: string | undefined;
+  /**
+   * The provider-chain link that served the call (ADR-0110), when the lane is
+   * a chain. Billing prices the call as this endpoint; the ledger row itself
+   * does not store it.
+   */
+  route?: { kind: 'anthropic' | 'openai-compat' | 'openai-chatgpt'; baseUrl?: string } | undefined;
 };
 
 type ToolHandler = (args: unknown, ctx: ToolContext) => Promise<ToolOutcome> | ToolOutcome;
@@ -518,9 +533,21 @@ export type RegisteredTool = {
    * nessun undo (vedi il paragrafo sopra). `fs.ts` lo ignora, come faceva.
    */
   resolveEffectPath?: (args: Record<string, unknown>, ctx: ToolContext) => string;
+  /** Verify an exact deferred approval resource without doing the operation. */
+  approvalScope?: (args: unknown) => string;
 };
 
 export type LoopDeps = {
+  /** Telegram gateway's journaled progress delivery, addressed by the canonical turn. */
+  sendWorkMessage?:
+    | ((
+        turnId: string,
+        messageId: string,
+        text: string,
+      ) => Promise<'sent' | 'possibly_sent' | 'deferred'>)
+    | undefined;
+  /** Read the effective owner binding on demand, including a newly paired owner. */
+  workMessageOwner?: (() => { userId?: number; chatId?: number }) | undefined;
   /** Refresh persisted main-model settings immediately before a turn enters execution. */
   prepareTurn?: (() => void) | undefined;
   /** The active runtime facts; entry points snapshot these before running. */
@@ -761,6 +788,8 @@ export type TurnInput = {
    * not authority; policy still evaluates the principal, taint, and capability.
    */
   inputOrigin?: 'owner' | 'external';
+  /** The sender's own words when a surface supplies separately attributed context. An empty string means none. */
+  authoredText?: string;
   /**
    * Le immagini che questo turno porta con sé, già caricate (`agent/images.ts`).
    *
@@ -1008,7 +1037,7 @@ export type TurnEvent =
    * frase in italiano vive in `cli/repl.ts` e non su `ToolSpec`. Chi li stampa
    * li tratta come non fidati: dentro c'è testo scritto dal modello.
    */
-  | { type: 'tool_start'; name: string; capability: string; args?: unknown }
+  | { type: 'tool_start'; name: string; capability: string; callId?: string; args?: unknown }
   /**
    * La chiamata non è finita e non è fallita: **è ferma su di te**.
    *
@@ -1018,7 +1047,7 @@ export type TurnEvent =
    * non si è rotto. Chi guarda lo schermo in quel momento sta cercando di
    * capire se deve fare qualcosa lui — ed è esattamente quello che deve fare.
    */
-  | { type: 'ask'; name: string; capability: string }
+  | { type: 'ask'; name: string; capability: string; callId?: string }
   /**
    * Un tentativo transitorio è andato male e se ne fa un altro.
    *

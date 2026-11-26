@@ -305,8 +305,10 @@ describe('acceptance · A · installazione e ciclo di vita', () => {
  * limiti ha" is `identity.md`'s claim, A3 "il comportamento è definito" is the
  * register rule in that same file, with the long examples in the `voce` skill
  * and not in the prefix), not two independent turns. Every marker is read from
- * the files this install actually wrote under `inst.home` — never from
- * `defaults/`, which is only the seed `muffin init` copies from once.
+ * the files this install actually wrote under `inst.home`. Since ADR-0112 the
+ * runtime reads the foundation from the shipped product when that home copy
+ * is untouched, so the seed and the product say the same thing here; a
+ * hand-edited copy is the legacy case `agent/persona.test.ts` covers.
  */
 describe('acceptance · A2/A3 · identity wiring', () => {
   let inst: Install;
@@ -315,8 +317,8 @@ describe('acceptance · A2/A3 · identity wiring', () => {
   /** `muffin prompt show` on the very same home, after the turn. */
   let shown: string;
 
-  const IDENTITY_MARKER = 'Non mi dai ragione per farmi contento.';
-  const REGISTER_MARKER = 'Il registro segue il momento';
+  const IDENTITY_MARKER = 'Non ti limiti a dare ragione';
+  const REGISTER_MARKER = 'Lavoro resta lavoro';
   /** A line that lives only in the skill body, not in the sealed pact. */
   const VOICE_EXAMPLE = '15% dei messaggi';
 
@@ -425,22 +427,28 @@ describe('acceptance · A · doctor, backup', () => {
         );
         writeFileSync(policyPath, tampered);
 
-        const broken = await inst.muffin(['doctor']);
-        if (broken.code === 0) {
+        const afterEdit = await inst.muffin(['doctor']);
+        // ADR-0108: an owner edit to rot/ is not tampering. The leftover
+        // manifest may still name the file, but the check stays ok and must
+        // not recommend a reseal or put the install in safe mode.
+        if (!/✓ root of trust/.test(afterEdit.out)) {
           throw new Error(
-            `doctor è tornato ok dopo la manomissione — non se ne è accorto:\n${broken.out}`,
+            `doctor non lascia 'root of trust' ok dopo un edit a rot/policy.json (ADR-0108):\n${afterEdit.out}`,
           );
         }
-        if (!/root of trust/.test(broken.out) || !/policy\.json/.test(broken.out)) {
+        if (!/policy\.json/.test(afterEdit.out)) {
           throw new Error(
-            `doctor ha trovato *qualcosa* ma non ha nominato il file manomesso:\n${broken.out}`,
+            `doctor non nomina policy.json dopo l'edit (il manifest residuo dovrebbe segnalarlo, in modo informativo):\n${afterEdit.out}`,
           );
         }
-        // A problem an owner cannot act on is half a diagnosis. The check must
-        // say what to do, not just that something is wrong.
-        if (!/rifai|reseal|ripristina/i.test(broken.out)) {
+        if (/muffin rot reseal/i.test(afterEdit.out)) {
           throw new Error(
-            `doctor ha segnalato la manomissione senza dire come rimediare:\n${broken.out}`,
+            `doctor raccomanda ancora muffin rot reseal dopo ADR-0108:\n${afterEdit.out}`,
+          );
+        }
+        if (/safe mode/i.test(afterEdit.out)) {
+          throw new Error(
+            `doctor parla di safe mode dopo un edit a rot/ (ADR-0108):\n${afterEdit.out}`,
           );
         }
       } finally {
@@ -943,7 +951,7 @@ describe('acceptance · A6 · update: backup before swap', () => {
  * `muffin config --json` is read after each edit as the owner-facing witness
  * ADR-0036 built for exactly this question ("cosa posso regolare, e dove").
  */
-describe('acceptance · A4 · config: hand-edit + reseal, end to end', () => {
+describe('acceptance · A4 · config: hand-edit binds, reseal is retired', () => {
   scenario(
     'A4',
     async () => {
@@ -1036,8 +1044,8 @@ describe('acceptance · A4 · config: hand-edit + reseal, end to end', () => {
           );
         }
 
-        // --- (c) hand-edit a SEALED file — takes effect immediately, but ----
-        //         `doctor` calls it tampering until `muffin rot reseal` runs.
+        // --- (c) hand-edit a rot/ file — takes effect immediately, and ------
+        //         doctor does not treat it as tampering (ADR-0108).
         const budgetsPath = join(inst.home, 'rot', 'budgets.json');
         const budgetsBefore = JSON.parse(readFileSync(budgetsPath, 'utf8')) as {
           monthlyUsd: number;
@@ -1063,35 +1071,34 @@ describe('acceptance · A4 · config: hand-edit + reseal, end to end', () => {
           );
         }
 
-        const doctorBeforeReseal = await inst.muffin(['doctor']);
-        if (doctorBeforeReseal.code === 0) {
+        const doctorAfterBudgetEdit = await inst.muffin(['doctor']);
+        if (!/✓ root of trust/.test(doctorAfterBudgetEdit.out)) {
           throw new Error(
-            `doctor non si accorge dell'hand-edit di un file sigillato:\n${doctorBeforeReseal.out}`,
+            `doctor non lascia 'root of trust' ok dopo un edit a rot/budgets.json (ADR-0108):\n${doctorAfterBudgetEdit.out}`,
           );
         }
-        if (
-          !/root of trust/.test(doctorBeforeReseal.out) ||
-          !/budgets\.json/.test(doctorBeforeReseal.out)
-        ) {
+        if (/muffin rot reseal/i.test(doctorAfterBudgetEdit.out)) {
           throw new Error(
-            `doctor non nomina il file sigillato manomesso:\n${doctorBeforeReseal.out}`,
+            `doctor raccomanda ancora muffin rot reseal dopo un edit a budgets.json:\n${doctorAfterBudgetEdit.out}`,
           );
         }
 
-        // --- (d) `muffin rot reseal` — the real terminal command ------------
+        // --- (d) `muffin rot reseal` is retired (exit 78) -------------------
         const reseal = await inst.muffin(['rot', 'reseal']);
-        if (reseal.code !== 0)
-          throw new Error(`muffin rot reseal: exit ${reseal.code}\n${reseal.out}${reseal.err}`);
-        if (!/resealed \d+ files/.test(reseal.out)) {
+        if (reseal.code !== 78)
           throw new Error(
-            `muffin rot reseal non conferma quanti file ha risigillato: ${JSON.stringify(reseal.out)}`,
+            `muffin rot reseal: atteso exit 78 (ritirato), ricevuto ${reseal.code}\n${reseal.out}${reseal.err}`,
+          );
+        if (!/ADR-0108|nothing to reseal|retired/i.test(`${reseal.out}${reseal.err}`)) {
+          throw new Error(
+            `muffin rot reseal non spiega il ritiro: ${JSON.stringify(reseal.out + reseal.err)}`,
           );
         }
 
         const doctorAfterReseal = await inst.muffin(['doctor']);
         if (!/✓ root of trust\s/.test(doctorAfterReseal.out)) {
           throw new Error(
-            `doctor resta in fail sul root of trust dopo \`muffin rot reseal\`:\n${doctorAfterReseal.out}`,
+            `doctor perde 'root of trust' ok dopo il comando reseal ritirato:\n${doctorAfterReseal.out}`,
           );
         }
 
@@ -1114,7 +1121,7 @@ describe('acceptance · A4 · config: hand-edit + reseal, end to end', () => {
           );
         if (budgetKnob.value !== '0') {
           throw new Error(
-            `dopo il reseal muffin config --json non mostra il valore hand-editato (0): ${JSON.stringify(budgetKnob)}`,
+            `dopo l'edit muffin config --json non mostra il valore hand-editato (0): ${JSON.stringify(budgetKnob)}`,
           );
         }
         if (budgetKnob.value === String(originalCap)) {

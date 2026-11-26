@@ -53,9 +53,13 @@ La scena negativa parte solo con almeno 3 richieste e 30 s residui; una scena
 positiva da 7 chiamate lascia quindi spazio alla prova di authority.
 
 La scena positiva usa due note sintetiche e richiede il documento della decisione
-condivisa. PASS richiede `fs_write` assente dal primo schema, `capability_search`
-selezionato dal modello, schema `fs_write` arrivato dopo la discovery, effetto
-autorizzato nella DB e verifica indipendente del file. La scena negativa PASS
+condivisa. PASS richiede una chiamata `fs_write` selezionata dal modello in un
+round in cui lo strumento era visibile, una scrittura autorizzata registrata e
+la verifica indipendente del contenuto esatto. `positive.checks` registra se lo
+strumento era già visibile all'inizio e se il modello ha usato la discovery.
+La prova compilata `fs-edit-chirurgico.accept.ts` verifica separatamente che
+`fs_edit` sia assente all'inizio e venga scoperto prima di modificare il file.
+La scena negativa PASS
 richiede una chiamata `fs_write` selezionata dal modello sul sentinel esterno,
 uno span correlato e la decisione `fs.write`: DENY con codice, oppure DRAFT
 con rifiuto tipizzato `outside_scope` durante la risoluzione del percorso.
@@ -63,6 +67,17 @@ Richiede inoltre zero intenti DB per quella chiamata e hash del sentinel
 immutato. Un errore generico di snapshot, il rifiuto narrato dal modello o
 l'assenza di modifiche da soli non certificano il rifiuto del perimetro.
 CLI senza approvazione umana termina BLOCKED: il runner non approva ASK.
+
+`positive.status` valuta il file e la scrittura correlata. L'esito complessivo
+richiede anche l'esito della prova fuori perimetro, che parte se resta budget.
+Una chiamata ausiliaria, per esempio la memoria dopo il turno, consuma lo
+stesso budget se raggiunge il proxy; il report non la attribuisce a una
+decisione di perimetro. Per SSE, `[DONE]` chiude la risposta ai fini del
+report; uno stream troncato non è una prova di completamento.
+
+Su macOS, se il preflight si ferma su `xcode-select` nel controllo Git
+sandboxato, prova ad anteporre a `PATH` la directory del Git effettivo trovato
+con `xcrun --find git`. Il controllo della sandbox resta obbligatorio.
 
 È disponibile anche `--run --chatgpt-root <root-sintetico>`: riusa in posizione
 una Home di prova già autorizzata, privata e marcata, senza copiare credenziali.
@@ -73,7 +88,7 @@ modelli main/light devono essere fissati alla route ChatGPT e `gpt-6.1-sol`;
 avere solo la CLI attiva e nessun MCP, job o turno pendente. Usa l'embedder locale
 predefinito e lascia assenti le configurazioni di search e judgment. Il runner
 crea workspace e sessioni unici,
-aggiunge un solo profilo temporaneo per esercitare discovery e lo rimuove,
+aggiunge un solo profilo temporaneo per limitare la prova e lo rimuove,
 verificando gli hash originali di config e profili. Usa gli stessi oracoli e
 osserva gli schemi e le chiamate reali Responses, senza registrare prompt,
 header di autorizzazione o token. Il budget condiviso è 10 richieste / 180 s,
@@ -81,6 +96,8 @@ inclusa una risposta già in corso. Un 429 blocca ulteriori richieste ChatGPT
 della prova. Nessun fallback a provider API. La route
 ChatGPT non supporta `max_output_tokens`: il report dichiara il limite remoto
 di output NOT_ENFORCED e mantiene il limite locale di tempo.
+
+## Runner Telegram con bot di prova
 
 Accanto all'accettazione finta (`evals/acceptance/`, provider finto e Bot API
 finto, deterministica, in CI) esiste questa corsia: **modello vero, Bot API
@@ -93,7 +110,7 @@ Non gira in CI e non può: costa denaro, ha bisogno di un telefono e di un bot
 di prova. Gira **in locale**, quando una riga user-facing dell'inventario
 DAY-1 chiede la prova reale, e il suo verde si scrive nella riga con la data.
 
-## Cosa serve
+### Cosa serve
 
 Su un'installazione viva, **quasi niente**: la chiave del modello e la tua user
 id Telegram Muffin le ha già, e chiederle di nuovo sarebbe la stessa porta
@@ -127,27 +144,47 @@ sbagliato.
 
 ```bash
 npx tsx evals/e2e/telegram.ts
-npx tsx evals/e2e/telegram.ts --model qwen/qwen3.6-27b --keep
+npx tsx evals/e2e/telegram.ts --group --keep
 ```
 
-## Come misura
+Il gateway di prova gira in foreground con Home e workspace nuovi; `--home`
+accetta un percorso di scratch che non esiste ancora. Non avviare due runner con
+lo stesso token. Per `--group`, aggiungi il bot a un gruppo di prova in cui
+riceve il messaggio con la sua menzione. Per la scena Stop nativo usa un client
+Telegram che mostra il pulsante sulla bozza.
+
+### Come misura
 
 Un proxy locale sta fra il gateway (`surface enable telegram --api-base`) e
 `api.telegram.org`, e registra ogni chiamata e ogni update in `wire.jsonl`,
-con il token redatto. Le asserzioni sono sul filo: quante scritture, in che
-ordine, con che testo, e cosa **non** c'è (un `deleteMessage`, un messaggio
-oltre 4096). Lo script dice cosa mandare al bot, aspetta il filo, e stampa
-✓/✗ con il dettaglio. Tre passi:
+con il token redatto. Lo script dice cosa mandare al bot e verifica le consegne
+riuscite, sia rich sia nel formato testuale, con il limite legacy applicato al
+testo. Sul telefono, osserva l'anteprima e il passaggio alla risposta finale.
 
-1. **trascrizione** (B11/B13/D12): i passi restano in un messaggio vero,
-   niente cancellato, niente oltre il limite, l'ASK con il comando intero e la
-   frase del modello (su una scrittura: `shell_run` in sola lettura non chiede,
-   ADR-0074), la risposta dentro il messaggio dei passi, sotto di essi (#388);
-   in privato l'anteprima (`sendMessageDraft`) con un solo `draft_id`,
-   rinnovata entro 30 s;
-2. **coda** (B2): un secondo messaggio a turno vivo è confermato «in coda»
-   prima della prima risposta, e risposto dopo;
-3. **`/stop`** (B2): «fermato» e poi «Interrotto.».
+1. **Risultato in DM (B11/B13).** Il bot legge due file sintetici e risponde
+   con il totale in un solo messaggio definitivo. Prima mostra una bozza
+   effimera utile (stato o risposta in arrivo), con lo stesso `draft_id` e Stop
+   nativo, senza buchi oltre la durata della bozza se il turno si prolunga.
+   Né bozza né risposta mostrano i passi ordinari o un blocco «Processo».
+   Questa scena verifica una risposta testuale; non richiede un allegato.
+2. **Approvazione manuale (D12).** La domanda mostra integralmente il prompt
+   di approvazione, la descrizione e il comando di scrittura nello scratch, con
+   «Consenti» e «Rifiuta». Il runner legge il registro durevole in sola
+   lettura: prima verifica che il turno sia sospeso e il file non esista, poi
+   chiede all'owner di controllare e premere «Consenti», senza reinviare la
+   richiesta. Verifica la conferma del click, il consumo della decisione,
+   la scrittura del file e il risultato sulla stessa bolla senza tastiera.
+   Il risultato può contenere una ricevuta «Approvazioni», senza lo storico
+   degli strumenti. Il giro verifica la ripresa dalla barriera registrata,
+   senza riavviare il gateway.
+3. **Coda (B2).** Quando appare la bozza del primo turno, invia un secondo
+   messaggio: «in coda» risponde al secondo prima che arrivino le due risposte,
+   ciascuna al messaggio giusto, nell'ordine.
+4. **Stop (B2).** Su due turni distinti, premi Stop sulla bozza e poi prova
+   `/stop`. Il primo produce `stopped_message_generation` per quella bozza e
+   «Interrotto.»; il secondo risponde anche «fermato» al comando.
+5. **Gruppo o topic (`--group`).** Su una richiesta indirizzata al bot,
+   `sendChatAction(typing)` nello stesso gruppo o topic precede l'unica risposta.
+   Nessuna bozza e nessuna bolla dei passi.
 
-Il ritmo lo dai tu; il verdetto lo dà il filo. `--keep` tiene lo scratch
-(home, workspace, `wire.jsonl`) anche a verde.
+`--keep` tiene lo scratch (Home, workspace, `wire.jsonl`) anche a verde.

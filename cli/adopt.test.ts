@@ -3,8 +3,12 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } fro
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import {
+  diagnoseDefaultsDrift,
+  readDefaultsRegistry,
+  recordCopied,
+} from '../core/config/defaults-drift.js';
 import { cmdAdopt } from './adopt.js';
-import { diagnoseDefaultsDrift, readDefaultsRegistry, recordCopied } from '../core/config/defaults-drift.js';
 
 /**
  * Repository Git veri, come `core/config/defaults-drift.test.ts` e per la
@@ -13,7 +17,8 @@ import { diagnoseDefaultsDrift, readDefaultsRegistry, recordCopied } from '../co
  */
 function sh(cmd: string, args: string[], cwd: string): string {
   const r = spawnSync(cmd, args, { cwd, encoding: 'utf8' });
-  if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} in ${cwd} failed:\n${r.stderr || r.stdout}`);
+  if (r.status !== 0)
+    throw new Error(`${cmd} ${args.join(' ')} in ${cwd} failed:\n${r.stderr || r.stdout}`);
   return r.stdout;
 }
 
@@ -59,7 +64,11 @@ function makeHome(): string {
   return h;
 }
 
-function run(home: string, checkoutRoot: string | null, argv: string[]): { code: number; out: string } {
+function run(
+  home: string,
+  checkoutRoot: string | null,
+  argv: string[],
+): { code: number; out: string } {
   const righe: string[] = [];
   const code = cmdAdopt(home, argv, { out: (l) => righe.push(l), checkoutRoot });
   return { code, out: righe.join('\n') };
@@ -188,12 +197,13 @@ describe('muffin adopt — cosa si rifiuta di fare', () => {
 
     const r = run(h, checkout, ['rot/identity.md']);
     expect(r.code).toBe(1);
-    expect(r.out).toContain('safe mode');
-    expect(r.out).toContain('muffin rot reseal');
+    expect(r.out).toContain('muffin rot migrate');
+    expect(r.out).not.toContain('safe mode');
+    expect(r.out).not.toContain('muffin rot reseal');
     expect(readFileSync(join(h, 'rot', 'identity.md'), 'utf8')).toBe('v1 identity\n');
   });
 
-  it("e `--tutto` non lo tira dentro: lo nomina e lo lascia stare", () => {
+  it('e `--tutto` non lo tira dentro: lo nomina e lo lascia stare', () => {
     const checkout = makeCheckout();
     const h = makeHome();
     commit(checkout, 'rot/identity.md', 'v2 identity\n', 'identity v2');
@@ -201,7 +211,8 @@ describe('muffin adopt — cosa si rifiuta di fare', () => {
     const r = run(h, checkout, ['--tutto']);
     expect(readFileSync(join(h, 'rot', 'identity.md'), 'utf8')).toBe('v1 identity\n');
     expect(r.out).toContain('rot/identity.md');
-    expect(r.out).toContain('rot reseal');
+    expect(r.out).toContain('muffin rot migrate');
+    expect(r.out).not.toContain('rot reseal');
   });
 
   it('un file che non esiste in defaults/ e un errore, non un silenzio', () => {

@@ -8,6 +8,7 @@ import {
 import { harnessMessage } from './loop/message-origin.js';
 import { continueTurn, type LoopDeps, type ResumeStream, resumeTurn } from './loop.js';
 import type { Message } from './providers/types.js';
+import { recoveredText } from './recovered-text.js';
 
 /**
  * The bridge from a row in `turns` to a real turn, and from a finished turn to
@@ -40,7 +41,11 @@ import type { Message } from './providers/types.js';
  * the failure is recorded on the row — never merged with how the *turn* ended,
  * which is a second question and never the same one.
  */
-export type LaneDeliver = (turn: TurnRecord, text: string) => Promise<void | 'possibly_sent'>;
+export type LaneDeliver = (
+  turn: TurnRecord,
+  text: string,
+  recovered?: true,
+) => Promise<void | 'possibly_sent' | 'deferred'>;
 
 /**
  * Opens a live sink for a row the lane is about to resume, addressed at its
@@ -159,6 +164,31 @@ export function makeLaneRunner(
 ): LaneRun {
   return async (turnId) => {
     const before = deps.turns.get(turnId);
+    if (before?.status === 'done') {
+      const ownerFinal =
+        before.jobId === null && before.ownerQuestionFinal === true && before.replyTo !== null;
+      if (before.jobId === null && !ownerFinal) return { refused: 'turn already finished' };
+      if (before.delivery !== 'pending') return { refused: 'delivery already reconciled' };
+      const stopped = before.outcome ?? 'error';
+      try {
+        let text: string;
+        try {
+          text = recoveredText(deps.sessions, before, { preserveEmptyAnswer: true });
+        } catch (error) {
+          if (!ownerFinal) throw error;
+          // The connector may already have a frozen plan even if the session
+          // transcript is unreadable. Give it the chance to reconcile it.
+          text = 'Il turno è concluso, ma non ho potuto recuperare il testo della risposta.';
+        }
+        // A marked final always reaches the connector's journal, even when
+        // there is no recovered text. Only the connector knows if a plan exists.
+        if (!ownerFinal && text.trim() === '') mark(deps, turnId, null);
+        else await sendAndRecord(deps, before, text, true);
+      } catch (error) {
+        mark(deps, turnId, `failed:${error instanceof Error ? error.message : String(error)}`);
+      }
+      return { stopped };
+    }
     const stream = before === null ? undefined : attachStream?.(before);
     let outcome: Awaited<ReturnType<typeof resumeTurn>>;
     try {
@@ -272,9 +302,15 @@ export function makeLaneRunner(
    * the Telegram connector is: a write against a database closed under a long
    * turn threw from a floating promise and took the gateway down with it.
    */
-  async function sendAndRecord(d: LoopDeps, record: TurnRecord, text: string): Promise<void> {
+  async function sendAndRecord(
+    d: LoopDeps,
+    record: TurnRecord,
+    text: string,
+    recovered?: true,
+  ): Promise<void> {
     try {
-      const outcome = await deliver(record, text);
+      const outcome = await deliver(record, text, recovered);
+      if (outcome === 'deferred') return;
       mark(d, record.id, outcome === 'possibly_sent' ? 'possibly_sent' : 'sent');
     } catch (error) {
       mark(d, record.id, `failed:${error instanceof Error ? error.message : String(error)}`);
@@ -284,7 +320,7 @@ export function makeLaneRunner(
   function mark(
     d: LoopDeps,
     turnId: string,
-    state: 'sent' | 'possibly_sent' | `failed:${string}`,
+    state: 'sent' | 'possibly_sent' | `failed:${string}` | null,
   ): void {
     try {
       d.turns.delivered(turnId, state);

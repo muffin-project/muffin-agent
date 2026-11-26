@@ -1,5 +1,6 @@
+import { speakerAttributedContent } from '../../core/memory/authorship.js';
 import { recall, recallTaint, renderForPrompt } from '../../core/memory/recall.js';
-import { memoryWriteCapability } from '../../core/policy/doors.js';
+import { memoryWriteCapability, replyCapability } from '../../core/policy/doors.js';
 import type { CapabilityId, Decision, DecisionRequest } from '../../core/policy/types.js';
 import type { SessionRef } from '../../core/session/store.js';
 import type { SpanHandle } from '../../core/tracing/types.js';
@@ -16,6 +17,7 @@ import {
   CAPABILITY_DISCOVERY_GUIDANCE,
   CAPABILITY_SEARCH_TOOL_NAME,
   createCapabilityExposure,
+  DEFAULT_CORE_TOOL_NAMES,
   preloadCapabilitiesForTask,
 } from '../capability-exposure.js';
 import { tenantClass, visibleTools } from '../context/assemble.js';
@@ -27,7 +29,9 @@ import {
   withActivityAllowance,
   withoutActivityAllowance,
 } from '../providers/activity-allowance.js';
+import { ReasoningConfigurationError } from '../providers/reasoning.js';
 import { type ContentBlock, type Message, ProviderError } from '../providers/types.js';
+import { WORK_MESSAGE_TOOL_NAME } from '../tools/work-message.js';
 import { buildContext, userAudios, userImages } from './context.js';
 import {
   announceEnd,
@@ -56,6 +60,7 @@ import {
   type TurnInput,
   type TurnResult,
 } from './types.js';
+import { workMessagesAvailable } from './work-message.js';
 
 /**
  * The engine of a turn: the deterministic pre-loop, and the round loop it hands
@@ -220,6 +225,9 @@ async function runClaimedTurn(
      */
     session: options.session ?? deps.sessions.open(record.sessionId),
     text: record.inputText ?? lastUserText(messages),
+    // Older checkpoints did not separate the sender's words from context.
+    authoredText:
+      typeof persistedInput?.authoredText === 'string' ? persistedInput.authoredText : '',
     // Event wakes run as `system:automation`, but their input contains matched
     // external data. Preserve the marker; legacy automation rows fail closed
     // as external rather than acquiring owner provenance on recovery.
@@ -273,12 +281,8 @@ async function runClaimedTurn(
   // `resumeTurn` §2. On a fresh turn the two agree by construction, which is
   // exactly why deriving it looked safe for as long as nothing resumed.
   const snapshot = makeSnapshot(deps.decide, input.principal, input.tenant, record.taint);
-  // La prima cosa entrata in questo turno: le parole della persona. Un URL che
-  // l'owner incolla lui stesso non è «scelto dal modello», ed è il caso più
-  // ovvio che il gate sui parametri trattava come tale. Senza capability:
-  // il messaggio umano è la classe di provenienza che rende «citata» una URL
-  // intera (lane #624 + #641 — un file tier-2 non lo è).
-  snapshot.recordInput(input.text, undefined, input.inputOrigin ?? 'owner');
+  const inputOrigin = input.inputOrigin ?? 'owner';
+  snapshot.recordInput(input.authoredText ?? '', undefined, inputOrigin);
   const turnClass = tenantClass(input.principal, input.tenant);
 
   /**
@@ -382,60 +386,105 @@ async function runClaimedTurn(
       },
     },
   );
-  // #469: principal/grant filtering decides which installed capabilities may
-  // even enter discovery. The profile ceiling is applied only to the model
-  // projection, never to catalogue existence.
+  // Messaging requires a bound owner DM and prompt reply authority.
+  const canWorkMessage =
+    workMessagesAvailable(deps, input) &&
+    snapshot.check(replyCapability.id, { kind: 'none' }, {}).effect === 'allow';
   const principalVisibleTools = visibleTools(
     deps.tools,
     input.principal,
     deps.capabilities,
     deps.grants?.get(input.tenant),
-  );
-  // #469 judge ADJUST: visibleTools' hostOnly/grants projection was designed
-  // for members and deliberately returns the full catalogue for system
-  // principals. That is not the kernel's authority: autonomous principals
-  // also have sealed forbiddenForSystem exclusions (including namespace
-  // patterns). Ask the SAME kernel snapshot for static denial codes BEFORE
-  // any task preload/search; never replicate the sealed list here.
-  //
-  // A dummy no-resource probe is used ONLY to exclude capabilities the kernel
-  // categorically denies to this principal. Resource/taint/budget decisions
-  // still happen at execution with real args. Direct guesses continue to
-  // resolve against deps.tools, outside this model-visible projection.
-  const eligibleTools =
-    input.principal.kind === 'system'
-      ? principalVisibleTools.filter((tool) => {
-          const decision = snapshot.check(tool.capability, { kind: 'none' }, {});
-          return (
-            decision.effect !== 'deny' ||
-            ![
-              'principal_forbidden',
-              'rot_violation',
-              'safe_mode',
-              'no_capability',
-              'tenant_mismatch',
-            ].includes(decision.code)
-          );
-        })
-      : principalVisibleTools;
+  ).filter((tool) => tool.spec.name !== WORK_MESSAGE_TOOL_NAME || canWorkMessage);
+  // Use the same kernel for categorical denials before preload, search or
+  // flat projection. The placeholder request only classifies eligibility.
+  // Keep it outside the execution snapshot's cache so real calls are checked
+  // with their own arguments, resource and current taint.
+  const catalogueDecision = (capability: CapabilityId): Decision =>
+    deps.decide({
+      principal: input.principal,
+      tenant: input.tenant,
+      capability,
+      resource: { kind: 'none' },
+      args: {},
+      taint: snapshot.currentTaint(),
+    });
+  const eligibleTools = principalVisibleTools.filter((tool) => {
+    const decision = catalogueDecision(tool.capability);
+    return (
+      decision.effect !== 'deny' ||
+      ![
+        'principal_forbidden',
+        'rot_violation',
+        'safe_mode',
+        'no_capability',
+        'tenant_mismatch',
+      ].includes(decision.code)
+    );
+  });
   const discoveryTool = eligibleTools.find(
     (tool) => tool.spec.name === CAPABILITY_SEARCH_TOOL_NAME,
   );
+  const wakeBarrier =
+    options.wokenFromWait === true ? decodeWaitFor(options.waitForAtWake ?? record.waitFor) : null;
+  // After an approval, the model may need to reissue a call discovered in
+  // the suspended turn. The last wait can be for a process, and a claimed
+  // wake that crashed can have no barrier left. Use the durable transcript
+  // and the current eligible catalogue, including only tools this turn used.
+  const resumingApproval =
+    options.resumed === true &&
+    (wakeBarrier?.kind === 'approval' || deps.approvals?.decidedUnconsumed(record.id) === true);
+  const resumedToolNames = resumingApproval
+    ? run.messages.flatMap((message) =>
+        message.role === 'assistant'
+          ? message.content.filter((block) => block.type === 'tool_use').map((call) => call.name)
+          : [],
+      )
+    : [];
   const capabilityExposure = createCapabilityExposure({
     eligible: eligibleTools,
-    maxToolsExposed: deps.profile.maxToolsExposed,
-    ...(discoveryTool === undefined ? {} : { discoveryTool }),
+    coreNames: [
+      ...(canWorkMessage ? [WORK_MESSAGE_TOOL_NAME] : []),
+      ...DEFAULT_CORE_TOOL_NAMES,
+      ...resumedToolNames,
+    ],
+    ...(discoveryTool === undefined
+      ? {}
+      : {
+          discoveryTool,
+          // Discovery is a context operation with no resource derived from its
+          // arguments. It must be callable for a partial menu to be useful.
+          canDiscover: () => catalogueDecision(discoveryTool.capability).effect === 'allow',
+        }),
   });
-  const preloaded =
-    capabilityExposure.pressured && deps.profile.maxToolsExposed > 1
-      ? preloadCapabilitiesForTask(capabilityExposure, input.text, 2)
-      : null;
+  // Prioritize an authored link without treating forwards or quotations as
+  // owner instructions. The actual URL is authorized in the ordinary call.
+  const linkReader =
+    input.principal.kind === 'owner' &&
+    input.inputOrigin !== 'external' &&
+    input.text.includes('://') &&
+    speakerAttributedContent(input.text)
+      .match(/\bhttps?:\/\/[^\s<>"'`]+/gi)
+      ?.some((url) => URL.canParse(url) || URL.canParse(url.replace(/[),.!?;]+$/, '')))
+      ? eligibleTools.find((tool) => tool.spec.name === 'http_get')
+      : undefined;
+  // The URL capability rejects a missing resource. That synthetic probe
+  // distinguishes availability (e.g. safe mode) from the eventual URL check.
+  const readerDecision = linkReader && catalogueDecision(linkReader.capability);
+  const firstName =
+    readerDecision?.effect === 'deny' && readerDecision.code !== 'resource_denied'
+      ? undefined
+      : linkReader?.spec.name;
+  const preloaded = capabilityExposure.pressured
+    ? preloadCapabilitiesForTask(capabilityExposure, input.text, 2, firstName)
+    : null;
   const exposed = capabilityExposure.exposed;
+  const initialProjection = capabilityExposure.snapshot();
   turn.setAttributes({
     'muffin.context.class': turnClass,
     'muffin.context.tools_exposed': exposed.length,
-    'muffin.context.tools_hidden': capabilityExposure.hiddenCount,
-    'muffin.context.capability_discovery': capabilityExposure.pressured,
+    'muffin.context.tools_hidden': initialProjection.hiddenCount,
+    'muffin.context.capability_discovery': initialProjection.pressured,
     'muffin.context.tools_preloaded': preloaded?.loaded.length ?? 0,
   });
 
@@ -460,6 +509,7 @@ async function runClaimedTurn(
     ...(input.jobId === undefined ? {} : { jobId: input.jobId }),
     sessionId: input.session.id,
     runtimeInfo: deps.runtimeInfo,
+    capabilityExposure: capabilityExposure.snapshot,
     taint: () => snapshot.currentTaint(),
     intrinsicTaint: () => snapshot.intrinsicTaint(),
     suspend: (spec) => {
@@ -603,15 +653,20 @@ async function runClaimedTurn(
         turn,
       );
       try {
-        const result = await recall(deps.memory.recall, input.tenant, input.text, {
+        // Automatic recall is text and vector retrieval only. The model
+        // reranker stays on the deliberate `memory_search` path: in front of
+        // every owner turn it was most of the time before the first answer on
+        // the installed gateway (#942) — a light-lane model call per message,
+        // greetings included — and the paired replay showed no ranking gain
+        // worth that wait. Read at call time, so a hot-swapped reranker is
+        // still excluded here.
+        const { reranker: _deliberateOnly, ...automaticRecall } = deps.memory.recall;
+        const result = await recall(automaticRecall, input.tenant, input.text, {
           excludeTurnIds: turniInContesto,
           // Tenuto accanto al lineage e non sostituito da lui: e la garanzia
           // che non dipende dalla colonna nuova, quindi vale anche su una
           // riga che il lineage non ce l ha.
           ...(currentEpisodeId !== undefined ? { excludeEpisodeId: currentEpisodeId } : {}),
-          // Il job di questo turno, quando c'e': il reranker che questa recall
-          // paga deve finire sul contatore di quel job, non su nessuno.
-          ...(input.jobId === undefined ? {} : { jobId: input.jobId }),
         });
         const inherited = recallTaint(result);
         // Il nome accanto al numero (ADR-0075 punto 4): un fatto che uno
@@ -623,18 +678,6 @@ async function runClaimedTurn(
           'muffin.memory.items': result.items.length,
           'muffin.memory.strategies': result.strategies.join(','),
           [ATTR.taint]: inherited,
-          // Il reranker chiama il modello dentro questo span, e fino a qui non
-          // compariva da nessuna parte: un recall lento si leggeva come un
-          // recall lento, mai come «dentro c'è un giro di modello». Sale col
-          // risultato invece che da un tracer perché `recall()` non ne ha uno,
-          // e darglielo sarebbe plumbing attraverso quattro file per un numero.
-          ...(result.rerankUsage === undefined
-            ? {}
-            : {
-                [ATTR.usageInputTokens]: result.rerankUsage.inputTokens,
-                [ATTR.usageOutputTokens]: result.rerankUsage.outputTokens,
-                [ATTR.cacheReadTokens]: result.rerankUsage.cacheReadTokens,
-              }),
         });
         const rendered = renderForPrompt(result);
         if (rendered !== '') recalled.push({ type: 'text', text: rendered });
@@ -704,7 +747,7 @@ async function runClaimedTurn(
         !deps.memory.store.hasActiveFacts(input.tenant),
     );
 
-    if (capabilityExposure.pressured) {
+    if (initialProjection.pressured) {
       // Local progressive discovery is not provider magic: the model must know
       // that the current schema menu is intentionally partial. Keep that fact
       // in volatile harness context (never owner words), immediately before
@@ -755,7 +798,7 @@ async function runClaimedTurn(
     const lostClaim = await reconcile(scope);
     if (lostClaim !== null) return lostClaim;
     if (options.wokenFromWait === true) {
-      const waitFor = decodeWaitFor(options.waitForAtWake ?? record.waitFor);
+      const waitFor = wakeBarrier;
       // Lo stesso giudizio che dà la lane quando sceglie chi svegliare, con lo
       // stesso registro sotto: senza `answered` una barriera d'approvazione
       // risulterebbe non soddisfatta qui, e il turno si risveglierebbe con
@@ -780,18 +823,24 @@ async function runClaimedTurn(
       const wakeAtMs = wakeAtRaw === null ? Number.NaN : Date.parse(wakeAtRaw);
       const scaduta = Number.isFinite(wakeAtMs) && (wakeAtMs as number) <= adesso;
       const rispostaNelRegistro = deps.approvals?.decidedUnconsumed(record.id) ?? false;
-      const why: WakeReason = aperta
-        ? 'event'
-        : scaduta
-          ? 'timer'
-          : rispostaNelRegistro
-            ? 'answer'
-            : 'early';
+      // Core commits the owner's reply into the same checkpoint and clears
+      // wake_at. A timeout leaves the deadline in place until the claim.
+      const ownerReplied = waitFor?.kind === 'owner_reply' && options.wakeAtAtWake === null;
+      const why: WakeReason =
+        aperta || ownerReplied
+          ? 'event'
+          : scaduta
+            ? 'timer'
+            : rispostaNelRegistro
+              ? 'answer'
+              : 'early';
       turn.setAttributes({ 'muffin.turn.woken_by': why });
       // Harness control (a transition report for this resume), not owner
       // words: a continuation to a new lease archives it instead of replaying
       // it — the approved work it refers to already completed.
-      let testo = wakeReport(waitFor, why);
+      const boundApproval =
+        waitFor?.kind === 'approval' && deps.approvals?.get(waitFor.id)?.invocation != null;
+      let testo = wakeReport(waitFor, why, boundApproval);
       // #762(b) — il trade è esplicito. Su una barriera d'approvazione la
       // guardia di ripresa e il referto parlano già di domande e risposte; su
       // un processo (o senza barriera) il modello riceveva solo il referto
@@ -800,7 +849,7 @@ async function runClaimedTurn(
       if (waitFor?.kind !== 'approval') {
         const nota = approvalFootnote(
           deps.approvals?.open(record.id)?.capability ?? null,
-          rispostaNelRegistro,
+          deps.approvals?.decidedUnconsumed(record.id, true) ?? false,
         );
         if (nota !== null) testo += `\n${nota}`;
       }
@@ -813,7 +862,7 @@ async function runClaimedTurn(
   } catch (error) {
     if (error instanceof ActivityAllowanceError)
       return releaseContinuable(scope, 'activity_budget', 0);
-    if (error instanceof ProviderError) {
+    if (error instanceof ProviderError || error instanceof ReasoningConfigurationError) {
       // Retry exhaustion is a yielded lease, not a connector exception — when
       // another attempt could still help. A retryable transport failure (or a
       // malformed-output cascade that spent itself in the loop) releases the
@@ -821,7 +870,7 @@ async function runClaimedTurn(
       // diagnostic is execution truth, delivered structurally, not a message
       // Muffin supposedly said. Only a non-retryable provider failure stays
       // terminal, on the pre-existing path below.
-      if (error.retryable) {
+      if (error instanceof ProviderError && error.retryable) {
         return releaseContinuable(
           scope,
           error.source === 'output' ? 'recovery_exhausted' : 'provider_transport',
@@ -830,8 +879,7 @@ async function runClaimedTurn(
             : MAX_TRANSPORT_RETRIES - scope.run.transportRetriesLeft,
         );
       }
-      // Retry exhaustion is a terminal turn result, not a connector exception.
-      // Persist a marked copy in TurnRecord before delivery so a failed send or
+      // Persist the terminal diagnostic before delivery so a failed send or
       // restart can recover this exact notice without invoking the provider.
       const text = providerErrorReply(error);
       scope.run.messages.push(markProviderErrorReplyForRecovery(text));

@@ -4,6 +4,13 @@
 meccanismo del sigillo. Cambia cosa il turno paga sempre, e cosa legge solo
 quando serve.
 
+**Applicazione: non in vigore.** Finché questo stato non cambia, un turno
+owner con `persona.md` o `voice.md` nella home legge quei file insieme a
+`rot/identity.md`, nell'ordine persona, patto, voce. Un file assente non
+aggiunge un blocco. Assemblare il prompt non riscrive e non risigilla
+`rot/identity.md`. Le conseguenze più sotto descrivono la proposta, non il
+comportamento spedito.
+
 ## Contesto
 
 Su un saluto il prefisso fisso misurato nell'audit è ~8,7–9k token, e

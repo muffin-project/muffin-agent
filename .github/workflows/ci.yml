@@ -36,6 +36,10 @@ on:
   # proposito: scatterebbe su ogni etichetta e comprerebbe solo rumore.
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  # Native merge queue: the queue runs the same required checks on the group
+  # it is about to merge. Without this trigger they never report there.
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
     paths-ignore:
@@ -58,6 +62,9 @@ jobs:
   dco:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      checks: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -74,6 +81,16 @@ jobs:
       - name: contributor agreement / DCO
         if: github.event_name == 'pull_request'
         run: npx tsx scripts/check-dco.ts --pull-request-event "$GITHUB_EVENT_PATH"
+
+      # A queue group has no PR payload: verify instead that it only merges PR
+      # heads whose own `dco` check passed (`checkMergeGroupDco`).
+      - name: contributor agreement / DCO (merge queue group)
+        if: github.event_name == 'merge_group'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: npx tsx scripts/check-dco.ts --merge-group "$BASE_SHA" "$HEAD_SHA"
 
   verifica:
     needs: dco
@@ -112,25 +129,18 @@ jobs:
       #   "detail": "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted"
       #
       # È **verbatim** il messaggio della VPS di produzione nella nota di campo
-      # 2026-08-04 di ADR-0018. Il runner è Ubuntu 24.04 e porta lo stesso
+      # 2026-08-04 di ADR-0018. L'immagine porta ancora
       # `kernel.apparmor_restrict_unprivileged_userns=1`: senza questo step
       # `bwrap` è installato, in PATH, e non contiene niente — cioè la CI
       # riproduce esattamente la configurazione in cui il sandbox del vecchio
       # Muffin è stato un no-op per due mesi.
       #
-      # Load the shared enforce-mode profile. Record the parser build and the
-      # userns restriction so a real-path failure has actionable host evidence.
+      # Load the shared enforce-mode profile on the pinned binary, not on
+      # /usr/bin/bwrap. Ubuntu 26.04 already attaches bwrap-userns-restrict
+      # there; a second profile is a conflicting attachment and bwrap then
+      # runs as unprivileged_userns, which denies the loopback RTM_NEWADDR.
       - name: profilo AppArmor condiviso per bwrap
-        run: |
-          apparmor_parser --version
-          dpkg-query -W -f='apparmor=${Version}\n' apparmor
-          if [ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            printf 'kernel.apparmor_restrict_unprivileged_userns='
-            cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns
-          fi
-          sed 's|<BWRAP_BINARY>|/usr/bin/bwrap|' scripts/install/bwrap.apparmor \
-            | sudo tee /etc/apparmor.d/muffin-bwrap > /dev/null
-          sudo apparmor_parser -r /etc/apparmor.d/muffin-bwrap
+        run: sudo bash scripts/install-ci-apparmor.sh
 
       # `npm ci` e non `npm install`: il lockfile è la verità, e un CI che
       # risolve le versioni da sé verifica un albero che nessuno ha in locale.
@@ -142,9 +152,9 @@ jobs:
       # coperto dalle PR che lo hanno prodotto. `--no-errors-on-unmatched`:
       # una PR di soli YAML/Markdown non deve fallire perché Biome non
       # processa nessuno dei suoi file.
-      - if: github.event_name == 'pull_request'
+      - if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         name: lint Biome (file cambiati rispetto alla base)
-        run: npx biome check --changed --since=${{ github.event.pull_request.base.sha }} --no-errors-on-unmatched
+        run: npx biome check --changed --since=${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }} --no-errors-on-unmatched
 
       # ADR-0078: ADR-0019 promised this check, but no CI implemented it. It
       # now runs in the required GitHub Actions `verifica` job:
@@ -172,42 +182,53 @@ jobs:
       # È una regola di questo repo e vale a maggior ragione dove il verde è
       # letto da una macchina.
       #
-      # `MUFFIN_REQUIRE_SANDBOX=1` è il motivo per cui questo job può ancora
-      # dire qualcosa sul sandbox. Questo runner è l'unico Linux che tocchiamo,
-      # e sta al posto della VPS di produzione: qui un contenimento saltato è un
-      # difetto, non una proprietà della macchina. Senza la variabile il salto
-      # resta un salto (è il caso del portatile macOS su piattaforme che il
-      # sandbox non copre); con la variabile diventa rosso, ed è l'unica forma
-      # in cui «9 saltati» smette di leggersi come «9 passati».
-      # `MUFFIN_REQUIRE_SYSTEMD=1` è la stessa disciplina per l'altro pezzo di
-      # produzione: la unit systemd. Il plist ha `plutil -lint` sul portatile;
-      # la unit — il file della VPS — aveva solo asserzioni su stringhe, e
-      # questo è l'unico runner con `systemd-analyze`. Se il parser sparisse
-      # dall'immagine, senza la variabile il test tornerebbe a saltare in
-      # silenzio e l'unica verifica reale della unit sparirebbe con lui.
+      # `MUFFIN_REQUIRE_CAPABILITIES` è il motivo per cui questo job può ancora
+      # dire qualcosa sul sandbox e sulla unit systemd. Questo runner è l'unico
+      # Linux che tocchiamo, e sta al posto della VPS di produzione: qui un
+      # contenimento saltato è un difetto, non una proprietà della macchina.
+      # Il globalSetup (`vitest.capabilities.ts`) misura ogni capacità una
+      # volta; se una di quelle elencate manca, la run si ferma prima del
+      # primo test, ed è l'unica forma in cui «9 saltati» smette di leggersi
+      # come «9 passati». Sul portatile la variabile non c'è e i test saltano
+      # con il motivo nel nome. `systemd-analyze` è la stessa disciplina per
+      # l'altro pezzo di produzione, la unit: il plist ha `plutil -lint` sul
+      # portatile, la unit ha solo questo runner. Le vecchie variabili
+      # `MUFFIN_REQUIRE_SANDBOX`/`MUFFIN_REQUIRE_SYSTEMD` restano alias.
       # `--exclude`: le suite possedute dai job narrow required non si
       # ripetono qui — `docs/collegamenti*` è di `collegamenti`, `.claude/**`
       # è di `strumenti`, ed entrambi girano su ogni PR. `npm test` locale
       # resta la suite intera; la partizione è una proprietà della CI.
       - name: suite
         env:
-          MUFFIN_REQUIRE_SANDBOX: '1'
-          MUFFIN_REQUIRE_SYSTEMD: '1'
-        run: npx vitest run --reporter=dot --exclude 'docs/collegamenti*.test.ts' --exclude '**/.claude/**/*.test.ts'
+          MUFFIN_REQUIRE_CAPABILITIES: 'sandbox,shell-boundary,systemd-analyze'
+        run: npx vitest run --reporter=dot --reporter=json --outputFile.json=${{ runner.temp }}/suite.json --exclude 'docs/collegamenti*.test.ts' --exclude '**/.claude/**/*.test.ts'
+
+      # La seconda cintura. Il globalSetup ferma la run se una capacità
+      # richiesta manca; questo step legge il report JSON e controlla che i
+      # test marcati `[richiede <capacità>]` abbiano girato davvero: nessun
+      # salto di una capacità richiesta, e almeno quanti ne registra
+      # `test-support/capability-minimums.json`. Un'etichetta tolta o un test
+      # sparito senza dirlo diventano rossi qui, non un conteggio da leggere.
+      - name: test marcati per capacità (nessun salto delle capacità richieste, minimi rispettati)
+        env:
+          MUFFIN_REQUIRE_CAPABILITIES: 'sandbox,shell-boundary,systemd-analyze'
+        run: npx tsx scripts/test-capability-report.ts --ci "${{ runner.temp }}/suite.json"
 
       # Mutation proof for the AppArmor hook rules: remove the shared
       # profile's hook policy, then run the same production-path test. Its
       # failure must name git_hooks_unprotected, so an unrelated setup failure
       # cannot masquerade as evidence that the rules are load-bearing.
+      #
+      # `MUFFIN_FORCE_CAPABILITIES`, non `MUFFIN_REQUIRE_*`: senza i deny il
+      # self-test del globalSetup dice `git_hooks_unprotected`, e una richiesta
+      # fermerebbe la run prima del test di produzione. Forzata, la capacità
+      # fa girare quel test, che deve fallire lui nominando la ragione.
       - name: 'mutazione del profilo: senza deny Git-hook la shell rifiuta il runtime'
         env:
-          MUFFIN_REQUIRE_SANDBOX: '1'
+          MUFFIN_FORCE_CAPABILITIES: 'sandbox,shell-boundary'
         run: |
           set -euo pipefail
-          sed 's|<BWRAP_BINARY>|/usr/bin/bwrap|' scripts/install/bwrap.apparmor \
-            | awk '!index($0, "deny /**/.git/hooks/")' \
-            | sudo tee /etc/apparmor.d/muffin-bwrap > /dev/null
-          sudo apparmor_parser -r /etc/apparmor.d/muffin-bwrap
+          sudo bash scripts/install-ci-apparmor.sh --without-hook-denies
 
           output="$(mktemp)"
           if npx vitest run agent/runtime-wiring.test.ts \
@@ -298,8 +319,8 @@ jobs:
         name: la modifica può rompere un acceptance journey?
         env:
           EVENT: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: node scripts/ci/acceptance-scope.mjs
 
       - if: steps.scope.outputs.run == 'false'
@@ -327,16 +348,7 @@ jobs:
 
       - if: steps.scope.outputs.run != 'false'
         name: profilo AppArmor condiviso per bwrap
-        run: |
-          apparmor_parser --version
-          dpkg-query -W -f='apparmor=${Version}\n' apparmor
-          if [ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            printf 'kernel.apparmor_restrict_unprivileged_userns='
-            cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns
-          fi
-          sed 's|<BWRAP_BINARY>|/usr/bin/bwrap|' scripts/install/bwrap.apparmor \
-            | sudo tee /etc/apparmor.d/muffin-bwrap > /dev/null
-          sudo apparmor_parser -r /etc/apparmor.d/muffin-bwrap
+        run: sudo bash scripts/install-ci-apparmor.sh
 
       - if: steps.scope.outputs.run != 'false'
         run: npm ci
@@ -434,7 +446,8 @@ jobs:
 #      macOS** (os e child_process mockati): il rilevatore di root, l'ENOENT,
 #      il messaggio verbatim di Ubuntu 24.04, e che niente risponde
 #      «disponibile» senza un exit zero di bwrap;
-#   3. `MUFFIN_REQUIRE_SANDBOX=1` fa fallire il salto invece di contarlo.
+#   3. una capacità richiesta che manca fa fallire la run invece di contare
+#      salti (oggi `MUFFIN_REQUIRE_CAPABILITIES`, prima `MUFFIN_REQUIRE_SANDBOX=1`).
 #
 # E l'apt-get non era un prerequisito, erano tre: senza `socat` e `ripgrep` la
 # libreria non inizializza affatto. La riga di prima era vera e incompleta —

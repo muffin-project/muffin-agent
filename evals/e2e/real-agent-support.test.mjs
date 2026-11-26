@@ -75,7 +75,7 @@ test('budget blocks the eleventh completion, the 180s boundary, and aggregate in
   );
 });
 
-test('positive oracle requires hidden schema, model-selected discovery, authorized effect, and independent artifact', () => {
+test('positive file oracle requires an offered native write, a recorded host effect and exact content', () => {
   const expectedDecisionLine = `- Decision: ${REAL_AGENT_EXPECTED.sharedDecision}`;
   for (const note of ['alpha.md', 'beta.md']) {
     const source = readFileSync(
@@ -87,76 +87,80 @@ test('positive oracle requires hidden schema, model-selected discovery, authoriz
       `${note} must contain the fixture's exact shared decision`,
     );
   }
-  const events = [
-    { kind: 'request', toolNames: ['fs_read', 'capability_search'] },
-    { kind: 'response', index: 0, toolCalls: [{ name: 'fs_read' }] },
-    { kind: 'request', toolNames: ['fs_read', 'capability_search'] },
-    { kind: 'response', index: 1, toolCalls: [{ name: 'capability_search' }] },
-    { kind: 'request', toolNames: ['fs_read', 'capability_search', 'fs_write'] },
-    {
-      kind: 'response',
-      index: 2,
-      toolCalls: [{ id: 'write-1', name: 'fs_write', arguments: '{"path":"shared-decisions.md"}' }],
-    },
-  ];
-  const rows = [
-    {
-      tool: 'fs_write',
-      call_id: 'write-1',
-      resource: join('/tmp/work', REAL_AGENT_EXPECTED.outputPath),
-      decision: 'draft',
-      is_error: 0,
-      ended_at: '2026-10-10T00:00:00Z',
-    },
-  ];
+  const write = {
+    id: 'write-1',
+    name: 'fs_write',
+    arguments: JSON.stringify({ path: REAL_AGENT_EXPECTED.outputPath }),
+  };
+  const request = { kind: 'request', index: 0, toolNames: ['fs_read', 'fs_write'] };
+  const response = { kind: 'response', index: 0, toolCalls: [write] };
+  const row = {
+    tool: 'fs_write',
+    call_id: write.id,
+    resource: join('/tmp/work', REAL_AGENT_EXPECTED.outputPath),
+    decision: 'draft',
+    effect_row: 'host',
+    is_error: 0,
+    ended_at: '2026-10-10T00:00:00Z',
+  };
   const args = {
-    events,
+    events: [request, response],
     artifact: REAL_AGENT_EXPECTED.sharedDecision,
-    rows,
+    rows: [row],
     workspace: '/tmp/work',
   };
-  assert.equal(positiveOracle(args).status, 'PASS');
+  const immediate = positiveOracle(args);
+  assert.equal(immediate.status, 'PASS');
+  assert.equal(immediate.checks.writerVisibleInitially, true);
+  assert.equal(immediate.checks.modelSelectedDiscovery, false);
   assert.equal(positiveOracle({ ...args, artifact: `${args.artifact}\n` }).status, 'PASS');
-  assert.equal(
-    positiveOracle({ ...args, rows: [{ ...rows[0], call_id: 'unrelated-call' }] }).status,
-    'FAIL',
-  );
-  const premature = events.map((event) =>
-    event.kind === 'response' && event.index === 0
-      ? { ...event, toolCalls: events[5].toolCalls }
-      : event.kind === 'response' && event.index === 2
-        ? { ...event, toolCalls: [] }
-        : event,
-  );
-  assert.equal(positiveOracle({ ...args, events: premature }).status, 'FAIL');
-  assert.equal(positiveOracle({ ...args, rows: [{ ...rows[0], ended_at: null }] }).status, 'FAIL');
-  assert.equal(
-    positiveOracle({ ...args, rows: [{ ...rows[0], ended_at: undefined }] }).status,
-    'FAIL',
-  );
-  assert.equal(
-    positiveOracle({
-      ...args,
-      events: [{ ...events[0], toolNames: ['fs_read', 'capability_search', 'fs_write'] }],
-    }).status,
-    'NOT_RUN',
-  );
-  assert.equal(
-    positiveOracle({
-      ...args,
-      events: events.filter((event) => event.kind !== 'response' || event.index !== 1),
-    }).status,
-    'FAIL',
-  );
+
+  const discovered = positiveOracle({
+    ...args,
+    events: [
+      { kind: 'request', index: 0, toolNames: ['capability_search'] },
+      { kind: 'response', index: 0, toolCalls: [{ name: 'capability_search' }] },
+      { ...request, index: 1 },
+      {
+        ...response,
+        index: 1,
+        toolCalls: [{ ...write, arguments: { path: REAL_AGENT_EXPECTED.outputPath } }],
+      },
+    ],
+  });
+  assert.equal(discovered.status, 'PASS');
+  assert.equal(discovered.checks.writerVisibleInitially, false);
+  assert.equal(discovered.checks.modelSelectedDiscovery, true);
+
+  const priorWriterOnly = [
+    request,
+    { ...request, index: 1, toolNames: ['fs_read'] },
+    {
+      ...response,
+      index: 1,
+    },
+  ];
+  assert.equal(positiveOracle({ ...args, events: priorWriterOnly }).status, 'FAIL');
+  assert.equal(positiveOracle({ ...args, rows: [] }).status, 'FAIL');
+  for (const incorrectRow of [
+    { ...row, call_id: 'unrelated-call' },
+    { ...row, effect_row: 'context' },
+    { ...row, resource: '/tmp/elsewhere/shared-decisions.md' },
+    { ...row, decision: 'deny' },
+    { ...row, ended_at: null },
+  ]) {
+    assert.equal(positiveOracle({ ...args, rows: [incorrectRow] }).status, 'FAIL');
+  }
 });
 
 test('positive artifact oracle accepts only the fixture sentence, with one optional terminal newline', () => {
   const events = [
-    { kind: 'request', toolNames: ['capability_search'] },
-    { kind: 'response', toolCalls: [{ name: 'capability_search' }] },
-    { kind: 'request', toolNames: ['capability_search', 'fs_write'] },
+    { kind: 'request', index: 0, toolNames: ['capability_search'] },
+    { kind: 'response', index: 0, toolCalls: [{ name: 'capability_search' }] },
+    { kind: 'request', index: 1, toolNames: ['capability_search', 'fs_write'] },
     {
       kind: 'response',
+      index: 1,
       toolCalls: [
         {
           id: 'write-1',
@@ -175,6 +179,7 @@ test('positive artifact oracle accepts only the fixture sentence, with one optio
         call_id: 'write-1',
         resource: join('/tmp/work', REAL_AGENT_EXPECTED.outputPath),
         decision: 'allow',
+        effect_row: 'host',
         is_error: 0,
         ended_at: '2026-10-10T00:00:00Z',
       },
@@ -200,6 +205,7 @@ test('positive artifact oracle accepts only the fixture sentence, with one optio
     null,
     undefined,
   ];
+  assert.equal(positiveOracle(args).status, 'PASS');
   for (const artifact of invalidArtifacts) {
     const result = positiveOracle({ ...args, artifact });
     assert.equal(result.status, 'FAIL', `accepted invalid artifact: ${String(artifact)}`);
@@ -492,6 +498,110 @@ test('OpenRouter recorder maps /v1, forwards only the explicit credential, pins 
   }
 });
 
+test('an SDK ending at SSE DONE does not poison the next model call', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'muffin-recorder-sse-'));
+  const key = 'synthetic-private-key';
+  let upstreamCalls = 0;
+  const upstream = createServer((_req, res) => {
+    upstreamCalls += 1;
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(
+      `data: ${JSON.stringify({
+        model: DEFAULT_FREE_MODEL,
+        choices: [{ index: 0, delta: { content: 'ready' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 9, completion_tokens: 1, cost: 0 },
+      })}\r\n\r\ndata: [DO`,
+    );
+    setImmediate(() => res.write('NE]\r\n\r\n'));
+    // Intentionally leave the HTTP body open after the complete SSE event.
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const recorder = await startRecorder({
+    target: `http://127.0.0.1:${upstream.address().port}`,
+    wirePath: join(root, 'wire.jsonl'),
+    modelId: DEFAULT_FREE_MODEL,
+    apiKey: key,
+  });
+  try {
+    const { default: OpenAI } = await import('openai');
+    const client = new OpenAI({ apiKey: key, baseURL: recorder.baseUrl, maxRetries: 0 });
+    for (let index = 0; index < 2; index += 1) {
+      const stream = await client.chat.completions.create(
+        { model: DEFAULT_FREE_MODEL, max_tokens: 32, messages: [], stream: true },
+        { signal: AbortSignal.timeout(3_000) },
+      );
+      const output = [];
+      for await (const chunk of stream) output.push(chunk.choices[0].delta.content);
+      assert.deepEqual(output, ['ready']);
+      assert.equal(recorder.events.filter((event) => event.kind === 'response').length, index + 1);
+      assert.equal(recorder.violation(), null);
+    }
+    assert.equal(upstreamCalls, 2);
+    assert.deepEqual(recorder.metrics().upstreamStatuses, [200, 200]);
+    assert.equal(recorder.metrics().reportedOutputTokens, 2);
+  } finally {
+    await recorder.close();
+    upstream.closeAllConnections();
+    await new Promise((resolve) => upstream.close(resolve));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test.each(['upstream EOF', 'client cancellation'])(
+  'an incomplete SSE response is not evidence of model completion (%s)',
+  async (ending) => {
+    const root = mkdtempSync(join(tmpdir(), 'muffin-recorder-incomplete-'));
+    const key = 'synthetic-private-key';
+    const upstream = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(`data: ${JSON.stringify({ model: DEFAULT_FREE_MODEL, choices: [] })}\n\n`);
+      if (ending === 'upstream EOF') res.end();
+    });
+    await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    let notify;
+    const stopped = new Promise((resolve) => {
+      notify = resolve;
+    });
+    const recorder = await startRecorder({
+      target: `http://127.0.0.1:${upstream.address().port}`,
+      wirePath: join(root, 'wire.jsonl'),
+      modelId: DEFAULT_FREE_MODEL,
+      apiKey: key,
+      onProviderUnavailable: notify,
+    });
+    try {
+      const response = await fetch(`${recorder.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: DEFAULT_FREE_MODEL,
+          max_tokens: 32,
+          messages: [],
+          stream: true,
+        }),
+        signal: AbortSignal.timeout(3_000),
+      }).catch(() => null);
+      if (ending === 'client cancellation') {
+        assert.equal(response.status, 200);
+        await response.body.cancel();
+      } else if (response) {
+        await response.arrayBuffer().catch(() => {});
+      }
+      assert.equal((await stopped).kind, 'runner-validation');
+      assert.equal(
+        recorder.events.filter((e) => e.kind === 'response' && e.status === 200).length,
+        0,
+      );
+      assert.deepEqual(recorder.metrics().servedModels, []);
+    } finally {
+      await recorder.close();
+      upstream.closeAllConnections();
+      await new Promise((resolve) => upstream.close(resolve));
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
+
 test('recorder rejects an unbounded completion before any upstream request', async () => {
   const root = mkdtempSync(join(tmpdir(), 'muffin-recorder-bound-'));
   const key = 'synthetic-private-key';
@@ -522,6 +632,9 @@ test('two consecutive upstream 429 responses preserve error metadata and stop as
   let upstreamCalls = 0;
   let stopped = null;
   const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  const exited = new Promise((resolve) =>
+    child.once('close', (code, signal) => resolve({ code, signal })),
+  );
   await new Promise((resolve, reject) => {
     child.once('spawn', resolve);
     child.once('error', reject);
@@ -573,9 +686,14 @@ test('two consecutive upstream 429 responses preserve error metadata and stop as
     assert.equal(upstreamCalls, 2);
     assert.deepEqual(stopped, { kind: 'consecutive-upstream-rate-limit', status: 429, count: 2 });
     assert.deepEqual(recorder.metrics().upstreamStatuses, [429, 429]);
-    const childExit = await new Promise((resolve) =>
-      child.once('close', (code, signal) => resolve({ code, signal })),
-    );
+    const afterStop = await fetch(`${recorder.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body,
+    });
+    await afterStop.arrayBuffer();
+    assert.equal(upstreamCalls, 2, 'a retry must not reach an upstream already marked unavailable');
+    const childExit = await exited;
     assert.equal(childExit.signal, 'SIGTERM');
     assert.ok(
       Date.now() - childStoppedAt < 2_000,
@@ -594,6 +712,55 @@ test('two consecutive upstream 429 responses preserve error metadata and stop as
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     await recorder.close();
+    await new Promise((resolve) => upstream.close(resolve));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a stalled second 429 still stops the run and blocks a third upstream request', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'muffin-recorder-stalled-429-'));
+  const key = 'synthetic-private-key';
+  let upstreamCalls = 0;
+  const upstream = createServer((_req, res) => {
+    upstreamCalls += 1;
+    res.writeHead(429, { 'content-type': 'application/json' });
+    if (upstreamCalls === 2) res.flushHeaders();
+    else res.end('{}');
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  let notify;
+  const stopped = new Promise((resolve) => {
+    notify = resolve;
+  });
+  const recorder = await startRecorder({
+    target: `http://127.0.0.1:${upstream.address().port}`,
+    wirePath: join(root, 'wire.jsonl'),
+    modelId: DEFAULT_FREE_MODEL,
+    apiKey: key,
+    onProviderUnavailable: notify,
+  });
+  const post = () =>
+    fetch(`${recorder.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: DEFAULT_FREE_MODEL, max_tokens: 32, messages: [] }),
+      signal: AbortSignal.timeout(1_000),
+    });
+  try {
+    await (await post()).arrayBuffer();
+    const second = post().catch(() => null);
+    const timer = AbortSignal.timeout(2_000);
+    const stop = await Promise.race([
+      stopped,
+      new Promise((_, reject) => timer.addEventListener('abort', () => reject(timer.reason))),
+    ]);
+    assert.deepEqual(stop, { kind: 'consecutive-upstream-rate-limit', status: 429, count: 2 });
+    await (await post()).arrayBuffer();
+    assert.equal(upstreamCalls, 2);
+    await second;
+  } finally {
+    await recorder.close();
+    upstream.closeAllConnections();
     await new Promise((resolve) => upstream.close(resolve));
     rmSync(root, { recursive: true, force: true });
   }
@@ -704,19 +871,14 @@ test('the eleventh completion is rejected locally and immediately stops the owne
   }
 });
 
-test('a first-request witness violation stops the owned CLI child without forwarding or calling a model', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'g0-runner-witness-'));
+test('the recorder forwards a valid bounded request with the native writer already visible', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'g0-native-writer-'));
   const key = 'synthetic-private-key';
   let upstreamCalls = 0;
-  let stopped = null;
-  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
-  await new Promise((resolve, reject) => {
-    child.once('spawn', resolve);
-    child.once('error', reject);
-  });
   const upstream = createServer((_req, res) => {
     upstreamCalls += 1;
-    res.writeHead(200).end('{}');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ model: DEFAULT_FREE_MODEL, choices: [] }));
   });
   await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
   const address = upstream.address();
@@ -724,13 +886,8 @@ test('a first-request witness violation stops the owned CLI child without forwar
     target: `http://127.0.0.1:${address.port}`,
     upstreamPrefix: '/api/v1',
     wirePath: join(root, 'wire.jsonl'),
-    guardFirstWrite: true,
     modelId: DEFAULT_FREE_MODEL,
     apiKey: key,
-    onProviderUnavailable: (failure) => {
-      stopped = failure;
-      stopOwnedProcess(child);
-    },
   });
   try {
     const response = await fetch(`${recorder.baseUrl}/chat/completions`, {
@@ -743,22 +900,13 @@ test('a first-request witness violation stops the owned CLI child without forwar
         tools: [{ function: { name: 'fs_write' } }],
       }),
     });
-    assert.equal(response.status, 429);
+    assert.equal(response.status, 200);
     await response.arrayBuffer();
-    assert.equal(upstreamCalls, 0);
-    assert.equal(recorder.metrics().completionRequests, 0);
-    assert.equal(stopped.kind, 'runner-validation');
-    assert.match(stopped.reason, /fs_write present in first provider request/);
-    assert.equal(
-      runnerStopResult(stopped, recorder.metrics().completionRequests).status,
-      'NOT_RUN',
-    );
-    const childExit = await new Promise((resolve) =>
-      child.once('close', (code, signal) => resolve({ code, signal })),
-    );
-    assert.equal(childExit.signal, 'SIGTERM');
+    assert.equal(upstreamCalls, 1);
+    assert.equal(recorder.metrics().completionRequests, 1);
+    assert.deepEqual(recorder.events[0].toolNames, ['fs_write']);
+    assert.equal(recorder.violation(), null);
   } finally {
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     await recorder.close();
     await new Promise((resolve) => upstream.close(resolve));
     rmSync(root, { recursive: true, force: true });

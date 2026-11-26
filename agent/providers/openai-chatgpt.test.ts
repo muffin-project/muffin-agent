@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { ChatGPTModel } from '../../core/config/chatgpt-oauth.js';
+import {
+  type ChatGPTModel,
+  ChatGPTReauthenticationRequired,
+} from '../../core/config/chatgpt-oauth.js';
 import { OpenAIChatGPTProvider } from './openai-chatgpt.js';
 import { type ChatCall, ProviderError } from './types.js';
 
@@ -68,8 +71,12 @@ function harness(
     },
   ],
 ) {
-  const requests: { url: string; authorization: string | null; body: Record<string, unknown> }[] =
-    [];
+  const requests: {
+    url: string;
+    authorization: string | null;
+    redirect?: RequestInit['redirect'];
+    body: Record<string, unknown>;
+  }[] = [];
   let accessCount = 0;
   let modelListCalls = 0;
   const provider = new OpenAIChatGPTProvider(
@@ -85,6 +92,7 @@ function harness(
         requests.push({
           url: String(input),
           authorization: new Headers(init?.headers).get('authorization'),
+          ...(init?.redirect === undefined ? {} : { redirect: init.redirect }),
           body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>,
         });
         return sse(events);
@@ -93,6 +101,120 @@ function harness(
   );
   return { provider, requests, modelListCalls: () => modelListCalls };
 }
+
+describe('ChatGPT as a bounded web search backend', () => {
+  const search = { type: 'web_search_call', status: 'completed' };
+  const citation = (url: string, title: string) => ({ type: 'url_citation', url, title });
+  const message = {
+    type: 'message',
+    status: 'completed',
+    content: [
+      {
+        type: 'output_text',
+        text: 'Untrusted answer prose must not come back to the parent turn.',
+        annotations: [
+          citation('https://official.example/notice', 'Official notice'),
+          citation('https://official.example/notice', 'Duplicate'),
+          citation('https://user:secret@example.test/private', 'Credentials'),
+          citation('file:///tmp/no', 'Invalid scheme'),
+          citation('not a URL', 'Unparseable'),
+          citation('https://official.example/another', 'Over the result limit'),
+        ],
+      },
+    ],
+  };
+  const done = (output: unknown[]) =>
+    event('response.completed', { response: responseOutput(output) });
+
+  it('sends one query and returns only bounded web citations after verified completion', async () => {
+    const h = harness([
+      event('response.output_item.done', { output_index: 0, item: search }),
+      event('response.output_item.done', { output_index: 1, item: message }),
+      done([]),
+    ]);
+    const query = 'Find the official public notice';
+    const hits = await h.provider.searchWeb(CALL.model, query, AbortSignal.timeout(2000), {
+      maxResults: 1,
+    });
+    expect(hits).toEqual([
+      { title: 'Official notice', url: 'https://official.example/notice', snippet: '' },
+    ]);
+    expect(h.requests).toHaveLength(1);
+    expect(h.requests[0]).toMatchObject({
+      url: 'https://api.openai.com/v1/responses',
+      redirect: 'error',
+      body: {
+        input: [{ role: 'user', content: [{ type: 'input_text', text: query }] }],
+        model: CALL.model,
+        store: false,
+        tools: [{ type: 'web_search', external_web_access: true }],
+        tool_choice: 'auto',
+      },
+    });
+    expect(h.requests[0]?.body).not.toHaveProperty('previous_response_id');
+    expect(h.modelListCalls()).toBe(0);
+  });
+
+  it('rejects a plausible cited answer without a completed hosted action', async () => {
+    const h = harness([done([message])]);
+    await expect(
+      h.provider.searchWeb(CALL.model, 'public notice', AbortSignal.timeout(2000)),
+    ).rejects.toMatchObject({
+      message: 'ChatGPT returned no completed web search',
+      retryable: false,
+    });
+    expect(h.requests).toHaveLength(1);
+  });
+
+  it('rejects unexpected function names without echoing provider text into the tool result', async () => {
+    const h = harness([
+      event('response.output_item.added', {
+        output_index: 0,
+        item: { type: 'function_call', name: 'REMOTE-CANARY', namespace: 'REMOTE-CANARY' },
+      }),
+    ]);
+    await expect(
+      h.provider.searchWeb(CALL.model, 'public notice', AbortSignal.timeout(2000)),
+    ).rejects.toMatchObject({
+      message: 'ChatGPT returned an unexpected web search item',
+      retryable: false,
+    });
+  });
+
+  it('does not retry a completed action with unreadable citation metadata', async () => {
+    const h = harness([
+      done([
+        search,
+        {
+          ...message,
+          content: [{ type: 'output_text', text: 'Unverified prose', annotations: null }],
+        },
+      ]),
+    ]);
+    await expect(
+      h.provider.searchWeb(CALL.model, 'public notice', AbortSignal.timeout(2000)),
+    ).rejects.toMatchObject({
+      message: 'ChatGPT returned an unreadable web search result',
+      retryable: false,
+    });
+    expect(h.requests).toHaveLength(1);
+  });
+
+  it('never promotes a hosted action or an incomplete result into ordinary chat output', async () => {
+    const completed = harness([done([search, message])]);
+    await expect(completed.provider.chat(CALL)).rejects.toThrow();
+    const incomplete = harness([
+      event('response.output_item.done', { output_index: 0, item: search }),
+    ]);
+    await expect(
+      incomplete.provider.searchWeb(CALL.model, 'public notice', AbortSignal.timeout(2000)),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('without response.completed'),
+      retryable: false,
+    });
+    expect(incomplete.requests).toHaveLength(1);
+  });
+});
 
 describe('OpenAI ChatGPT plan Responses provider', () => {
   it('does not classify credential acquisition failures as retryable stream failures', async () => {
@@ -120,6 +242,37 @@ describe('OpenAI ChatGPT plan Responses provider', () => {
     expect(requests).toBe(0);
     expect(String(error)).not.toContain('private credential detail');
   });
+
+  it.each(['adaptive', 'exact'] as const)(
+    'preserves the reauthentication requirement for %s reasoning',
+    async (mode) => {
+      const provider = new OpenAIChatGPTProvider(
+        {
+          accessToken: async () => {
+            throw new ChatGPTReauthenticationRequired();
+          },
+          listModels: async () => {
+            throw new ChatGPTReauthenticationRequired();
+          },
+        },
+        {
+          fetch: async () => {
+            throw new Error('Responses must not be contacted');
+          },
+        },
+      );
+      await expect(
+        provider.chat({
+          ...CALL,
+          reasoning: mode === 'adaptive' ? { mode } : { mode: 'on', effort: 'low' },
+        }),
+      ).rejects.toMatchObject({
+        name: 'ProviderError',
+        retryable: false,
+        details: { reauthentication: 'chatgpt' },
+      });
+    },
+  );
 
   it.each([401, 403, 400])('does not make HTTP %s retryable', async (status) => {
     const provider = new OpenAIChatGPTProvider(
@@ -164,6 +317,74 @@ describe('OpenAI ChatGPT plan Responses provider', () => {
       expect(error).toMatchObject({
         details: { quota: 'chatgpt-plan', requestId: 'req_synthetic' },
       });
+  });
+
+  it.each([
+    ['an SSE error event', 'error'],
+    ['an error object in a stream event', 'response.created'],
+  ])('reports the plan usage limit carried by %s', async (_label, type) => {
+    // Measured on an installed gateway: the plan limit arrived inside the
+    // stream with no HTTP status, and the owner was told to retry soon.
+    const limited = harness([
+      event(type, {
+        error: {
+          code: 'subscription_sharing_usage_limit_exceeded',
+          type: 'invalid_request_error',
+          message: 'private quota payload',
+        },
+      }),
+    ]);
+    const failure = await limited.provider.chat(CALL).catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      name: 'ProviderError',
+      retryable: false,
+      source: 'transport',
+      details: { quota: 'chatgpt-plan' },
+    });
+    expect(String(failure)).not.toContain('private quota payload');
+  });
+
+  it('records a plan refusal without changing the error the caller gets', async () => {
+    const recorded: boolean[] = [];
+    const refuse = new OpenAIChatGPTProvider(
+      {
+        accessToken: async () => 'synthetic-token',
+        listModels: async () => [],
+        recordPlanUsage: async (limited) => {
+          recorded.push(limited);
+        },
+      },
+      {
+        fetch: async () =>
+          Response.json(
+            { error: { code: 'subscription_sharing_usage_limit_exceeded', message: 'quota' } },
+            { status: 429 },
+          ),
+      },
+    );
+    await expect(refuse.chat(CALL)).rejects.toMatchObject({ details: { quota: 'chatgpt-plan' } });
+    expect(recorded).toEqual([true]);
+
+    const failingRecorder = new OpenAIChatGPTProvider(
+      {
+        accessToken: async () => 'synthetic-token',
+        listModels: async () => [],
+        recordPlanUsage: async () => {
+          throw new Error('disk full');
+        },
+      },
+      {
+        fetch: async () =>
+          Response.json(
+            { error: { code: 'subscription_sharing_usage_limit_exceeded', message: 'quota' } },
+            { status: 429 },
+          ),
+      },
+    );
+    // Recording is diagnostics: the caller still gets the quota error.
+    await expect(failingRecorder.chat(CALL)).rejects.toMatchObject({
+      details: { quota: 'chatgpt-plan' },
+    });
   });
 
   it('sends full semantic history to the public streaming endpoint and maps a completed response and usage', async () => {

@@ -157,12 +157,51 @@ That normally means:
 - for CRITICAL work, the independent judge path described in `docs/development/JUDGE.md`,
   run by a fresh evaluator rather than the same session being its sole certifier.
 
-Optional fast feedback ships in the repository: `.githooks/pre-push` runs
-`tsc --noEmit`, Biome on the files changed against `origin/dev`, and the tests
-those files affect. Activate it once per clone with
-`git config core.hooksPath .githooks`; bypass it with `MUFFIN_SKIP_HOOKS=1`.
-`npm test` stays the full local suite; CI partitions a few suites across the
-narrow required checks (see `.github/workflows/ci.yml`).
+### Local checks and CI
+
+Fast checks run on your machine and CI runs everything. Hooks give you
+feedback; the required GitHub checks are the gate (client-side hooks are not
+copied on clone and can always be skipped, so policy lives on the server).
+
+| Level | Where | Budget | What runs |
+|---|---|---|---|
+| pre-push | `.githooks/pre-push` | ~90 s typical, 180 s ceiling | `tsc --noEmit`; Biome on files changed vs `origin/dev`; the tests those files affect |
+| full local | `npm test`, `npm run gate:local` | minutes | the whole suite; the clean-clone gate |
+| CI (required) | `verifica`, `accettazione`, `collegamenti`, `strumenti`, `install`, `dco` | ≤ 20 min | everything, with the environment capabilities **required** |
+
+Activate the hook once per clone with `git config core.hooksPath .githooks`.
+It prints how long each step took and the total. If it goes past the ceiling,
+report it, because the hook needs trimming. CI partitions a few suites across
+the narrow required checks (see `.github/workflows/ci.yml`).
+
+**Environment-dependent tests.** Some tests need something not every machine
+has: the production sandbox with its Git-hook protection, a working
+`systemd-analyze`, or `plutil`. These tests ask `test-support/requires.ts`
+instead of probing on their own, and wrap their name with `withReason`.
+- The capabilities are measured once per run in `vitest.capabilities.ts`.
+- Every such test carries a label: `[richiede sandbox]` when it runs,
+  `[richiede sandbox — saltato: <reason>]` when it skips. It never passes
+  silently, and an early `return` is not allowed.
+- The pre-push hook ends with a summary of these skips and their reasons.
+- CI sets `MUFFIN_REQUIRE_CAPABILITIES=sandbox,shell-boundary,systemd-analyze`,
+  which has two effects:
+  - a missing required capability stops the run before the first test;
+  - `scripts/test-capability-report.ts --ci` then fails on any skipped test
+    labelled with a **required** capability, and on fewer tests labelled with
+    a required capability than `test-support/capability-minimums.json`
+    records. Raise the minimum when you add tests. Lower it only in a reviewed
+    change that says which test went and why.
+- `plutil` is labelled but not required in CI and has no minimum: the runners
+  are Linux, so its test skips there with its reason and CI stays green.
+- `MUFFIN_FORCE_CAPABILITIES` runs labelled tests anyway, so they fail for the
+  real reason (the AppArmor mutation step uses it).
+
+**Hooks are never skipped.** Agents, automations and people do not bypass
+the pre-push hook: no `git push --no-verify`, and the hook has no bypass
+variable. If it fails for a reason outside your change, open an issue and fix
+the cause (the hook, or the test's capability label) instead of skipping it.
+An environment test failing locally is such a cause: it should skip with a
+label, so fix the label. Either way, the required CI checks are the gate.
 
 Green Actions are not evidence for behaviour the hosted runner cannot observe,
 such as a fresh public VPS install or an owner-controlled external service.

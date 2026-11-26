@@ -1,6 +1,6 @@
-import { LANE_JOBS, ModelLane } from '../turns/model-lane.js';
+import type { DeliveryOutcome, DeliveryTurn } from '../surface/types.js';
+import { LANE_JOBS, type ModelLane } from '../turns/model-lane.js';
 import type { DeliveryState, TurnOutcome, TurnStopped } from '../turns/store.js';
-import type { DeliveryOutcome } from '../surface/types.js';
 import type { Job, JobStore } from './jobs.js';
 
 /**
@@ -69,6 +69,8 @@ export type JobOutcome = {
    * that is a plausible-looking lie.
    */
   turnId: string | null;
+  /** The runner found this outcome already persisted. */
+  recovered?: true;
 };
 
 /**
@@ -108,7 +110,10 @@ export type FireSettleOnly = {
  * and the one place that resolves `(job.id, job.nextFireAt)` against
  * `job_fires` before ever deciding which of the three shapes to hand back.
  */
-export type RunJob = (job: Job, signal: AbortSignal | undefined) => Promise<JobOutcome | FireDeferred | FireSettleOnly>;
+export type RunJob = (
+  job: Job,
+  signal: AbortSignal | undefined,
+) => Promise<JobOutcome | FireDeferred | FireSettleOnly>;
 
 /**
  * Delivers text to a surface, and **says whether it arrived**.
@@ -125,15 +130,18 @@ export type RunJob = (job: Job, signal: AbortSignal | undefined) => Promise<JobO
  * Implementations now live behind `core/surface/`, so this type is what the
  * registry satisfies rather than something three call sites hand-roll.
  */
-export type Deliver = (channel: string, text: string) => Promise<DeliveryOutcome>;
+export type Deliver = (
+  channel: string,
+  text: string,
+  turn?: DeliveryTurn,
+) => Promise<DeliveryOutcome>;
 
 /**
  * Writes how the delivery went onto the turn's row. Absent in tests that are
  * not about the record; wired in production by whoever built the runtime.
  *
- * Not merged into `Deliver`: the surface knows whether the bytes went out, and
- * the runtime knows which row to write it on. Handing the surface a turn id
- * would make every connector a writer of the turns table.
+ * The surface may use a turn ID to journal its own send. The scheduler records
+ * the resulting delivery state on the Work.
  */
 export type RecordDelivery = (turnId: string, delivery: DeliveryState) => void;
 
@@ -161,9 +169,13 @@ export type SchedulerEvent =
   | { kind: 'ran'; job: Job; stopped: JobOutcome['stopped']; delivered: boolean }
   // 'bound_turn_pending' is `FireDeferred`: the fire's turn exists and is not
   // `done` yet, which belongs to the turn lane's own resume machinery.
-  | { kind: 'deferred'; reason: 'foreground' | 'in_flight' | 'handover' | 'bound_turn_pending' | 'paused' }
+  | {
+      kind: 'deferred';
+      reason: 'foreground' | 'in_flight' | 'handover' | 'bound_turn_pending' | 'paused';
+    }
   | { kind: 'yielded'; job: Job }
   | { kind: 'delivery_failed'; job: Job; error: string }
+  | { kind: 'delivery_uncertain'; job: Job; error: string }
   /** The turn ran, and the store could not be told. See `run`. */
   | { kind: 'not_recorded'; job: Job; error: string };
 
@@ -411,7 +423,11 @@ export class Scheduler {
         this.store.markRan(job.id);
         this.onEvent({ kind: 'ran', job, stopped: outcome.outcome, delivered: outcome.delivered });
       } catch (error) {
-        this.onEvent({ kind: 'not_recorded', job, error: error instanceof Error ? error.message : String(error) });
+        this.onEvent({
+          kind: 'not_recorded',
+          job,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
       return;
     }
@@ -504,7 +520,11 @@ export class Scheduler {
         this.store.markRan(job.id);
         this.onEvent({ kind: 'ran', job, stopped: outcome.stopped, delivered: false });
       } catch (error) {
-        this.onEvent({ kind: 'not_recorded', job, error: error instanceof Error ? error.message : String(error) });
+        this.onEvent({
+          kind: 'not_recorded',
+          job,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
       return;
     }
@@ -534,7 +554,11 @@ export class Scheduler {
         this.store.markRan(job.id);
         this.onEvent({ kind: 'ran', job, stopped: outcome.stopped, delivered: false });
       } catch (error) {
-        this.onEvent({ kind: 'not_recorded', job, error: error instanceof Error ? error.message : String(error) });
+        this.onEvent({
+          kind: 'not_recorded',
+          job,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
       return;
     }
@@ -563,7 +587,11 @@ export class Scheduler {
         this.store.markRan(job.id);
         this.onEvent({ kind: 'ran', job, stopped: outcome.stopped, delivered: false });
       } catch (error) {
-        this.onEvent({ kind: 'not_recorded', job, error: error instanceof Error ? error.message : String(error) });
+        this.onEvent({
+          kind: 'not_recorded',
+          job,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
       return;
     }
@@ -576,7 +604,14 @@ export class Scheduler {
     // printed to stderr and returned looked identical to the one that sent a
     // message. There is no shape left for that: both arms of `DeliveryOutcome`
     // have to be constructed on purpose.
-    const delivery = await this.deliver(job.channel, outcome.text);
+    const turn =
+      outcome.turnId === null
+        ? undefined
+        : { id: outcome.turnId, ...(outcome.recovered ? { recovered: outcome.recovered } : {}) };
+    const delivery = await this.deliver(job.channel, outcome.text, turn);
+    // Another attempt owns the connector's send claim. Leave the fire due for
+    // reconciliation against the same Work and journal on the next beat.
+    if (!delivery.delivered && delivery.status === 'deferred') return;
     this.settle(job, outcome, delivery);
   }
 
@@ -610,17 +645,30 @@ export class Scheduler {
     // Telegram connector uses, and the same reason.
     if (outcome.turnId !== null) {
       try {
-        this.recordDelivery(outcome.turnId, delivery.delivered ? 'sent' : `failed:${delivery.why}`);
+        const state: DeliveryState = delivery.delivered
+          ? 'sent'
+          : delivery.status === 'possibly_sent'
+            ? 'possibly_sent'
+            : `failed:${delivery.why}`;
+        this.recordDelivery(outcome.turnId, state);
       } catch (error) {
         // Never allowed to fail the fire. The precedent is literal: this class
         // already crashed the gateway once through a bookkeeping write against a
         // closed database, thrown from a floating promise.
-        this.onEvent({ kind: 'not_recorded', job, error: error instanceof Error ? error.message : String(error) });
+        this.onEvent({
+          kind: 'not_recorded',
+          job,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
 
     if (!delivery.delivered) {
-      this.onEvent({ kind: 'delivery_failed', job, error: delivery.why });
+      this.onEvent({
+        kind: delivery.status === 'possibly_sent' ? 'delivery_uncertain' : 'delivery_failed',
+        job,
+        error: delivery.why,
+      });
     }
 
     // `markRan` inside the guard, for a measured crash rather than out of
@@ -640,7 +688,11 @@ export class Scheduler {
       this.store.markRan(job.id);
       this.onEvent({ kind: 'ran', job, stopped: outcome.stopped, delivered: delivery.delivered });
     } catch (error) {
-      this.onEvent({ kind: 'not_recorded', job, error: error instanceof Error ? error.message : String(error) });
+      this.onEvent({
+        kind: 'not_recorded',
+        job,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

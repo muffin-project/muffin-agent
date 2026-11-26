@@ -1,144 +1,70 @@
-import DatabaseCtor from 'better-sqlite3';
-import type { Update } from '@grammyjs/types';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { runInit } from '../../cli/init.js';
+import type { Update } from '@grammyjs/types';
+import { describe, expect, it, vi } from 'vitest';
+import type { ChatResult, Provider, StreamEvent } from '../../agent/providers/types.js';
 import { buildRuntime } from '../../agent/runtime.js';
-import type { LoopDeps } from '../../agent/loop.js';
-import type { ChatCall, ChatResult, Provider, StreamEvent } from '../../agent/providers/types.js';
-import { TelegramConnector, type TelegramConfig } from './connector.js';
+import { runInit } from '../../cli/init.js';
 import { ModelLane } from '../../core/turns/model-lane.js';
-import type { TelegramApiLike } from './api.js';
+import { type DraftOptions, type TelegramApiLike, TelegramError } from './api.js';
+import { TelegramConnector } from './connector.js';
 import { TelegramDeliveryStore } from './delivery.js';
+import type { OutboundRich } from './rich.js';
 import { UpdateInbox } from './updates.js';
 
-/**
- * The real wiring, B11/B13 — through the actual `TelegramConnector.handle()`,
- * `buildRuntime`, and a scripted provider that streams, not a `Provider`
- * stub that only implements `chat()`. Same shape as `group-context.test.ts`'s
- * own proof for group prompts: the entry point production actually uses (an
- * `Update` off the wire, through `drain()` → `handle()` → `runTurn()`), so a
- * defect in the *composition* — `onDelta` never reaching `transcript.ts#live()`,
- * `transcript.stop()` racing `deliverTo` — shows up here even though each
- * piece is correct in isolation.
- *
- * **Since 2026-09-04 (`docs/evidence/turno-sospendibile.md`), one message per
- * turn, not two.** Before this date, `presence.ts` streamed the growing
- * answer into an ephemeral `sendMessageDraft` bubble while `transcript.ts`
- * sent the tool trail as a *separate* real message, and the durable answer
- * landed as a *third*, distinct `sendMessage` — measured on the owner's own
- * chat as a stray message id between the question and the answer on every
- * turn that used a tool. The scenarios below now assert the opposite of what
- * they asserted before that date: a tool-using turn produces **exactly one**
- * `sendMessage` a person would read, extended by edits, never a second
- * `sendMessage` for the answer.
- *
- * **Dal 06/09/2026 l'anteprima e' tornata, e solo in una DM.** La decisione
- * dell'owner e' che il difetto della PR #388 fosse il rinnovo mancante, non
- * la bolla: `Surface.negotiate('direct')` dichiara `['draft','edit','off']`
- * con `draftTtlMs` 30 s, `negotiate('group')` dichiara `['edit','off']` e
- * basta. Quindi qui sotto `sendMessageDraft` compare nelle scene private e
- * **non deve** comparire in quelle di gruppo, dove non esiste come chiamata;
- * il rinnovo dentro la finestra e' misurato dove si puo' misurare il
- * «quando», cioe' in `transcript.test.ts` con l'orologio finto.
- *
- * **What this file does not attempt, and why**: a scenario asserting several
- * genuinely time-spaced live edits from one round. `agent/loop.ts` buffers a
- * whole round and releases it in one synchronous burst once `done` confirms
- * no tool call (its own `TurnInput.onDelta` docstring explains why — no
- * earlier point is knowable, and "stream then retract" was rejected). A
- * burst has no gaps for `transcript.ts`'s rate limiter to space out, so a
- * single round collapses to exactly one live update in practice — proven
- * below. The rate limiter's own multi-update behaviour is real and is
- * proven where it can actually be observed: `transcript.test.ts`, driving
- * `live()`/`report()` directly across fake-clock time, independent of how
- * `loop.ts` happens to call it today.
- *
- * **DAY-1 requirement B13 lives here too**, same reasoning: `transcript.test.ts`
- * drives `startTranscript` directly and proves the throttle/coalescing/
- * disable-on-failure mechanics; the scenarios below prove the *composition* —
- * `onProgress`/`onDelta` actually reach `TelegramConnector`'s real Telegram
- * calls, and the merge into one message actually happens end to end. Some
- * need `streamingProviderWithRealGap`: every other provider here resolves
- * through pure microtasks with no real I/O anywhere in the turn, so a
- * `setTimeout(fn, 0)` armed by the turn's first event would never get a turn
- * to run before `stop()` cancels it. A genuine model call always has this gap
- * in production (real network I/O); this fake reproduces the gap rather than
- * the race.
- */
-
+// Drive a real update through the inbox, connector, and streaming turn loop.
+// Hold the provider before `done` to distinguish a live preview from a final send.
 const OWNER = 4242;
 const GROUP = -100200;
-const STRANGER = 9999;
-
-const groupMsg = (id: number): Update =>
-  ({
-    update_id: id,
-    message: {
-      message_id: id,
-      date: 0,
-      chat: { id: GROUP, type: 'supergroup' },
-      from: { id: STRANGER, is_bot: false, first_name: 'x' },
-      // Menzionato: dal 04/09 un messaggio di gruppo che non chiama Muffin non
-      // apre nessun turno (`apreUnTurno`, ADR-0063).
-      text: '@MuffinBot raccontami qualcosa',
-    },
-  }) as unknown as Update;
-
-const privateMsg = (id: number): Update =>
-  ({
-    update_id: id,
-    message: {
-      message_id: id,
-      date: 0,
-      chat: { id: OWNER, type: 'private' },
-      from: { id: OWNER, is_bot: false, first_name: 'o' },
-      // Menzionato: dal 04/09 un messaggio di gruppo che non chiama Muffin non
-      // apre nessun turno (`apreUnTurno`, ADR-0063).
-      text: '@MuffinBot raccontami qualcosa',
-    },
-  }) as unknown as Update;
-
+const TOPIC = 77;
+const PREAMBLE = 'Prima devo controllare.';
+const TOOL = 'unregistered_probe';
+const QUERY = 'tool argument fixture';
+const PREFIX = 'Ecco cosa ho trovato';
+const FINAL = `${PREFIX}: è pronto.`;
 const USAGE = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 };
 
-/** Streams `chunks` (all in one synchronous burst, same as production's `drainStream` replay), then a final `done`. */
-function streamingProvider(chunks: string[], finalText: string): Provider {
+function message(chatId: number, threadId?: number): Update {
+  const direct = chatId === OWNER;
   return {
-    kind: 'openai-compat' as const,
-    async chat(): Promise<ChatResult> {
-      throw new Error('this scenario must stream, not fall back to chat()');
-    },
-    async *chatStream(_call: ChatCall): AsyncIterable<StreamEvent> {
-      for (const chunk of chunks) yield { type: 'text_delta', text: chunk };
-      yield {
-        type: 'done',
-        result: { text: finalText, toolCalls: [], stopReason: 'end', usage: USAGE, model: 'test-model' },
-      };
+    update_id: 1,
+    message: {
+      message_id: 1,
+      date: 0,
+      chat: direct
+        ? { id: chatId, type: 'private', first_name: 'Owner' }
+        : { id: chatId, type: 'supergroup', title: 'Group' },
+      from: { id: direct ? OWNER : 9999, is_bot: false, first_name: 'Sender' },
+      text: direct ? 'Cosa hai trovato?' : '@MuffinBot cosa hai trovato?',
+      ...(threadId === undefined ? {} : { message_thread_id: threadId, is_topic_message: true }),
     },
   };
 }
 
-/** A two-round turn: a tool call first (never streamed), then a streamed final answer. */
-function streamingProviderWithToolCall(toolName: string, chunks: string[], finalText: string): Provider {
-  let call = 0;
-  return {
-    kind: 'openai-compat' as const,
+function gatedProvider(withTool = false) {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let round = 0;
+  // The unknown tool produces a real tool_result and a second round without
+  // any side effects. The blocking-tool test separately exercises an allowed handler.
+  const atFinalPrefix = vi.fn();
+  const provider: Provider = {
+    kind: 'openai-compat',
     async chat(): Promise<ChatResult> {
-      throw new Error('this scenario must stream, not fall back to chat()');
+      throw new Error('this scenario must stream');
     },
-    async *chatStream(_call: ChatCall): AsyncIterable<StreamEvent> {
-      if (call++ === 0) {
-        // The tool round: some "thinking aloud" text a correct wiring must
-        // never let reach a surface, plus the call itself.
-        yield { type: 'text_delta', text: 'lascia che controlli...' };
-        yield { type: 'tool_call_delta', index: 0, id: 'c1', name: toolName };
+    async *chatStream(): AsyncIterable<StreamEvent> {
+      if (withTool && round++ === 0) {
+        yield { type: 'text_delta', text: PREAMBLE };
+        yield { type: 'tool_call_delta', index: 0, id: 'c1', name: TOOL };
         yield {
           type: 'done',
           result: {
-            text: 'lascia che controlli...',
-            toolCalls: [{ id: 'c1', name: toolName, args: {} }],
+            text: PREAMBLE,
+            toolCalls: [{ id: 'c1', name: TOOL, args: { query: QUERY } }],
             stopReason: 'tool_use',
             usage: USAGE,
             model: 'test-model',
@@ -146,40 +72,34 @@ function streamingProviderWithToolCall(toolName: string, chunks: string[], final
         };
         return;
       }
-      for (const chunk of chunks) yield { type: 'text_delta', text: chunk };
+      yield { type: 'text_delta', text: PREFIX };
+      atFinalPrefix();
+      await gate;
+      yield { type: 'text_delta', text: FINAL.slice(PREFIX.length) };
       yield {
         type: 'done',
-        result: { text: finalText, toolCalls: [], stopReason: 'end', usage: USAGE, model: 'test-model' },
+        result: {
+          text: FINAL,
+          toolCalls: [],
+          stopReason: 'end',
+          usage: USAGE,
+          model: 'test-model',
+        },
       };
     },
   };
+  return { provider, release, atFinalPrefix };
 }
 
-/**
- * Same one-round shape as `streamingProvider`, plus one real macrotask gap
- * before it resolves — see the file docstring's "DAY-1 requirement B13" paragraph for
- * why the B13 scenarios need this and the B11 ones above do not. 20ms is
- * comfortably past Node's own 1ms floor for a `setTimeout(fn, 0)`, so this is
- * margin, not a tuned value.
- */
-function streamingProviderWithRealGap(chunks: string[], finalText: string): Provider {
-  return {
-    kind: 'openai-compat' as const,
-    async chat(): Promise<ChatResult> {
-      throw new Error('this scenario must stream, not fall back to chat()');
-    },
-    async *chatStream(_call: ChatCall): AsyncIterable<StreamEvent> {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      for (const chunk of chunks) yield { type: 'text_delta', text: chunk };
-      yield {
-        type: 'done',
-        result: { text: finalText, toolCalls: [], stopReason: 'end', usage: USAGE, model: 'test-model' },
-      };
-    },
-  };
-}
-
-type Recorded = { method: string; text?: string; rich?: unknown; draftOptions?: unknown; messageId?: number };
+type Recorded = {
+  method: string;
+  chatId: number;
+  threadId?: number | undefined;
+  action?: string | undefined;
+  text?: string;
+  rich?: OutboundRich;
+  draftOptions?: DraftOptions | undefined;
+};
 
 function recordingApi(): { api: TelegramApiLike; calls: Recorded[] } {
   const calls: Recorded[] = [];
@@ -197,42 +117,40 @@ function recordingApi(): { api: TelegramApiLike; calls: Recorded[] } {
     getUpdates: async () => [],
     getChatMember: async () => ({ status: 'member' }),
     leaveChat: async () => true,
-    sendMessage: async (chatId, html) => {
-      const messageId = nextMessageId++;
-      calls.push({ method: 'sendMessage', text: html, messageId });
-      return { message_id: messageId, date: 0, chat: { id: chatId, type: 'private' } } as never;
+    sendMessage: async (chatId, text, options) => {
+      calls.push({ method: 'sendMessage', chatId, text, threadId: options?.threadId });
+      return { message_id: nextMessageId++ } as never;
     },
-    editMessageText: async (_chatId, messageId, html) => {
-      calls.push({ method: 'editMessageText', text: html, messageId });
+    sendRichMessage: async (chatId, rich, options) => {
+      calls.push({ method: 'sendRichMessage', chatId, rich, threadId: options?.threadId });
+      return { message_id: nextMessageId++ } as never;
+    },
+    editMessageText: async (chatId, _id, text) => {
+      calls.push({ method: 'editMessageText', chatId, text });
       return true;
     },
-    editMessageReplyMarkup: async (_chatId, messageId) => {
-      calls.push({ method: 'editMessageReplyMarkup', messageId });
+    editMessageRichText: async (chatId, _id, rich) => {
+      calls.push({ method: 'editMessageRichText', chatId, rich });
       return true;
     },
-    deleteMessage: async (_chatId, messageId) => {
-      calls.push({ method: 'deleteMessage', messageId });
+    editMessageReplyMarkup: async (chatId) => {
+      calls.push({ method: 'editMessageReplyMarkup', chatId });
       return true;
     },
-    sendChatAction: async () => {
-      calls.push({ method: 'sendChatAction' });
+    deleteMessage: async (chatId) => {
+      calls.push({ method: 'deleteMessage', chatId });
       return true;
     },
-    sendMessageDraft: async (_chatId, _draftId, text) => {
-      calls.push({ method: 'sendMessageDraft', text });
+    sendChatAction: async (chatId, action, threadId) => {
+      calls.push({ method: 'sendChatAction', chatId, action, threadId });
       return true;
     },
-    sendRichMessage: async (chatId, rich) => {
-      const messageId = nextMessageId++;
-      calls.push({ method: 'sendRichMessage', rich, messageId });
-      return { message_id: messageId, date: 0, chat: { id: chatId, type: 'private' } } as never;
-    },
-    editMessageRichText: async (_chatId, messageId, rich) => {
-      calls.push({ method: 'editMessageRichText', rich, messageId });
+    sendMessageDraft: async (chatId, _draftId, text, draftOptions) => {
+      calls.push({ method: 'sendMessageDraft', chatId, text, draftOptions });
       return true;
     },
-    sendRichMessageDraft: async (_chatId, _draftId, rich, options) => {
-      calls.push({ method: 'sendRichMessageDraft', rich, draftOptions: options });
+    sendRichMessageDraft: async (chatId, _draftId, rich, draftOptions) => {
+      calls.push({ method: 'sendRichMessageDraft', chatId, rich, draftOptions });
       return true;
     },
     fileUrl: async () => 'https://example.test/file',
@@ -242,295 +160,163 @@ function recordingApi(): { api: TelegramApiLike; calls: Recorded[] } {
   return { api, calls };
 }
 
-/** The visible text of a call, whichever transport carried it. */
+/** Read text even when a rich payload nests it in another block. */
+function visibleText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(visibleText).join('');
+  if (value === null || typeof value !== 'object') return '';
+  const { summary, text, blocks } = value as Record<string, unknown>;
+  return visibleText(summary) + visibleText(text) + visibleText(blocks);
+}
 
-/** Il testo visibile di un payload rich, letto dai blocchi (il finale in DM è a blocchi). */
-const richTesto = (rich: { html?: string; blocks?: unknown[] }): string => {
-  const blockText = (b: unknown): string => {
-    if (b === null || typeof b !== 'object') return '';
-    const o = b as { text?: unknown; summary?: unknown; blocks?: unknown[] };
-    const parts: string[] = [];
-    if (typeof o.summary === 'string') parts.push(o.summary);
-    if (typeof o.text === 'string') parts.push(o.text);
-    else if (Array.isArray(o.text)) parts.push(JSON.stringify(o.text));
-    if (Array.isArray(o.blocks)) parts.push(o.blocks.map(blockText).join('\n'));
-    return parts.join('\n');
-  };
-  if (typeof rich.html === 'string') return rich.html;
-  return Array.isArray(rich.blocks) ? rich.blocks.map(blockText).join('\n') : '';
-};
+const textOf = (c: Recorded): string =>
+  c.text ?? c.rich?.html ?? c.rich?.markdown ?? visibleText(c.rich?.blocks);
+const draft = (c: Recorded): boolean => c.method.endsWith('Draft');
+const typing = (c: Recorded): boolean => c.method === 'sendChatAction';
+const durable = (c: Recorded): boolean => !draft(c) && !typing(c);
 
-/** The visible text of a call, whichever transport carried it. */
-const testo = (c: Recorded): string => {
-  const rich = c.rich as { html?: string; markdown?: string; blocks?: unknown[] } | undefined;
-  if (rich?.html !== undefined) return rich.html;
-  if (rich?.markdown !== undefined) return rich.markdown;
-  if (rich?.blocks !== undefined) return richTesto(rich);
-  if (rich !== undefined) return JSON.stringify(rich);
-  return c.text ?? '';
-};
-/** A create a person reads: legacy `sendMessage` or a rich send. */
-const crea = (c: Recorded): boolean => c.method === 'sendMessage' || c.method === 'sendRichMessage';
-/** An edit a person reads: legacy or rich. */
-const modifica = (c: Recorded): boolean => c.method === 'editMessageText' || c.method === 'editMessageRichText';
+function expectOnlyAnswer(calls: Recorded[], chatId: number, threadId?: number): void {
+  const messages = calls.filter(durable);
+  expect(messages).toMatchObject([
+    { method: expect.stringMatching(/^send(Rich)?Message$/), chatId, threadId },
+  ]);
+  expect(messages.map(textOf)).toEqual([FINAL]);
+  expect(JSON.stringify(messages)).not.toMatch(/"type":"details"|Processo/);
+}
 
-function harness(config: TelegramConfig, provider: Provider, api: TelegramApiLike) {
+function harness(provider: Provider, api: TelegramApiLike) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-tgstream-'));
   const workspace = mkdtempSync(join(tmpdir(), 'muffin-tgstream-ws-'));
   runInit({ home, apiKey: 'sk-tgstream-never-called' });
   const runtime = buildRuntime(home, workspace);
-  const loop: LoopDeps = { ...runtime.deps, provider };
   const inbox = new UpdateInbox(runtime.db);
   const connector = new TelegramConnector({
-    loop,
+    loop: { ...runtime.deps, provider },
     sessions: runtime.deps.sessions,
     lane: new ModelLane(),
     inbox,
     delivery: new TelegramDeliveryStore(runtime.db),
     api,
-    config,
+    config: { token: 't', ownerUserId: OWNER, ownerChatId: OWNER },
   });
-  // Lo username che `connect()` prenderebbe da `getMe`: il banco chiama
-  // `drain()` senza connettersi, e senza questo il gate di gruppo non puo'
-  // riconoscere una menzione e fallisce chiuso.
+  // drain() bypasses connect() and its getMe() call.
   (connector as unknown as { meUsername: string }).meUsername = 'MuffinBot';
-
-  return { connector, runtime };
+  return {
+    runtime,
+    deliver(update: Update): Promise<void> {
+      inbox.accept([update], new Date().toISOString());
+      return (connector as unknown as { drain: () => Promise<void> }).drain();
+    },
+  };
 }
 
-async function deliver(connector: TelegramConnector, updates: Update[]): Promise<void> {
-  const inbox = (connector as unknown as { deps: { inbox: UpdateInbox } }).deps.inbox;
-  inbox.accept(updates, new Date().toISOString());
-  await (connector as unknown as { drain: () => Promise<void> }).drain();
-}
-
-describe('a group turn uses ephemeral presence and durably sends only the final answer', () => {
-  it('never creates or edits a crash-orphanable placeholder, and sends the finished answer once', async () => {
-    const finalText = 'Cera una volta un muffin che parlava.';
-    const provider = streamingProvider(['Cera ', 'una volta ', 'un muffin che parlava.'], finalText);
+describe('ordinary Telegram replies', () => {
+  it.each([
+    { name: 'a group', threadId: undefined },
+    { name: 'a forum topic', threadId: TOPIC },
+  ])('shows only typing in $name until the finished answer is sent once', async ({ threadId }) => {
+    const { provider, release, atFinalPrefix } = gatedProvider(true);
     const { api, calls } = recordingApi();
-    const { connector, runtime } = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER }, provider, api);
+    const h = harness(provider, api);
+    const draining = h.deliver(message(GROUP, threadId));
 
     try {
-      await deliver(connector, [groupMsg(1)]);
-
-      expect(calls.filter(modifica)).toHaveLength(0);
-      expect(calls.filter(crea).map(testo)).toEqual([finalText]);
-      // In un gruppo l'anteprima non esiste: `assertNegotiable` rifiuta
-      // `'draft'` fuori da una stanza uno-a-uno, quindi non c'e' nemmeno il
-      // codice che potrebbe chiamarla.
-      expect(calls.filter((c) => c.method === 'sendMessageDraft' || c.method === 'sendRichMessageDraft')).toHaveLength(0);
-    } finally {
-      runtime.close();
-    }
-  });
-
-  it('keeps the tool round\'s "thinking aloud" text and the final answer in the SAME message — one sendMessage, then an edit, never a second send', async () => {
-    const finalText = 'Ecco cosa ho trovato.';
-    // A name the model invented — deliberately not registered. `runTool`
-    // (`agent/loop.ts`) answers an unknown tool with a `tool_result` telling
-    // the model so, never a throw, which is exactly what this scenario
-    // needs: a real tool round that resolves on its own, without this test
-    // having to reach into the connector to register one.
-    //
-    // Until 03/09/2026 the preamble never reached the surface at all. From
-    // 03/09 it reached a transcript message of its own, but the answer was a
-    // *second*, separate `sendMessage` — the exact two-bubble defect
-    // measured on the owner's chat (`docs/evidence/turno-sospendibile.md`).
-    // Since 04/09: one real message for the whole turn, extended by edits.
-    const provider = streamingProviderWithToolCall('tool_non_registrato', ['Ecco ', 'cosa ho trovato.'], finalText);
-    const { api, calls } = recordingApi();
-    const { connector, runtime } = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER }, provider, api);
-
-    try {
-      await deliver(connector, [groupMsg(2)]);
-
-      // MUTATION-PROVABLE: exactly one `sendMessage` reaches this chat for a
-      // turn that used a tool — not two. Revert `deliverTo`'s handoff merge
-      // in `connector.ts` (drop the `handoff` branch of its plan) and this
-      // goes back to 2.
-      const sent = calls.filter(crea);
-      expect(sent).toHaveLength(1);
-      expect(testo(sent[0]!)).toContain('lascia che controlli');
-      const transcriptId = sent[0]!.messageId;
-
-      // The answer lands as an edit of that same message, carrying the
-      // preamble/steps above it — never a message of its own.
-      const edits = calls.filter(modifica);
-      expect(edits.length).toBeGreaterThanOrEqual(1);
-      const last = edits[edits.length - 1]!;
-      expect(last.messageId).toBe(transcriptId);
-      expect(testo(last)).toContain('lascia che controlli');
-      expect(testo(last)).toContain(finalText);
-
-      expect(calls.filter((c) => c.method === 'deleteMessage')).toHaveLength(0);
-      expect(calls.filter((c) => c.method === 'sendMessageDraft' || c.method === 'sendRichMessageDraft')).toHaveLength(0);
-    } finally {
-      runtime.close();
-    }
-  });
-});
-
-describe('the first model call is not silence (2026-09-25)', () => {
-  /**
-   * The owner watched ~70 s of nothing while the first model call ran, then a
-   * bubble appeared only on the second round. The fix must be observed on the
-   * production path — `drain()` → `runTurn` → `onProgress('round')` →
-   * `transcript.report` → `sendMessageDraft` — and *while the call is still in
-   * flight*, before any token or tool exists. A provider gated on a promise is
-   * the closest a test can get to the real network gap without a wall clock.
-   *
-   * MUTATION-PROVABLE: remove the `else ensureDraftStatus()` in
-   * `transcript.report` and no draft carries the status until the model
-   * returns, exactly the defect.
-   */
-  it('DM: the status is in the draft while the first model call is still pending', async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const provider: Provider = {
-      kind: 'openai-compat' as const,
-      async chat(): Promise<ChatResult> {
-        throw new Error('this scenario must stream, not fall back to chat()');
-      },
-      async *chatStream(_call: ChatCall): AsyncIterable<StreamEvent> {
-        await gate; // the model has not said anything yet
-        yield { type: 'done', result: { text: 'fatto.', toolCalls: [], stopReason: 'end', usage: USAGE, model: 'test-model' } };
-      },
-    };
-    const { api, calls } = recordingApi();
-    const { connector, runtime } = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER }, provider, api);
-
-    try {
-      const inbox = (connector as unknown as { deps: { inbox: UpdateInbox } }).deps.inbox;
-      inbox.accept([privateMsg(40)], new Date().toISOString());
-      const draining = (connector as unknown as { drain: () => Promise<void> }).drain();
-
-      const deadline = Date.now() + 2_000;
-      while (!calls.some((c) => (c.method === 'sendMessageDraft' || c.method === 'sendRichMessageDraft') && testo(c).includes('aspetto il modello'))) {
-        if (Date.now() > deadline) throw new Error(`nessuna anteprima di stato; calls=${JSON.stringify(calls)}`);
-        await new Promise((r) => setTimeout(r, 10));
-      }
-      // Still nothing durable: the status is only in the ephemeral preview, so
-      // a process that dies here leaves no message behind.
-      expect(calls.some((c) => crea(c) || modifica(c))).toBe(false);
+      await vi.waitFor(() => expect(atFinalPrefix).toHaveBeenCalledOnce(), { timeout: 3_000 });
+      expect(calls.length).toBeGreaterThan(0);
+      for (const c of calls)
+        expect(c).toMatchObject({
+          method: 'sendChatAction',
+          action: 'typing',
+          chatId: GROUP,
+          threadId,
+        });
 
       release();
       await draining;
+
+      expect(calls.filter(draft)).toEqual([]);
+      expectOnlyAnswer(calls, GROUP, threadId);
     } finally {
-      runtime.close();
+      release();
+      await draining.catch(() => {});
+      h.runtime.close();
     }
   });
-});
 
-describe('a private turn streams into a real message as the answer forms (B11)', () => {
-  it("l'anteprima mostra il testo che si forma, e la chat conserva un solo messaggio vero: la risposta", async () => {
-    const finalText = 'Ciao! Ecco una storia breve.';
-    const provider = streamingProvider(['Ciao! ', 'Ecco una storia breve.'], finalText);
+  it.each([
+    { round: 'a single round', withTool: false },
+    { round: 'a tool round', withTool: true },
+  ])(
+    'streams provisional text in DM and lands just the answer after $round',
+    async ({ withTool }) => {
+      const { provider, release } = gatedProvider(withTool);
+      const { api, calls } = recordingApi();
+      const h = harness(provider, api);
+      const draining = h.deliver(message(OWNER));
+
+      try {
+        // No final token or `done` has been released. An earlier preamble may
+        // have previewed provisionally, but it cannot be in the new draft.
+        await vi.waitFor(
+          () => {
+            const latest = calls.filter(draft).at(-1);
+            expect(latest && textOf(latest)).toBe(PREFIX);
+          },
+          { timeout: 3_000 },
+        );
+        expect(calls.filter(durable)).toEqual([]);
+
+        release();
+        await draining;
+
+        for (const c of calls.filter(draft)) {
+          expect(c.draftOptions?.canStop).toBe(true);
+          expect(c.draftOptions?.keepOnStop).not.toBe(true);
+        }
+        const wire = JSON.stringify(calls);
+        for (const detail of [TOOL, QUERY, 'Processo']) expect(wire).not.toContain(detail);
+        expectOnlyAnswer(calls, OWNER);
+      } finally {
+        release();
+        await draining.catch(() => {});
+        h.runtime.close();
+      }
+    },
+  );
+
+  it('still sends only the answer when Telegram rejects the DM preview and rich final', async () => {
+    const { provider, release } = gatedProvider(true);
     const { api, calls } = recordingApi();
-    const { connector, runtime } = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER }, provider, api);
+    // Explicit refusals: no draft or rich send was accepted. The legacy
+    // final must still succeed and must not reconstruct a tool transcript.
+    const refusal = () => new TelegramError(400, 'Bad Request: RICH_MESSAGE_INVALID');
+    const sendRichMessageDraft = vi.fn(async () => {
+      throw refusal();
+    });
+    const sendMessageDraft = vi.fn(async () => {
+      throw new TelegramError(400, 'Bad Request: draft refused');
+    });
+    const sendRichMessage = vi.fn(async () => {
+      throw refusal();
+    });
+    const h = harness(provider, {
+      ...api,
+      sendRichMessageDraft,
+      sendMessageDraft,
+      sendRichMessage,
+    });
 
     try {
-      await deliver(connector, [privateMsg(3)]);
+      release();
+      await h.deliver(message(OWNER));
 
-      // Dal 06/09/2026 la stanza `direct` negozia `['draft','edit','off']`:
-      // il testo che si forma passa dall'anteprima effimera, rinnovata dentro
-      // la sua finestra (`transcript.test.ts` misura il rinnovo). Quello che
-      // la chat **conserva** resta un messaggio vero e uno solo.
-      expect(calls.filter((c) => c.method === 'sendMessageDraft' || c.method === 'sendRichMessageDraft').length).toBeGreaterThan(0);
-
-      const sent = calls.filter(crea);
-      expect(sent).toHaveLength(1); // un messaggio vero per tutto il turno
-      expect(testo(sent[0]!)).toBe(finalText); // ed e' la risposta finale, non un pezzo di frase
-      // L'anteprima non e' un messaggio: non c'e' niente da cancellare e
-      // niente da riscrivere quando arriva la risposta.
-      expect(calls.filter((c) => c.method === 'deleteMessage')).toHaveLength(0);
+      expect(sendRichMessageDraft).toHaveBeenCalled();
+      expect(sendMessageDraft).toHaveBeenCalled();
+      expect(sendRichMessage).toHaveBeenCalledOnce();
+      expect(calls.filter(durable)).toMatchObject([{ method: 'sendMessage', text: FINAL }]);
+      expectOnlyAnswer(calls, OWNER);
     } finally {
-      runtime.close();
-    }
-  });
-});
-
-describe('the transcript of a turn stays above the answer (DAY-1 requirement B13, the owner\'s shape)', () => {
-  it("un turno senza tool conserva un solo messaggio vero, e il testo intermedio passa dall'anteprima", async () => {
-    // Un turno senza tool in privato: l'anteprima mostra il testo mentre si
-    // forma, e la chat conserva un messaggio solo — la risposta. Fra il
-    // 04/09 e il 06/09 conservava lo stesso unico messaggio ma ci arrivava
-    // per edit successivi; la differenza che l'owner ha chiesto il 06/09 e'
-    // *dove* si vede il testo intermedio, non quanti messaggi restano.
-    const finalText = 'Fatto, eccolo.';
-    const provider = streamingProviderWithRealGap(['Fatto, ', 'eccolo.'], finalText);
-    const { api, calls } = recordingApi();
-    const { connector, runtime } = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER }, provider, api);
-
-    try {
-      await deliver(connector, [privateMsg(30)]);
-      const sent = calls.filter(crea);
-      expect(sent).toHaveLength(1);
-      expect(testo(sent[0]!)).toBe(finalText);
-      expect(calls.filter((c) => c.method === 'sendMessageDraft' || c.method === 'sendRichMessageDraft').length).toBeGreaterThan(0);
-      expect(calls.filter((c) => c.method === 'deleteMessage')).toHaveLength(0);
-    } finally {
-      runtime.close();
-    }
-  });
-
-  it('in a group too the transcript is the one real message, and the durable answer extends it rather than arriving beside it', async () => {
-    const finalText = 'Ecco.';
-    const provider = streamingProviderWithToolCall('tool_non_registrato', ['Ec', 'co.'], finalText);
-    const { api, calls } = recordingApi();
-    const { connector, runtime } = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER }, provider, api);
-
-    try {
-      await deliver(connector, [groupMsg(31)]);
-      const sends = calls.filter(crea);
-      expect(sends).toHaveLength(1);
-      expect(testo(sends[0]!)).toContain('lascia che controlli');
-      // The answer is the *last* touch on this same message, an edit —
-      // `connector.ts` awaits `transcript.stop()` ahead of `deliverTo`, and
-      // `deliverTo` itself edits the transcript's own message rather than
-      // sending the answer as a message of its own.
-      const edits = calls.filter((c) => modifica(c) && c.messageId === sends[0]!.messageId);
-      expect(edits.length).toBeGreaterThanOrEqual(1);
-      expect(testo(edits[edits.length - 1]!)).toContain(finalText);
-    } finally {
-      runtime.close();
-    }
-  });
-
-  it('swallows a Bot API failure creating the transcript — the turn still delivers the real answer (rule 5)', async () => {
-    const finalText = 'Va bene comunque.';
-    const provider = streamingProviderWithToolCall('tool_non_registrato', ['Va bene ', 'comunque.'], finalText);
-    const { api: baseApi, calls } = recordingApi();
-    let richFails = 0;
-    let legacyFails = 0;
-    // In a DM the transcript's own surface is the ephemeral draft, and the
-    // rich lane falls back to legacy inside the same call: failing the first
-    // draft in BOTH transports disables the transcript. The answer is then
-    // delivered anyway (a fresh rich send; the process rides its `details`).
-    const failingApi: TelegramApiLike = {
-      ...baseApi,
-      sendRichMessageDraft: async (chatId, draftId, rich, options) => {
-        if (richFails++ === 0) throw new Error('simulato: chat non trovata');
-        return baseApi.sendRichMessageDraft(chatId, draftId, rich, options);
-      },
-      sendMessageDraft: async (chatId, draftId, text, options) => {
-        if (legacyFails++ === 0) throw new Error('simulato: chat non trovata');
-        return baseApi.sendMessageDraft(chatId, draftId, text, options);
-      },
-    };
-    const { connector, runtime } = harness({ token: 't', ownerUserId: OWNER, ownerChatId: OWNER }, provider, failingApi);
-
-    try {
-      await deliver(connector, [privateMsg(32)]);
-
-      // The answer still reaches the chat, exactly once, on whichever
-      // transport carried it.
-      expect(calls.filter(crea)).toHaveLength(1);
-      expect(testo(calls.filter(crea)[0]!)).toContain(finalText);
-    } finally {
-      runtime.close();
+      h.runtime.close();
     }
   });
 });

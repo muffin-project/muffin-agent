@@ -1,8 +1,8 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import DatabaseCtor from 'better-sqlite3';
 import { afterAll, describe, expect, it } from 'vitest';
 import { MemoryStore } from '../core/memory/store.js';
@@ -66,6 +66,58 @@ function cwdSenzaDotenv(): string {
   homes.push(cwd);
   return cwd;
 }
+
+describe('text setup with a voice-capable surface', () => {
+  it('pairs Telegram and re-runs init without contacting the speech-model host', () => {
+    const { dir, xdg } = scratchHome();
+    const requests = join(dir, 'setup-requests.txt');
+    const network = join(dir, 'setup-network.mjs');
+    writeFileSync(requests, '');
+    writeFileSync(
+      network,
+      `import { appendFileSync } from 'node:fs';
+globalThis.fetch = async (input) => {
+  const url = new URL(input instanceof Request ? input.url : String(input));
+  if (url.origin === 'http://127.0.0.1:9' && url.pathname.endsWith('/getMe')) {
+    appendFileSync(${JSON.stringify(requests)}, 'telegram getMe\\n');
+    return Response.json({
+      ok: true,
+      result: { id: 101, is_bot: true, first_name: 'fixture', username: 'fixture_bot' },
+    });
+  }
+  appendFileSync(${JSON.stringify(requests)}, url.hostname + '\\n');
+  throw new Error('No other endpoint is available during this text setup');
+};`,
+    );
+    const env = {
+      MUFFIN_HOME: dir,
+      XDG_CONFIG_HOME: xdg,
+      NODE_OPTIONS: `--import=${pathToFileURL(network).href}`,
+    };
+
+    expect(muffin(env, ['init'], 'sk-ant-fixture').code).toBe(0);
+    expect(muffin(env, ['secret', 'set', 'telegram_token'], '123:fixture-only').code).toBe(0);
+    const enabled = muffin(env, [
+      'surface',
+      'enable',
+      'telegram',
+      '--api-base',
+      'http://127.0.0.1:9',
+      '--owner',
+      '202',
+    ]);
+    expect(enabled.code, enabled.err).toBe(0);
+    expect(enabled.out).toContain('telegram abilitata');
+    const initAgain = muffin(env, ['init'], 'sk-ant-fixture');
+    expect(initAgain.code, initAgain.err).toBe(0);
+
+    const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'));
+    expect(config.surfaces.enabled).toContain('telegram');
+    expect(config.surfaces.telegram.ownerUserId).toBe(202);
+    expect(existsSync(join(dir, 'models', 'ggml-base.bin'))).toBe(false);
+    expect(readFileSync(requests, 'utf8').split('\n').filter(Boolean)).toEqual(['telegram getMe']);
+  }, 40_000);
+});
 
 describe('muffin init infers the provider from the key — headless, no TTY required', () => {
   it('an OpenRouter-shaped key ends up as openai-compat with the OpenRouter base URL, and says so', () => {
@@ -676,55 +728,51 @@ describe("una chiave non passa mai per argv né per l'environment (owner 2026-08
   });
 });
 
-describe('muffin rot harden — spiega e propone, non esegue mai (wiring reale)', () => {
-  it('su un install appena fatto: stampa il piano su stdout, exit 1, e non tocca mai il filesystem', () => {
+describe('muffin rot recovery', () => {
+  it('rejects the retired init flag before creating an installation', () => {
     const { dir, xdg } = scratchHome();
     const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
-    muffin(env, ['init'], 'sk-ant-fixture');
-
-    const before = readFileSync(join(dir, 'rot', 'manifest.json'), 'utf8');
-    const r = muffin(env, ['rot', 'harden']);
-
-    // 1, non 0 né 2: come `doctor` in warn, non un errore bloccante — ma
-    // nemmeno "va tutto bene", perché non lo va ancora.
-    expect(r.code).toBe(1);
-    expect(r.out).toContain(join(dir, 'rot'));
-    expect(r.out).toContain('sudo chown');
-    expect(r.out).toContain('sys.shell');
-    // Mai eseguito: il manifest — quindi rot/ — non cambia di una virgola.
-    expect(readFileSync(join(dir, 'rot', 'manifest.json'), 'utf8')).toBe(before);
-    expect(r.err).toBe('');
-  });
-
-  it('un secondo giro dopo `init --hardened` distingue "OS non ancora sistemato" dal caso precedente', () => {
-    const { dir, xdg } = scratchHome();
-    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
-    muffin(env, ['init', '--hardened'], 'sk-ant-fixture');
-
-    const r = muffin(env, ['rot', 'harden']);
-    // Il file resta di proprietà dell'utente che ha girato `init`: dichiarare
-    // "hardened" da solo non regge ancora, quindi il piano va comunque
-    // proposto — è esattamente il difetto misurato che questa slice chiude.
-    expect(r.code).toBe(1);
-    expect(r.out).toContain('sudo chown');
-    // E la sezione "dichiaralo in config.json" non compare più, perché quella
-    // parte è già vera.
-    expect(r.out).not.toContain('config.json');
-  });
-
-  it('`rot` senza sub, o con un sub sconosciuto, nomina harden nello usage', () => {
-    const { dir, xdg } = scratchHome();
-    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
-    muffin(env, ['init'], 'sk-ant-fixture');
-    const r = muffin(env, ['rot', 'bogus']);
+    const r = muffin(env, ['init', '--hardened'], 'sk-ant-fixture');
     expect(r.code).toBe(78);
-    expect(r.err).toContain('harden');
+    expect(r.err).toContain('Use `muffin init`');
+    expect(existsSync(join(dir, 'config.json'))).toBe(false);
+    expect(existsSync(join(dir, 'rot', 'manifest.json'))).toBe(false);
+    expect(existsSync(join(xdg, 'muffin', 'secrets'))).toBe(false);
   });
+
+  it.each(['single-user', 'hardened'] as const)(
+    'retires the old hardening recipe on an initialized Home (%s)',
+    (mode) => {
+      const { dir, xdg } = scratchHome();
+      const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+      expect(muffin(env, ['init'], 'sk-ant-fixture').code).toBe(0);
+      const configPath = join(dir, 'config.json');
+      const installed = JSON.parse(readFileSync(configPath, 'utf8'));
+      installed.rot.mode = mode;
+      writeFileSync(configPath, JSON.stringify(installed));
+
+      // Ordinary init preserves the mode of existing deployments.
+      expect(muffin(env, ['init'], 'sk-ant-fixture').code).toBe(0);
+      expect(JSON.parse(readFileSync(configPath, 'utf8')).rot.mode).toBe(mode);
+      const manifest = join(dir, 'rot', 'manifest.json');
+      const before = readFileSync(manifest);
+      const r = muffin(env, ['rot', 'harden']);
+      expect(r.code).toBe(78);
+      expect(r.err).toContain('does not change approvals');
+      expect(r.err).toContain('muffin doctor');
+      expect(r.out + r.err).not.toMatch(/sudo|silent allow|gateway stop/);
+      expect(readFileSync(manifest)).toEqual(before);
+      expect(muffin(env, ['rot', 'verify']).code).toBe(0);
+    },
+  );
 
   it('the advanced help keeps rot recovery discoverable without putting it in the owner help', () => {
     const { dir, xdg } = scratchHome();
-    const r = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['help', '--all']);
+    const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
+    const r = muffin(env, ['help', '--all']);
     expect(r.out).toContain('muffin rot');
+    expect(r.out).not.toMatch(/harden/i);
+    expect(muffin(env, ['help']).out).not.toContain('muffin rot');
   });
 
   it('un errore che nessuno ha previsto resta una frase, non uno stack', () => {
@@ -749,33 +797,14 @@ describe('muffin rot harden — spiega e propone, non esegue mai (wiring reale)'
     expect(r.err).toContain('MUFFIN_DEBUG=1');
   });
 
-  it('un reseal senza permesso di scrivere il sigillo risponde, invece di vomitare uno stack', () => {
-    // Il guasto che `muffin rot harden` **insegna** a produrre: il piano dice
-    // all'owner che dopo l'indurimento il reseal «ti servirà un privilegio che
-    // oggi non ti serve», quindi dimenticare `sudo` è l'errore previsto, non
-    // uno esotico. `main()` non ha una cattura di livello superiore, e la
-    // ricompensa per aver seguito il nostro consiglio era un `Error: EACCES`
-    // con lo stack. Trovato dal judge su #138.
+  it('reseal is retired with a clear sentence and no stack (ADR-0108)', () => {
     const { dir, xdg } = scratchHome();
     const env = { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg };
     muffin(env, ['init'], 'sk-ant-fixture');
-
-    // `seal` riscrive `rot/manifest.json` in place, e riscrivere un file che
-    // esiste non chiede il permesso sulla directory: quello serve a creare o
-    // cancellare voci. Quindi il permesso da togliere è quello del file.
-    const manifest = join(dir, 'rot', 'manifest.json');
-    chmodSync(manifest, 0o400);
-    try {
-      const r = muffin(env, ['rot', 'reseal']);
-      expect(r.code).toBe(77); // EX_NOPERM, non un'uscita generica
-      expect(r.err).toContain('permesso negato');
-      expect(r.err).toContain('sudo');
-      // Il punto della slice: una frase, non una traccia di stack.
-      expect(r.err).not.toContain('at ');
-      expect(r.err).not.toContain('EACCES:');
-    } finally {
-      chmodSync(manifest, 0o600); // altrimenti la pulizia del temp non riesce
-    }
+    const r = muffin(env, ['rot', 'reseal']);
+    expect(r.code).toBe(78);
+    expect(r.err + r.out).toMatch(/ADR-0108|nothing to reseal|retired/i);
+    expect(r.err).not.toContain('    at ');
   });
 });
 
