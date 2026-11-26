@@ -1342,7 +1342,7 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
   return { steps, code: 0 };
 }
 
-const UPDATE_USAGE = `uso:
+export const UPDATE_USAGE = `uso:
   muffin update [--dry-run] [--yes]     fetch del canale, costruisce una release
       [--channel main|dev]               affiancata (git worktree + npm ci),
                                          backup, poi scambio atomico del/i

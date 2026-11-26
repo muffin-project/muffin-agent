@@ -1,12 +1,12 @@
-import DatabaseCtor from 'better-sqlite3';
 import { copyFileSync, existsSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { paths } from '../core/config/config.js';
 import { ensurePrivateDir, tightenPrivateDb } from '../core/config/private-fs.js';
-import { readGateway } from '../core/gateway/lock.js';
 import { currentSchemaVersion, migrate, schemaVersionOf, snapshotTo } from '../core/db/migrate.js';
+import { readGateway } from '../core/gateway/lock.js';
 
-const BACKUP_USAGE = `uso:
+export const BACKUP_USAGE = `uso:
   muffin backup [--dir DIR]     copia online del database (VACUUM INTO) + quick_check
   muffin restore <file> --yes   ripristina un backup: rifiuta col gateway vivo,
                                 mette da parte il db corrente, riapplica le migrazioni`;
@@ -27,7 +27,9 @@ export function backupNow(
 ): { file: string; bytes: number } {
   if (!existsSync(dbPath)) throw new Error(`nessun database in ${dbPath}`);
   if (!ensurePrivateDir(dir)) {
-    throw new Error(`non posso scrivere il backup in ${dir}: la directory privata non è stata stabilita (symlink sulla catena)`);
+    throw new Error(
+      `non posso scrivere il backup in ${dir}: la directory privata non è stata stabilita (symlink sulla catena)`,
+    );
   }
   const file = join(dir, `muffin-${now().toISOString().replace(/[:.]/g, '-')}.db`);
   const db = new DatabaseCtor(dbPath);
@@ -75,7 +77,8 @@ export function restoreFrom(
   const probe = new DatabaseCtor(backupFile, { readonly: true });
   try {
     const verdict = probe.pragma('quick_check', { simple: true });
-    if (verdict !== 'ok') throw new RestoreRefused(`il backup non passa quick_check: ${String(verdict)}`);
+    if (verdict !== 'ok')
+      throw new RestoreRefused(`il backup non passa quick_check: ${String(verdict)}`);
     const v = schemaVersionOf(probe);
     if (v !== null && v > currentSchemaVersion()) {
       throw new RestoreRefused(
@@ -91,7 +94,9 @@ export function restoreFrom(
     try {
       const gw = readGateway(live);
       if (gw !== null) {
-        throw new RestoreRefused(`il gateway è vivo (pid ${gw.pid}) — \`muffin gateway stop\` prima del restore`);
+        throw new RestoreRefused(
+          `il gateway è vivo (pid ${gw.pid}) — \`muffin gateway stop\` prima del restore`,
+        );
       }
     } finally {
       live.close();
@@ -145,7 +150,9 @@ export function cmdRestore(rest: string[]): number {
     return 2;
   }
   if (!rest.includes('--yes')) {
-    process.stderr.write(`il restore sostituisce il database corrente (una copia viene messa da parte). Aggiungi --yes per procedere.\n`);
+    process.stderr.write(
+      `il restore sostituisce il database corrente (una copia viene messa da parte). Aggiungi --yes per procedere.\n`,
+    );
     return 1;
   }
   const p = paths();
@@ -154,7 +161,9 @@ export function cmdRestore(rest: string[]): number {
     process.stdout.write(
       `ripristinato: ${file} → ${p.db}\n` +
         (asideCopy ? `db precedente messo da parte: ${asideCopy}\n` : '') +
-        (applied.length > 0 ? `migrazioni riapplicate: ${applied.join(', ')}\n` : 'nessuna migrazione pendente\n') +
+        (applied.length > 0
+          ? `migrazioni riapplicate: ${applied.join(', ')}\n`
+          : 'nessuna migrazione pendente\n') +
         `ora: muffin doctor\n`,
     );
     return 0;

@@ -1,7 +1,7 @@
 import { join } from 'node:path';
-import { openDb } from '../core/db/open.js';
-import { migrate } from '../core/db/migrate.js';
 import { paths } from '../core/config/config.js';
+import { migrate } from '../core/db/migrate.js';
+import { openDb } from '../core/db/open.js';
 import { MemoryStore } from '../core/memory/store.js';
 import { TurnStore } from '../core/turns/store.js';
 import { UndoJournal } from '../core/undo/journal.js';
@@ -26,7 +26,7 @@ import { UndoJournal } from '../core/undo/journal.js';
 /** L'unico tenant che questo comando conosce: `muffin undo` gira sulla macchina dell'owner. */
 const TENANT = 'host';
 
-const USAGE = `uso:
+export const UNDO_USAGE = `uso:
   muffin undo                    i turni che si possono disfare, dal più recente
   muffin undo <turno> --yes      rimette i file com'erano prima di quel turno
   muffin undo --last --yes       lo stesso, sul turno più recente
@@ -45,13 +45,13 @@ export function cmdUndo(argv: string[], home = paths().home): number {
   const turno = argv.find((a) => !a.startsWith('--'));
 
   if (argv.includes('--help') || argv.includes('-h')) {
-    process.stdout.write(`${USAGE}\n`);
+    process.stdout.write(`${UNDO_USAGE}\n`);
     return 0;
   }
 
   if (argv.includes('--dimentica')) {
     if (turno === undefined) {
-      process.stderr.write(`${USAGE}\n`);
+      process.stderr.write(`${UNDO_USAGE}\n`);
       return 2;
     }
     const entry = journal.read(turno);
@@ -87,8 +87,12 @@ export function cmdUndo(argv: string[], home = paths().home): number {
       process.stderr.write(
         `due turni hanno l'ultima copia nello stesso istante, non so quale sia «l'ultimo»:
 ` +
-          ultimo.ambigui.map((t) => `    muffin undo ${t} --yes
-`).join('') +
+          ultimo.ambigui
+            .map(
+              (t) => `    muffin undo ${t} --yes
+`,
+            )
+            .join('') +
           `
 scegli tu: disfare quello sbagliato non si disfà.
 `,
@@ -134,7 +138,10 @@ scegli tu: disfare quello sbagliato non si disfà.
       `disfare ${bersaglio} rimetterebbe:\n` +
         [...entry.snapshots]
           .reverse()
-          .map((s) => `    ${s.path} — ${s.copy === null ? 'rimosso (non esisteva)' : 'ripristinato'}\n`)
+          .map(
+            (s) =>
+              `    ${s.path} — ${s.copy === null ? 'rimosso (non esisteva)' : 'ripristinato'}\n`,
+          )
           .join('') +
         `\nlo stato attuale di quei file viene messo da parte come "${undoOfId(bersaglio)}".\n` +
         `aggiungi --yes per procedere.\n`,
@@ -176,8 +183,14 @@ scegli tu: disfare quello sbagliato non si disfà.
     // Turno disfatto: le sue copie sono peso morto, e il ritorno indietro
     // dell'undo vive sotto `annulla-…`, che resta.
     journal.forget(bersaglio);
-    marcaDisfatto(home, bersaglio, entry.snapshots.map((s) => s.callId));
-    process.stdout.write(`\ndisfatto ${bersaglio}. per tornare com'era: muffin undo ${rete} --yes\n`);
+    marcaDisfatto(
+      home,
+      bersaglio,
+      entry.snapshots.map((s) => s.callId),
+    );
+    process.stdout.write(
+      `\ndisfatto ${bersaglio}. per tornare com'era: muffin undo ${rete} --yes\n`,
+    );
     return 0;
   }
   process.stdout.write(
