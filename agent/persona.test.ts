@@ -50,8 +50,8 @@ describe('persona in the system prompt', () => {
     const prompt = runtime.deps.systemPrompts.owner;
     runtime.close();
 
-    expect(prompt).toContain('Il registro segue il momento');
-    expect(prompt).toContain('Non fingi di ricordare, aver visto, controllato, eseguito');
+    expect(prompt).toContain('## Registro');
+    expect(prompt).toContain('Non fingi di ricordare, aver visto, controllato o eseguito');
     // The catalogue names the skill. The body — the 15% emoji ceiling — does not ride along.
     expect(prompt).toContain('voce');
     expect(prompt).not.toMatch(/15% dei messaggi/);
@@ -76,9 +76,9 @@ describe('persona in the system prompt', () => {
     const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
 
     expect(prompt).toContain('Sei Muffin');
-    expect(prompt).toMatch(/seconda prospettiva con memoria/);
-    expect(prompt).toMatch(/Non fingi di ricordare, aver visto, controllato, eseguito/);
-    expect(prompt).toMatch(/Non descrivi un lavoro come completato se non lo è/);
+    expect(prompt).toMatch(/non solo un esecutore di incarichi/);
+    expect(prompt).toMatch(/Non fingi di ricordare, aver visto, controllato o eseguito/);
+    expect(prompt).toMatch(/non descrivi come finito un lavoro che non lo è/);
     expect(prompt).toContain("Un'inferenza resta un'inferenza");
   });
 
@@ -88,7 +88,7 @@ describe('persona in the system prompt', () => {
     const prompt = runtime.deps.systemPrompts.owner;
     runtime.close();
     const who = prompt.indexOf('Sei Muffin');
-    const limits = prompt.indexOf('Non mi dai ragione');
+    const limits = prompt.indexOf('Non ti limiti a dare ragione');
     expect(who).toBeGreaterThan(-1);
     expect(limits).toBeGreaterThan(-1);
     expect(who).toBeLessThan(limits);
@@ -110,7 +110,7 @@ describe('persona in the system prompt', () => {
     expect(prompt).not.toContain('MARCATORE-SOLO-PER-UMANI');
     expect(prompt).toContain('MARCATORE-DOPO-COMMENTO resta');
     // The authored content already in the file is untouched by the stripping.
-    expect(prompt).toContain('Non mi dai ragione per farmi contento');
+    expect(prompt).toContain('Non ti limiti a dare ragione');
   });
 
   it('drops a heading the owner has left empty', () => {
@@ -132,13 +132,13 @@ describe('persona in the system prompt', () => {
     writeFileSync(
       identity,
       readFileSync(identity, 'utf8').replace(
-        '## Chi sei per me\n',
-        '## Chi sei per me\n\nMARCATORE-SCRITTO-DALLOWNER.\n',
+        '## Come stai insieme\n',
+        '## Come stai insieme\n\nMARCATORE-SCRITTO-DALLOWNER.\n',
       ),
     );
     const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
     expect(prompt).toContain('MARCATORE-SCRITTO-DALLOWNER');
-    expect(prompt).toContain('## Chi sei per me');
+    expect(prompt).toContain('## Come stai insieme');
   });
 
   it('keeps persona, the sealed identity and voice on a home that still has them, and does not rewrite the seal', () => {
@@ -159,7 +159,7 @@ describe('persona in the system prompt', () => {
       ]);
       const prompt = runtime.deps.systemPrompts.owner;
       const personaAt = prompt.indexOf('MARCATORE-PERSONA-INSTALLATA');
-      const identityAt = prompt.indexOf('Il registro segue il momento');
+      const identityAt = prompt.indexOf('## Registro');
       const voiceAt = prompt.indexOf('MARCATORE-VOCE-INSTALLATA');
       expect(personaAt).toBeGreaterThan(-1);
       expect(identityAt).toBeGreaterThan(personaAt);
@@ -176,7 +176,7 @@ describe('persona in the system prompt', () => {
     expect(existsSync(paths(home).voice)).toBe(false);
     expect(existsSync(paths(home).persona)).toBe(false);
     const runtime = buildRuntime(home, workspace);
-    expect(runtime.deps.systemPrompts.owner).toContain('Il registro segue il momento');
+    expect(runtime.deps.systemPrompts.owner).toContain('## Registro');
     runtime.close();
   });
 
@@ -222,6 +222,6 @@ describe('persona in the system prompt', () => {
     expect(prompt).not.toContain('MARCATORE-COMMENTO-NON-CHIUSO');
     expect(prompt).not.toContain('Ancora testo dopo');
     // Everything authored before the orphan comment survives the cut.
-    expect(prompt).toContain('Non mi dai ragione per farmi contento');
+    expect(prompt).toContain('Non ti limiti a dare ragione');
   });
 });

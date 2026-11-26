@@ -305,8 +305,10 @@ describe('acceptance · A · installazione e ciclo di vita', () => {
  * limiti ha" is `identity.md`'s claim, A3 "il comportamento è definito" is the
  * register rule in that same file, with the long examples in the `voce` skill
  * and not in the prefix), not two independent turns. Every marker is read from
- * the files this install actually wrote under `inst.home` — never from
- * `defaults/`, which is only the seed `muffin init` copies from once.
+ * the files this install actually wrote under `inst.home`. Since ADR-0112 the
+ * runtime reads the foundation from the shipped product when that home copy
+ * is untouched, so the seed and the product say the same thing here; a
+ * hand-edited copy is the legacy case `agent/persona.test.ts` covers.
  */
 describe('acceptance · A2/A3 · identity wiring', () => {
   let inst: Install;
@@ -315,8 +317,8 @@ describe('acceptance · A2/A3 · identity wiring', () => {
   /** `muffin prompt show` on the very same home, after the turn. */
   let shown: string;
 
-  const IDENTITY_MARKER = 'Non mi dai ragione per farmi contento.';
-  const REGISTER_MARKER = 'Il registro segue il momento';
+  const IDENTITY_MARKER = 'Non ti limiti a dare ragione';
+  const REGISTER_MARKER = 'Lavoro resta lavoro';
   /** A line that lives only in the skill body, not in the sealed pact. */
   const VOICE_EXAMPLE = '15% dei messaggi';
 

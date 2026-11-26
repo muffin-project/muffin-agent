@@ -269,7 +269,14 @@ describe('the owner-class prompt does not move', () => {
     // Ri-fissato 2026-11-20: la riga tool-poi-shell non manda più a `sys_inspect`
     // per «che modello ti esegue» — la risposta è già in «Questo turno».
     // Pin precedente: `5c40b6dc2f86e441f38b7b61720b0ec0e49f7feeb3c9528b3ee092fb3b18a992`.
-    'd8fe9c32d83762c8e6936fd912ffc091670bc70970be7dcf2555a8d95c6d454f';
+    // Ri-fissato 2026-11-25 (ADR-0112): la fondazione spedita cambia testo
+    // (tratti di compagno) e si legge dal prodotto. Cold-start deliberato.
+    // Pin precedente: `d8fe9c32d83762c8e6936fd912ffc091670bc70970be7dcf2555a8d95c6d454f`.
+    // Ri-fissato 2026-11-26 (ADR-0112 §Decisioni dell'owner): la fondazione
+    // rimette i pavimenti minimi («la memoria non è consenso», le decisioni
+    // restano sue) e la regola delle preferenze. Cold-start deliberato.
+    // Pin precedente: `ff3e02e84c4d4081029e0157a799d965de0012e7d834ba25d1180ea78fb59959`.
+    '1c76b3e287fe7a7e07edf699828142b11325968f410be472641253db8a43af27';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
@@ -505,7 +512,10 @@ describe('quale versione del prompt assembla questa installazione', () => {
     expect(v1.owner.find((b) => b.name === 'identity')?.text).toBe(
       v2.owner.find((b) => b.name === 'identity')?.text,
     );
-    expect(v1.owner.find((b) => b.name === 'identity')?.source).toBe('rot/identity.md');
+    // ADR-0112: a fresh home reads the foundation from the product, not its copy.
+    expect(v1.owner.find((b) => b.name === 'identity')?.source).toBe(
+      'defaults/rot/identity.md (prodotto)',
+    );
     expect(v1.owner.map((b) => b.name)).not.toContain('persona');
     expect(v1.owner.map((b) => b.name)).not.toContain('voice');
     expect(v2.owner.find((b) => b.name === 'work-rules')?.source).toContain('WORK_RULES_V2');
@@ -546,24 +556,26 @@ describe('what a group turn is allowed to be told', () => {
     // verbatim real prose at `identity.md:11`. The test read green for the
     // wrong reason. Fixed to the real heading, with a marker string that
     // cannot coincidentally already be in the file.
+    //
+    // ADR-0112: editing the home copy by hand makes it the legacy pact that
+    // still replaces the foundation, so the marker reaches the owner from it.
     const home = bootHome();
     const identity = join(paths(home).rot, 'identity.md');
-    writeFileSync(
-      identity,
-      readFileSync(identity, 'utf8').replace(
-        '## Chi sei per me\n',
-        '## Chi sei per me\n\nMARCATORE-IDENTITY-SOLO-OWNER.\n',
-      ),
+    const edited = readFileSync(identity, 'utf8').replace(
+      '## Come stai insieme\n',
+      '## Come stai insieme\n\nMARCATORE-IDENTITY-SOLO-OWNER.\n',
     );
+    expect(edited).toContain('MARCATORE-IDENTITY-SOLO-OWNER');
+    writeFileSync(identity, edited);
     const runtime = boot(home);
     try {
       const { owner, group } = runtime.deps.systemPrompts;
       // Present on the owner side, so the absence below is a filter and not a
       // file that failed to load.
       expect(owner).toContain('MARCATORE-IDENTITY-SOLO-OWNER');
-      expect(owner).toContain('Non mi dai ragione per farmi contento');
+      expect(owner).toContain('Non ti limiti a dare ragione');
       expect(group).not.toContain('MARCATORE-IDENTITY-SOLO-OWNER');
-      expect(group).not.toContain('Non mi dai ragione per farmi contento');
+      expect(group).not.toContain('Non ti limiti a dare ragione');
     } finally {
       runtime.close();
     }
@@ -585,13 +597,13 @@ describe('what a group turn is allowed to be told', () => {
     const runtime = boot(bootHome());
     try {
       const { owner, group } = runtime.deps.systemPrompts;
-      expect(owner).toContain('Sei una seconda prospettiva con memoria');
-      expect(owner).toContain('La familiarità non è authority');
-      expect(owner).toContain('Non mi dai ragione per farmi contento');
+      expect(owner).toContain('non solo un esecutore di incarichi');
+      expect(owner).toContain('Non trattarlo come un utente da gestire');
+      expect(owner).toContain('Non ti limiti a dare ragione');
 
-      expect(group).not.toContain('seconda prospettiva con memoria');
-      expect(group).not.toContain('La familiarità non è authority');
-      expect(group).not.toContain('Non mi dai ragione per farmi contento');
+      expect(group).not.toContain('non solo un esecutore di incarichi');
+      expect(group).not.toContain('Non trattarlo come un utente da gestire');
+      expect(group).not.toContain('Non ti limiti a dare ragione');
     } finally {
       runtime.close();
     }
@@ -797,10 +809,10 @@ describe('i pavimenti che la stanza riceve solo da voice.md', () => {
       // old plan push ruined first: a greeting in the DM came back as a work
       // board. The plan no longer rides along (ADR-0104); this is the other
       // half — the reply itself should sound like a friend, not a queue.
-      expect(owner).toMatch(/Se\s+mi\s+scrivi\s+solo\s+«hey»/);
+      expect(owner).toMatch(/Se\s+ti\s+scrive\s+solo\s+«hey»/);
       expect(owner).toMatch(/non\s+apri\s+un\s+ticket/);
       expect(owner).toMatch(/non\s+tiri\s+fuori\s+un\s+piano/);
-      expect(owner).toMatch(/Il registro segue il momento/);
+      expect(owner).toMatch(/## Registro/);
       expect(owner).toMatch(/Lavoro resta lavoro/);
       expect(owner).toMatch(/Lo scherzo si risponde con lo scherzo/);
       expect(owner).toMatch(/Un momento delicato chiede sintonia/);
@@ -813,9 +825,9 @@ describe('i pavimenti che la stanza riceve solo da voice.md', () => {
       const owner = renderSystemPrompts(blocchi).owner;
       // Presente da una parte, assente dall'altra: senza la prima metà questo
       // sarebbe un test che passa perché il file non si è caricato.
-      expect(owner).toContain('Non mi dai ragione per farmi contento');
-      expect(gruppo).not.toContain('Non mi dai ragione per farmi contento');
-      expect(gruppo).not.toContain('Sei il mio secondo cervello');
+      expect(owner).toContain('Non ti limiti a dare ragione');
+      expect(gruppo).not.toContain('Non ti limiti a dare ragione');
+      expect(gruppo).not.toContain('non solo un esecutore di incarichi');
       expect(blocchi.group.map((b) => b.name)).not.toContain('identity');
     });
   }

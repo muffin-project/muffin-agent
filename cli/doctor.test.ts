@@ -1414,7 +1414,6 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
     // up-to-date, not merely "present".
     for (const relPath of [
       'skills/voce/SKILL.md',
-      'rot/identity.md',
       'rot/policy.json',
       'rot/egress.json',
       'rot/budgets.json',
@@ -1423,6 +1422,12 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
       expect(c, `missing check for ${relPath}`).toBeTruthy();
       expect(c?.level, `${relPath}: ${c?.detail}`).toBe('ok');
     }
+    // `rot/identity.md` left the drift list (ADR-0112): the foundation is
+    // read from the product, and the identity check says so.
+    expect(defaultsChecks.find((x) => x.name === 'default rot/identity.md')).toBeUndefined();
+    const identita = r.checks.find((x) => x.name === 'identità');
+    expect(identita?.level).toBe('ok');
+    expect(identita?.detail).toContain('fondazione letta dal prodotto');
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -1436,7 +1441,7 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
     expect(c?.level).toBe('ok');
     expect(c?.detail).toContain('persona.md');
     expect(c?.detail).toContain('voice.md');
-    expect(c?.detail).toContain('rot/identity.md');
+    expect(c?.detail).toContain('patto');
     expect(c?.remedy).toBeUndefined();
     expect(existsSync(join(dir, 'persona.md'))).toBe(true);
     expect(existsSync(join(dir, 'voice.md'))).toBe(true);
@@ -1478,30 +1483,27 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
       if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} failed: ${r.stderr}`);
     };
     mkdirSync(join(checkout, 'defaults', 'rot'), { recursive: true });
-    writeFileSync(join(checkout, 'defaults', 'rot', 'identity.md'), 'v1 identity\n');
+    writeFileSync(join(checkout, 'defaults', 'rot', 'policy.json'), '{"v":1}\n');
     sh('git', ['init', '-q']);
     sh('git', ['config', 'user.email', 't@t']);
     sh('git', ['config', 'user.name', 't']);
     sh('git', ['add', '.']);
     sh('git', ['commit', '-qm', 'v1']);
-    writeFileSync(
-      join(checkout, 'defaults', 'rot', 'identity.md'),
-      'v2 identity — HEAD ora dice questo\n',
-    );
+    writeFileSync(join(checkout, 'defaults', 'rot', 'policy.json'), '{"v":2}\n');
     sh('git', ['add', '.']);
     sh('git', ['commit', '-qm', 'v2']);
 
     const dir = home();
-    writeFileSync(join(paths(dir).rot, 'identity.md'), 'v1 identity\n'); // stuck at the v1 commit, never touched since
+    writeFileSync(join(paths(dir).rot, 'policy.json'), '{"v":1}\n'); // stuck at the v1 commit, never touched since
     // `home()` already ran a real `muffin init` against THIS repository, so
-    // the registry it wrote (rule 1) names the real, shipped identity.md —
+    // the registry it wrote (rule 1) names the real, shipped policy.json —
     // not the synthetic v1/v2 fabricated above. Dropping it forces this test
     // through rule 2 (Git history) against the synthetic checkout instead,
     // which is the fallback this test actually means to exercise.
     rmSync(paths(dir).defaultsManifest, { force: true });
 
     try {
-      const c = await checkWith(dir, 'default rot/identity.md', { checkoutRoot: checkout });
+      const c = await checkWith(dir, 'default rot/policy.json', { checkoutRoot: checkout });
       expect(c?.level).toBe('warn');
       expect(c?.remedy).toBeTruthy();
       expect(c!.remedy).toContain('muffin rot migrate');
@@ -1529,23 +1531,20 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
       if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} failed: ${r.stderr}`);
     };
     mkdirSync(join(checkout, 'defaults', 'rot'), { recursive: true });
-    writeFileSync(join(checkout, 'defaults', 'rot', 'identity.md'), 'v1 identity\n');
+    writeFileSync(join(checkout, 'defaults', 'rot', 'egress.json'), '{"e":1}\n');
     writeFileSync(join(checkout, 'defaults', 'rot', 'policy.json'), '{"v":1}\n');
     sh('git', ['init', '-q']);
     sh('git', ['config', 'user.email', 't@t']);
     sh('git', ['config', 'user.name', 't']);
     sh('git', ['add', '.']);
     sh('git', ['commit', '-qm', 'v1']);
-    writeFileSync(
-      join(checkout, 'defaults', 'rot', 'identity.md'),
-      'v2 identity — HEAD ora dice questo\n',
-    );
+    writeFileSync(join(checkout, 'defaults', 'rot', 'egress.json'), '{"e":2}\n');
     writeFileSync(join(checkout, 'defaults', 'rot', 'policy.json'), '{"v":2}\n');
     sh('git', ['add', '.']);
     sh('git', ['commit', '-qm', 'v2']);
 
     const dir = home();
-    writeFileSync(join(paths(dir).rot, 'identity.md'), 'v1 identity\n');
+    writeFileSync(join(paths(dir).rot, 'egress.json'), '{"e":1}\n');
     writeFileSync(join(paths(dir).rot, 'policy.json'), '{"v":1}\n');
     rmSync(paths(dir).defaultsManifest, { force: true });
 
@@ -1554,13 +1553,13 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
 
       // No per-file check for the two that diverged together — they are
       // folded into the group instead of repeating.
-      expect(report.checks.find((c) => c.name === 'default rot/identity.md')).toBeUndefined();
+      expect(report.checks.find((c) => c.name === 'default rot/egress.json')).toBeUndefined();
       expect(report.checks.find((c) => c.name === 'default rot/policy.json')).toBeUndefined();
 
       const group = report.checks.find((c) => c.name === 'default rot/*');
       expect(group).toBeTruthy();
       expect(group?.level).toBe('warn');
-      expect(group?.detail).toContain('rot/identity.md');
+      expect(group?.detail).toContain('rot/egress.json');
       expect(group?.detail).toContain('rot/policy.json');
       expect(group?.remedy).toBeTruthy();
       expect(group?.remedy).toContain('muffin rot migrate');
@@ -1568,7 +1567,7 @@ describe('doctor sees defaults drift (persona.md, voice.md, rot/*) — deriva-de
       expect(group?.remedy).not.toContain('rot reseal');
       expect(group?.remedy).not.toContain('cp ');
       expect(group?.remedy).not.toContain('safe mode');
-      expect(group?.detail).toContain('rot/identity.md');
+      expect(group?.detail).toContain('rot/egress.json');
       expect(group?.detail).toContain('rot/policy.json');
     } finally {
       rmSync(dir, { recursive: true, force: true });

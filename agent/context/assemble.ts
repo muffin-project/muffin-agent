@@ -1,9 +1,13 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { type PromptVersion, paths } from '../../core/config/config.js';
 import type { CapabilityDecl, CapabilityId, Principal, TenantId } from '../../core/policy/types.js';
 import { renderTodos, type TodoItem } from '../../core/turns/todo.js';
 import type { SearchStartupBlocker } from '../tools/search.js';
+import {
+  authored,
+  renderUserOverlay,
+  resolveIdentityLayers,
+  USER_OVERLAY_TOKEN_BUDGET,
+} from './identity.js';
 import { estimateTokens, type PrefixBlockReport, prefixBreakdown } from './tokens.js';
 
 /**
@@ -457,6 +461,9 @@ export type PromptBlock = { name: string; source: string; text: string; file?: s
  */
 export const PROMPT_BLOCK_BUDGETS: Readonly<Record<string, number>> = {
   identity: 1000,
+  // The owner overlay's own ceiling plus its label (ADR-0112). A file past
+  // `USER_OVERLAY_TOKEN_BUDGET` is left out whole, so this is never a cut.
+  user: USER_OVERLAY_TOKEN_BUDGET + 150,
   skills: 400,
   'work-rules': 1200,
   persona: 900,
@@ -496,7 +503,7 @@ export type SystemPromptBlocks = Readonly<Record<TenantClass, readonly PromptBlo
  * pick the character. ADR-0107, which would drop `persona.md` and `voice.md`,
  * is still waiting on the owner, so an installation that still has those
  * files keeps them in the owner prompt. A missing file adds no block.
- * Assembly never writes `rot/identity.md`.
+ * Assembly never writes `rot/identity.md`, `user.md` or `defaults/`.
  */
 export function buildSystemPromptBlocks(
   home: string,
@@ -507,13 +514,14 @@ export function buildSystemPromptBlocks(
   const p = paths(home);
   const src = promptSources(version);
 
-  // The installed owner contract, until ADR-0107 is accepted: persona, then
-  // the sealed pact, then voice. There is no precedence mechanism, only
-  // string order. The seal is read, never written. Examples can also live in
-  // the `voce` skill; that does not remove a voice file the home already has.
+  // The owner contract (ADR-0112): legacy persona, then the pact — the
+  // shipped foundation, or a hand-edited home copy that still replaces it —
+  // then legacy voice, then the owner's `user.md` overlay, most specific
+  // last and labelled with what it may not override. Nothing here writes.
   const personaText = authored(p.persona);
-  const identity = authored(join(p.rot, 'identity.md'));
+  const layers = resolveIdentityLayers(home);
   const voiceText = authored(p.voice);
+  const userText = layers.user === null ? '' : renderUserOverlay(layers.user);
   const safeModeBlock = safeMode ? SAFE_MODE_NOTE : '';
   const workRules: PromptBlock = {
     name: 'work-rules',
@@ -541,9 +549,9 @@ export function buildSystemPromptBlocks(
       : []),
     {
       name: 'identity',
-      source: 'rot/identity.md',
-      text: identity,
-      file: join(p.rot, 'identity.md'),
+      source: layers.pact.source,
+      text: layers.pact.text,
+      file: layers.pact.file,
     },
     ...(voiceText.length > 0
       ? [
@@ -555,12 +563,15 @@ export function buildSystemPromptBlocks(
           },
         ]
       : []),
+    ...(userText.length > 0 && layers.user !== null
+      ? [{ name: 'user', source: 'user.md', text: userText, file: layers.user.file }]
+      : []),
     { name: 'skills', source: 'core/skills (catalogo generato)', text: skillsSection },
     workRules,
     safe,
   ];
 
-  // Group. The owner's pact does not ship here — nobody else is party to it.
+  // Group. Neither the pact nor `user.md` ships here: nobody else is party to them.
   // The etiquette the room used to receive only because `voice.md` was copied
   // whole now lives in `GROUP_PERSONA`, which is code on purpose: a file the
   // owner is invited to edit would be a knob that turns the guest posture off.
@@ -887,77 +898,3 @@ Quello che so fare è quello che i tool di questo turno mi permettono. In un con
 Distinguo quello che mi è stato detto da quello che ho dedotto, e si sente: «mi sembra che...», «ho l'impressione che...». Su un'inferenza non asserisco. Non ostento la memoria. Non profilo le persone della stanza: niente movimenti, niente umori, niente dossier.
 
 Non uso linguaggio da assistente generico: niente «come posso aiutarti?».`;
-
-/**
- * The authored part of a persona file: what the owner wrote, without the
- * scaffolding that told them how to write it.
- *
- * Both files ship as templates whose HTML comments address the owner —
- * "Questo file è tuo. Scrivilo com'è", "le righe qui sotto sono un punto di
- * partenza". Injected verbatim, as they were, those instructions became part of
- * the identity: on a fresh install the agent was handed a page explaining how a
- * human should fill in its character, and nothing else. Comments are stripped
- * here rather than removed from the files, because in the file they are the
- * thing that makes it writable.
- *
- * Headings left empty are dropped for the same reason. An untouched template
- * would otherwise contribute three bare titles with nothing under them, which
- * reads to a model as a section it is expected to have opinions about.
- */
-function authored(path: string): string {
-  if (!existsSync(path)) return '';
-  let text = readFileSync(path, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
-
-  // An unterminated `<!--` matches nothing, and the whole owner-facing block
-  // sails through into the prompt — the exact pre-existing defect, restored by
-  // deleting one `-->`. Cutting from the opener is the fail-safe direction:
-  // losing authored text is recoverable, shipping scaffolding as identity is
-  // what this function exists to stop. (Nested comments leave a stray `-->`,
-  // handled by the same cut.)
-  const orphan = text.indexOf('<!--');
-  if (orphan !== -1) text = text.slice(0, orphan);
-
-  const lines = text.split('\n');
-  const kept: string[] = [];
-  let fenced = false;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    if (/^\s*```/.test(line)) fenced = !fenced;
-
-    const heading = !fenced && /^(#{2,6})\s/.exec(line);
-    if (heading) {
-      const level = heading[1]!.length;
-      // A heading is unfilled only when it has neither direct content nor a
-      // subsection. Stopping at the next heading of *any* level deleted a
-      // parent whose content lived under `###` — and `identity.md` ships
-      // exactly such a heading, so an owner who answered it in subsections
-      // would have lost the question. A `#` opening a line inside a code fence
-      // is not a heading either, which is why the fence is tracked.
-      let j = i + 1;
-      let empty = true;
-      let innerFence = fenced;
-      for (; j < lines.length; j++) {
-        const ahead = lines[j]!;
-        if (/^\s*```/.test(ahead)) innerFence = !innerFence;
-        const aheadHeading = !innerFence && /^(#{1,6})\s/.exec(ahead);
-        if (aheadHeading) {
-          // A deeper heading is content: the section was answered below.
-          if (aheadHeading[1]!.length > level) empty = false;
-          break;
-        }
-        if (ahead.trim() !== '') empty = false;
-      }
-      if (empty) {
-        i = j - 1;
-        continue;
-      }
-    }
-    kept.push(line);
-  }
-
-  return kept
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}

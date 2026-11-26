@@ -550,7 +550,9 @@ export class MemoryStore {
    * already. `muffin memory pin` does not go through this path — it calls
    * `setPinned` directly on an existing row, which is the CLI's own,
    * always-honoured channel: typing at a terminal on the owner's own machine
-   * *is* the trust tier this gate is checking for.
+   * *is* the trust tier this gate is checking for. Pinning a belief that
+   * already exists on a model-originated request goes through
+   * `pinIfEligible`, which applies this same rule to the stored row.
    */
   addFact(input: FactInput): number {
     const pinned =
@@ -580,6 +582,23 @@ export class MemoryStore {
         pinned: pinned ? 1 : 0,
       });
     return Number(info.lastInsertRowid);
+  }
+
+  /**
+   * Pins an *existing* belief under the same gate `addFact` applies to a new
+   * one: owner-tier evidence on the request (`contextTier === 0`), and a row
+   * that is itself owner-tier and `origin = 'said'`. The model-facing path
+   * (`memory_propose` with `standing`, when the proposal merged into a belief
+   * that already existed) goes through here, never through `setPinned`, so
+   * there is still one rule for what a model-originated request may pin.
+   * Returns whether the fact is pinned afterwards.
+   */
+  pinIfEligible(tenantId: string, factId: number, contextTier: number): boolean {
+    const fact = this.factById(tenantId, factId);
+    if (fact === null || fact.expiredAt !== null) return false;
+    if (fact.pinned === 1) return true;
+    if (contextTier !== 0 || fact.trustTier !== 0 || fact.origin !== 'said') return false;
+    return this.setPinned(tenantId, factId, true);
   }
 
   /**
