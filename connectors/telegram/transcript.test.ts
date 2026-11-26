@@ -393,7 +393,8 @@ describe('approval messages', () => {
     ]);
     const resolved = visibleText(calls.filter(isEdit).at(-1));
     expect(resolved).toContain(request.resource);
-    expect(resolved).toContain('sys.shell.write: consentito');
+    expect(resolved).toContain('comando: consentito');
+    expect(resolved).not.toContain('sys.shell');
 
     const partial = 'Ecco la risposta in arrivo';
     t.report(toolStart);
@@ -416,7 +417,8 @@ describe('approval messages', () => {
     });
     for (const approval of [handoff?.approvals.join('\n'), handoff?.approvalHtml]) {
       expect(approval).toContain('echo ciao');
-      expect(approval).toContain('sys.shell.write: consentito');
+      expect(approval).toContain('comando: consentito');
+      expect(approval).not.toContain('sys.shell');
       expect(approval).not.toContain(partial);
       expect(approval).not.toContain('sto preparando il contesto');
       expect(approval).not.toContain(toolArgs.command);
@@ -466,7 +468,8 @@ describe('approval messages', () => {
       expect(removeKeyboard(calls)).toEqual([
         { method: 'editMessageReplyMarkup', messageId, keyboard: [] },
       ]);
-      expect(visibleText(calls.filter(isEdit).at(-1))).toContain('sys.shell.write: rifiutato');
+      expect(visibleText(calls.filter(isEdit).at(-1))).toContain('comando: rifiutato');
+      expect(visibleText(calls.filter(isEdit).at(-1))).not.toContain('sys.shell');
       await t.stop();
       expect(calls.filter(isSend)).toHaveLength(1);
     },

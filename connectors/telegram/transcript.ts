@@ -1,4 +1,5 @@
 import type { ApprovalRequest, TurnEvent } from '../../agent/loop.js';
+import { resolutionLine } from '../../core/approvals/card.js';
 import type { Negotiation } from '../../core/surface/types.js';
 import { type TelegramApiLike, TelegramError } from './api.js';
 import { askHtml, askKeyboard, askPlain } from './approval.js';
@@ -933,7 +934,7 @@ export function startTranscript(
         // nel passo: il Processo è dove la domanda si ripiega, e sostituirla
         // con la sola parola «consentito» perderebbe l'unica traccia visibile
         // di cosa è stato approvato.
-        const resolved = `${ask.capability}: ${allowed ? 'consentito' : 'rifiutato'}`;
+        const resolved = resolutionLine(ask.capability, allowed);
         step.line = escapeHtml(`${step.plain}\n${resolved}`);
         step.plain = `${step.plain}\n${resolved}`;
         scheduleSoon();

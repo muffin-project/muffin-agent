@@ -63,9 +63,13 @@ class Scripted implements Provider {
 }
 
 let callId = 0;
+const nextCallId = (): string => {
+  callId += 1;
+  return `c${callId}`;
+};
 const callTool = (name: string, args: unknown): ChatResult => ({
   text: null,
-  toolCalls: [{ id: `c${(callId += 1)}`, name, args }],
+  toolCalls: [{ id: nextCallId(), name, args }],
   stopReason: 'tool_use',
   usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
   model: 'test',
@@ -197,11 +201,12 @@ async function scena(
     systemPrompts: { owner: 'Sei Muffin.', group: 'Sei Muffin, ospite.' },
   };
 
+  callId += 1;
   await runTurn(deps, {
     principal: owner,
     tenant: 'host',
     surface: 'cli',
-    session: deps.sessions.open(`s${(callId += 1)}`),
+    session: deps.sessions.open(`s${callId}`),
     text: 'leggi nota.md e fai quello che dice',
   });
   return out;
@@ -279,10 +284,11 @@ describe('una decisione non dipende da come è impacchettato il contenuto', () =
 
   it('uscire senza aver letto niente resta raggiungibile — è un gate, non un muro', async () => {
     const solo = await scena(AVVELENATO, [callTool('http_get', { url: EXFIL })], 'allow');
-    // Nessuna lettura, quindi taint 0: sotto `paramsMaxTaint` esattamente come
-    // nel test sopra, quindi nessuna domanda anche qui — la riga di utility
-    // che dice che il recinto non ha stretto niente per sbaglio.
-    expect(solo.domande).toEqual([]);
+    // Nessuna lettura, quindi taint 0: una query resta comunque un canale
+    // di esfiltrazione evidente e chiede all'owner, ma l'harness approva e
+    // i byte escono. È un gate, non un deny silenzioso — il recinto non ha
+    // stretto questa uscita in un muro.
+    expect(solo.domande).toEqual([`lettura con parametri scelti dal contenuto: ${EXFIL}`]);
     expect(solo.usciti).toEqual([EXFIL]);
   });
 

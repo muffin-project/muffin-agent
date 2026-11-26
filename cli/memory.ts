@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { loadConfig, paths } from '../core/config/config.js';
@@ -13,8 +14,14 @@ import {
 } from '../core/memory/maintenance.js';
 import { describeProvenance, factLine } from '../core/memory/provenance.js';
 import { EVERY_INSTANT, recall } from '../core/memory/recall.js';
+import {
+  applyRepairTaint,
+  formatRepairTaintReport,
+  previewRepairTaint,
+} from '../core/memory/repair-taint.js';
 import { type Fact, MemoryStore } from '../core/memory/store.js';
 import { quantiNonIndicizzati } from '../core/memory/vectors.js';
+import { displayInHome } from './home-display.js';
 
 /**
  * `muffin memory` — reading the memory without asking the agent about it.
@@ -53,6 +60,11 @@ export const MEMORY_USAGE = `usage:
   muffin memory check [--json]         invarianti del grafo (nessun modello, nessuna rete)
   muffin memory pin <fact-id>          il fatto entra in OGNI turno, senza dipendere dalla somiglianza
   muffin memory unpin <fact-id>        torna alla sola pesca per somiglianza
+  muffin memory repair-taint [--apply] ricalcola il trust_tier degli episodi agente
+                                  falsamente timbrati a 3 (turni owner su un
+                                  canale fidato, senza tool di ingress non
+                                  fidato). Senza --apply è una preview a
+                                  zero scritture; --apply fa prima un backup
 `;
 
 function openStore(home: string): { db: DatabaseCtor.Database; store: MemoryStore } {
@@ -710,5 +722,39 @@ function tableCount(db: DatabaseCtor.Database, table: string): number | null {
     return (db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Conservative one-time repair of agent episodes stamped at taint 3 only
+ * because the recall ratchet raised every later reply. Preview by default;
+ * `--apply` writes after an automatic backup of muffin.db and sessions/.
+ */
+export function cmdMemoryRepairTaint(home: string, apply: boolean): number {
+  const { db } = openStore(home);
+  try {
+    const sessionsDir = paths(home).sessions;
+    if (!apply) {
+      const report = previewRepairTaint(db, sessionsDir);
+      process.stdout.write(`${formatRepairTaintReport(report, false)}\n`);
+      if (report.candidates.length > 0 || report.sessionRows > 0) {
+        process.stdout.write(
+          `usa --apply per scrivere (verrà creato un backup automatico in ${displayInHome(home, 'backups')})\n`,
+        );
+      }
+      return 0;
+    }
+    const result = applyRepairTaint(db, {
+      backupDir: join(home, 'backups'),
+      sessionsDir,
+    });
+    process.stdout.write(`${formatRepairTaintReport(result, true)}\n`);
+    process.stdout.write(`backup: ${result.backupDb}\n`);
+    if (result.backupSessions !== null) {
+      process.stdout.write(`backup sessioni: ${result.backupSessions}\n`);
+    }
+    return 0;
+  } finally {
+    db.close();
   }
 }

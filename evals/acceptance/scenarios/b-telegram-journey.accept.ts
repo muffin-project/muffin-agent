@@ -542,8 +542,8 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
             .find((c) => c.method === 'sendMessage' && c.payload['reply_markup'] !== undefined);
           if (!askCall) throw new Error('nessun messaggio ASK con tastiera trovato');
           const askText = testoDi(askCall);
-          if (!askText.includes('sys.shell.write'))
-            throw new Error(`l'ASK non nomina la capability:\n${askText}`);
+          if (!askText.includes('Vuoi che esegua questo comando?'))
+            throw new Error(`l'ASK non chiede di eseguire il comando:\n${askText}`);
           if (!askText.includes('command: echo ciao') || !askText.includes('cwd: .')) {
             throw new Error(`l'ASK non mostra comando e cwd insieme:\n${askText}`);
           }
@@ -554,8 +554,12 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
             throw new Error(`l'ASK non mostra cosa fa il comando:\n${askText}`);
           if (askText.includes('description:'))
             throw new Error(`la description è finita fra gli argomenti:\n${askText}`);
-          if (!askText.includes('taint 2'))
-            throw new Error(`l'ASK non mostra il taint del turno:\n${askText}`);
+          if (
+            /taint/i.test(askText) ||
+            askText.includes('sys.shell') ||
+            askText.includes('livello 3')
+          )
+            throw new Error(`l'ASK mostra gergo del kernel:\n${askText}`);
           const askMessageId = askCall.messageId;
           if (askMessageId === undefined)
             throw new Error('il messaggio ASK non ha un id registrato');
@@ -754,8 +758,11 @@ describe('acceptance · D12 · ASK su Telegram, dai pulsanti alla riga consumata
           if (processText.includes('aspetto la tua approvazione')) {
             throw new Error(`la riga di attesa resta congelata a turno concluso:\n${processText}`);
           }
-          if (!processText.includes('sys.shell.write: consentito')) {
+          if (!processText.includes('comando: consentito')) {
             throw new Error(`il verdetto non compare, risolto, nel processo:\n${processText}`);
+          }
+          if (processText.includes('sys.shell')) {
+            throw new Error(`il processo mostra ancora l'id della capability:\n${processText}`);
           }
           expect(processText).toContain('echo ciao');
           expect(processText).not.toContain('eseguo un comando:');

@@ -886,7 +886,7 @@ describe('#746 — un turno ripreso che sospende di nuovo resta approvabile', ()
     const scadenza = Date.now() + 3_000;
     const risolto = (): boolean =>
       h.modifiche.some(
-        (m) => m.messageId === askMessageId && m.html.includes('sys.shell.write: consentito'),
+        (m) => m.messageId === askMessageId && m.html.includes('comando: consentito'),
       );
     while (!risolto() && Date.now() < scadenza) await new Promise((r) => setTimeout(r, 50));
     expect(risolto()).toBe(true);
@@ -1170,7 +1170,7 @@ describe('#745 review — stessa capability su risorse diverse', () => {
 
     await new Promise((r) => setTimeout(r, 1_800));
     const edit = h.modifiche.filter((m) => m.messageId === messaggio).at(-1)!;
-    expect(edit.html).toContain('sys.shell.write: consentito');
+    expect(edit.html).toContain('comando: consentito');
     await stream?.stop?.();
   });
 });

@@ -1,6 +1,6 @@
 import { createDecide } from '../../core/policy/decide.js';
-import { POLICY_FLOOR, type PolicyMatrix } from '../../core/policy/matrix.js';
 import { DOORS } from '../../core/policy/doors.js';
+import { POLICY_FLOOR, type PolicyMatrix } from '../../core/policy/matrix.js';
 import type {
   CapabilityDecl,
   CapabilityId,
@@ -204,7 +204,11 @@ export function makeTupleHarness(options: TupleHarnessOptions) {
     // questi, e non deve poterli allentare.
     const structural = decide(request(0));
     if (structural.effect === 'deny') {
-      return { decision: structural, because: `gate non-taint del kernel: ${structural.code} · ${nome}`, tuple };
+      return {
+        decision: structural,
+        because: `gate non-taint del kernel: ${structural.code} · ${nome}`,
+        tuple,
+      };
     }
 
     // R1 — flusso non ricostruibile → **A verbatim**. Il fallback conservativo
@@ -239,7 +243,11 @@ export function makeTupleHarness(options: TupleHarnessOptions) {
     // destinatario nuovo non è mai non presidiato, nemmeno se l'ha scelto
     // l'owner in un contesto pulito.
     if (row === 'outward') {
-      return { decision: ask(`nuovo destinatario · ${nome}`), because: `outward è sempre presidiato · ${nome}`, tuple };
+      return {
+        decision: ask(`nuovo destinatario · ${nome}`),
+        because: `outward è sempre presidiato · ${nome}`,
+        tuple,
+      };
     }
 
     // R4 — le due righe che il threat model stampa ALLOW·ALLOW·ALLOW restano
@@ -248,27 +256,54 @@ export function makeTupleHarness(options: TupleHarnessOptions) {
     // la risposta e l'episodio restano i sink non sorvegliati che la §1.3
     // misura, e la eval lo registra invece di nasconderlo.
     if (sink === 'origin-channel' || sink === 'own-tenant-memory') {
-      return { decision: structural, because: `sink verso l'owner/il tenant, non esce · ${nome}`, tuple };
+      return {
+        decision: structural,
+        because: `sink verso l'owner/il tenant, non esce · ${nome}`,
+        tuple,
+      };
     }
 
     // R5 — effetto scelto dal contenuto su un sink che non esce: mai non
     // presidiato. Non `deny`, perché il byte non lascia la casa e il journal
     // esiste; non `draft`/`allow`, perché è il contenuto ad aver scelto.
     if (flow.chosenBy === 'content') {
-      return { decision: ask(`azione scelta dal contenuto · ${nome}`), because: `azione scelta dal contenuto · ${nome}`, tuple };
+      return {
+        decision: ask(`azione scelta dal contenuto · ${nome}`),
+        because: `azione scelta dal contenuto · ${nome}`,
+        tuple,
+      };
     }
 
     // R6 — irreversibile scelto dall'owner: ASK. La proprietà 7 di nuovo, e la
     // riga che tiene `sys.shell` esattamente dov'è oggi.
     if (decl.reversible === 'no' && decl.risk !== 'low') {
-      return { decision: ask(`irreversibile · ${nome}`), because: `irreversibile, anche se scelto dall'owner · ${nome}`, tuple };
+      return {
+        decision: ask(`irreversibile · ${nome}`),
+        because: `irreversibile, anche se scelto dall'owner · ${nome}`,
+        tuple,
+      };
     }
 
-    // R7 — risorsa scelta dall'owner, sink che non esce, effetto reversibile:
-    // la classe di rischio decide, cioè `draft` con journal e undo per
-    // `fs.write`. È **tutta** l'utilità che B compra rispetto ad A, ed è il
-    // controesempio canonico dell'owner: «leggi la doc di Vitest, poi lancia i
-    // test» — la decisione è arrivata prima della pagina.
-    return { decision: structural, because: `risorsa scelta dall'owner, sink locale, reversibile · ${nome}`, tuple };
+    // R7 — risorsa scelta dall'owner, effetto reversibile. È **tutta**
+    // l'utilità che B compra rispetto ad A, ed è il controesempio canonico
+    // dell'owner: «leggi la doc di Vitest, poi lancia i test» — la decisione
+    // è arrivata prima della pagina.
+    //
+    // Dal 26/11 il kernel chiede anche a taint 0 per query/userinfo/fragment
+    // non quoted. B ha il campo che A non ha: una destinazione nominata
+    // dall'owner *è* la citazione, quindi il membro «utility» della coppia
+    // f1/f2 resta allow.
+    if (structural.effect === 'ask' && flow.chosenBy === 'owner') {
+      return {
+        decision: { effect: 'allow' },
+        because: `risorsa scelta dall'owner (il kernel chiedeva la citazione) · ${nome}`,
+        tuple,
+      };
+    }
+    return {
+      decision: structural,
+      because: `risorsa scelta dall'owner, sink locale, reversibile · ${nome}`,
+      tuple,
+    };
   };
 }

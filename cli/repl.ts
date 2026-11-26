@@ -13,6 +13,7 @@ import { runTurn, type TurnDelta, type TurnEvent, type TurnResult } from '../age
 import { attachMcp, buildRuntime, type Runtime } from '../agent/runtime.js';
 import { makeJobRunner } from '../agent/scheduler-run.js';
 import { toolLine, toolPhrase } from '../agent/tool-phrase.js';
+import { allowLabelFor, renderApprovalCardPlain, resolutionLine } from '../core/approvals/card.js';
 import { costUsd } from '../core/budget/pricing.js';
 import { paths } from '../core/config/config.js';
 import { mintExecutionId, runViaGateway, UnknownOutcomeError } from '../core/gateway/forward.js';
@@ -769,39 +770,26 @@ export async function runRepl(
    * due domande diverse.
    */
   const chiediApprovazione = async (request: ApprovalRequest): Promise<'allow' | 'deny'> => {
-    // Il testo del kernel, non una parafrasi, ed è la riga che ADR-0074 punto 2
-    // chiede: *«l'ASK dice cosa non si può annullare»*, non «serve la tua
-    // approvazione per sys.shell». Fino a qui il terminale stampava solo il
-    // nome della capability e buttava via `request.prompt` — cioè proprio la
-    // metà che dice perché la domanda esiste. Telegram lo mostrava già
-    // (`cli/surface.ts`, `approvatoreTelegram`): era il terminale l'unica
-    // superficie che chiedeva senza dire di cosa.
-    status.line(`  ⏸ ${request.prompt}`);
-    // The model's own account first, the exact bytes after: one reads the
-    // sentence to know whether to look, and the command to decide. Never
-    // the sentence alone — a paraphrase is where a request sounds smaller.
-    if (request.description) status.line(`     cosa fa: ${request.description}`);
-    if (request.resource) status.line(`     su: ${request.resource}`);
-    // Taint 0 is the quiet default; anything above it means untrusted content
-    // already steered this turn, and that changes the answer more often than
-    // the capability name does.
-    if (request.taint > 0) {
-      const label = ['', 'contatto noto', 'gruppo/sconosciuto', 'contenuto esterno (web o tool)'][
-        request.taint
-      ];
-      status.line(`     contesto: turno a taint ${request.taint}${label ? ` — ${label}` : ''}`);
+    // Stessa card di Telegram, dal formatore condiviso: cosa, perché (quando
+    // c'è una ragione vera) e l'oggetto intero. Il gergo del kernel non finisce
+    // sul terminale. ADR-0074 punto 2 resta: l'ASK dice se il comando non si
+    // può annullare, non «approvi sys.shell?».
+    const card = renderApprovalCardPlain(request);
+    for (const [i, line] of card
+      .split('\n')
+      .filter((riga) => riga !== '')
+      .entries()) {
+      status.line(i === 0 ? `  ⏸ ${line.replace(/^⚠\s*/, '')}` : `     ${line}`);
     }
     // B11: la stessa riga di prompt, ma su stderr (`TextzoneDeps.promptOutput`)
     // — mai su stdout, che qui porterebbe solo i byte della risposta del turno.
-    const risposta = await textzone.readLine(`approvi "${request.capability}"? [s/N] `);
+    const risposta = await textzone.readLine(`${allowLabelFor(request.capability)}? [s/N] `);
     // Ctrl+C qui è un no, non un'attesa. Prima non lo era: il gestore SIGINT
     // annullava il turno e questa domanda restava appesa, quindi il terminale
     // continuava a chiedere l'approvazione di una cosa già annullata.
     const answer = risposta.tipo === 'testo' ? risposta.testo.trim().toLowerCase() : '';
     const allowed = answer === 's' || answer === 'si' || answer === 'sì' || answer === 'y';
-    status.line(
-      `  ${allowed ? '✓' : '✗'} ${request.capability}: ${allowed ? 'consentito' : 'rifiutato'}`,
-    );
+    status.line(`  ${allowed ? '✓' : '✗'} ${resolutionLine(request.capability, allowed)}`);
     return allowed ? 'allow' : 'deny';
   };
   runtime.approvers.set('cli', chiediApprovazione);

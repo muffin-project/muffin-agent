@@ -177,4 +177,31 @@ describe('capability exposure projection', () => {
       CAPABILITY_SEARCH_TOOL_NAME,
     );
   });
+
+  it('keeps web_search in the core when it is in the eligible catalogue', () => {
+    const eligible = [
+      tool('fs_read'),
+      tool('fs_write'),
+      tool('fs_list'),
+      tool('fs_search'),
+      tool('memory_search'),
+      tool('skill_read'),
+      tool('web_search'),
+      tool('http_get'),
+      tool('process_list'),
+      tool('todo'),
+      tool('sys_inspect'),
+      discovery,
+    ];
+    const projection = createCapabilityExposure({
+      eligible,
+      discoveryTool: discovery,
+    });
+
+    expect(projection.pressured).toBe(true);
+    expect(projection.exposed.map((entry) => entry.spec.name)).toEqual(
+      expect.arrayContaining(['web_search']),
+    );
+    expect(projection.exposed.map((entry) => entry.spec.name)).not.toContain('http_get');
+  });
 });

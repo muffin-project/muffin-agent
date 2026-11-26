@@ -4,22 +4,90 @@ import { POLICY_FLOOR } from './matrix.js';
 import type { CapabilityDecl, CapabilityId, Principal } from './types.js';
 
 const decls: CapabilityDecl[] = [
-  { id: 'memory.read', effect: 'context', risk: 'low', reversible: 'yes', rerunnable: true, resourceKind: 'tenant', policyArgs: [], hostOnly: false },
+  {
+    id: 'memory.read',
+    effect: 'context',
+    risk: 'low',
+    reversible: 'yes',
+    rerunnable: true,
+    resourceKind: 'tenant',
+    policyArgs: [],
+    hostOnly: false,
+  },
   // era il default della classe: la riga 'context' non lo eredita più
-  { id: 'fs.write', effect: 'context', maxTaint: 1, risk: 'medium', reversible: 'undoable', rerunnable: true, resourceKind: 'path', policyArgs: ['path'], hostOnly: true },
+  {
+    id: 'fs.write',
+    effect: 'context',
+    maxTaint: 1,
+    risk: 'medium',
+    reversible: 'undoable',
+    rerunnable: true,
+    resourceKind: 'path',
+    policyArgs: ['path'],
+    hostOnly: true,
+  },
   // era il default della classe: la riga 'context' non lo eredita più
   // effect: 'host', la riga vera della dichiarazione spedita
   // (agent/tools/shell.ts). Stava su 'context' con un maxTaint appuntato a
   // mano, che replicava il vecchio soffitto ma NON la riga: da ADR-0074 e' la
   // riga a dire se l'irreversibile chiede, quindi un finto su 'context'
   // proverebbe una capability che non esiste.
-  { id: 'sys.shell', effect: 'host', risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: ['command'], hostOnly: true },
-  { id: 'sys.http', effect: 'context', risk: 'medium', reversible: 'yes', rerunnable: true, maxTaint: 3, resourceKind: 'url', policyArgs: ['url'], hostOnly: false },
-  { id: 'sys.search', effect: 'context', risk: 'medium', reversible: 'yes', rerunnable: true, maxTaint: 3, resourceKind: 'query', policyArgs: ['query'], hostOnly: true },
+  {
+    id: 'sys.shell',
+    effect: 'host',
+    risk: 'high',
+    reversible: 'no',
+    rerunnable: false,
+    resourceKind: 'none',
+    policyArgs: ['command'],
+    hostOnly: true,
+  },
+  {
+    id: 'sys.http',
+    effect: 'context',
+    risk: 'medium',
+    reversible: 'yes',
+    rerunnable: true,
+    maxTaint: 3,
+    resourceKind: 'url',
+    policyArgs: ['url'],
+    hostOnly: false,
+  },
+  {
+    id: 'sys.search',
+    effect: 'context',
+    risk: 'medium',
+    reversible: 'yes',
+    rerunnable: true,
+    maxTaint: 3,
+    resourceKind: 'query',
+    policyArgs: ['query'],
+    hostOnly: true,
+  },
   // era il default della classe: la riga 'context' non lo eredita più
-  { id: 'outward.send', effect: 'context', maxTaint: 1, risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'url', policyArgs: ['to'], hostOnly: false },
+  {
+    id: 'outward.send',
+    effect: 'context',
+    maxTaint: 1,
+    risk: 'high',
+    reversible: 'no',
+    rerunnable: false,
+    resourceKind: 'url',
+    policyArgs: ['to'],
+    hostOnly: false,
+  },
   // era il default della classe: la riga 'context' non lo eredita più
-  { id: 'rot.write', effect: 'context', maxTaint: 1, risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'path', policyArgs: [], hostOnly: true },
+  {
+    id: 'rot.write',
+    effect: 'context',
+    maxTaint: 1,
+    risk: 'high',
+    reversible: 'no',
+    rerunnable: false,
+    resourceKind: 'path',
+    policyArgs: [],
+    hostOnly: true,
+  },
 ];
 
 function kernel(overrides: Partial<PolicyContext> = {}) {
@@ -33,7 +101,12 @@ function kernel(overrides: Partial<PolicyContext> = {}) {
 }
 
 const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
-const member: Principal = { kind: 'member', connector: 'telegram', tenantId: 'group:telegram:42', externalId: 'u1' };
+const member: Principal = {
+  kind: 'member',
+  connector: 'telegram',
+  tenantId: 'group:telegram:42',
+  externalId: 'u1',
+};
 const scheduler: Principal = { kind: 'system', source: 'scheduler' };
 
 const req = (p: Principal, tenant: string, capability: CapabilityId, taint: 0 | 1 | 2 | 3) => ({
@@ -61,9 +134,12 @@ describe('policy kernel', () => {
     // precondition.
     expect(
       decide({
-        principal: owner, tenant: 'host', capability: 'sys.http',
+        principal: owner,
+        tenant: 'host',
+        capability: 'sys.http',
         resource: { kind: 'url', value: 'https://api.example.com/v1' },
-        args: {}, taint: 3,
+        args: {},
+        taint: 3,
       }).effect,
     ).not.toBe('deny');
     // Narrowed: fs.write is medium and declares nothing, so 1 is the ceiling.
@@ -85,12 +161,28 @@ describe('policy kernel', () => {
       safeMode: true,
     });
     const owner: Principal = { kind: 'owner', connector: 'cli', externalId: 'local' };
-    expect(degraded({ principal: owner, tenant: 'host', capability: 'fs.write', resource: { kind: 'none' }, args: {}, taint: 0 }))
-      .toMatchObject({ effect: 'deny', code: 'safe_mode' });
+    expect(
+      degraded({
+        principal: owner,
+        tenant: 'host',
+        capability: 'fs.write',
+        resource: { kind: 'none' },
+        args: {},
+        taint: 0,
+      }),
+    ).toMatchObject({ effect: 'deny', code: 'safe_mode' });
     // Reading still works: a degraded agent that cannot answer at all is one
     // you turn off, and then the divergence goes uninvestigated.
-    expect(degraded({ principal: owner, tenant: 'host', capability: 'memory.read', resource: { kind: 'tenant', value: 'host' }, args: {}, taint: 0 }))
-      .toMatchObject({ effect: 'allow' });
+    expect(
+      degraded({
+        principal: owner,
+        tenant: 'host',
+        capability: 'memory.read',
+        resource: { kind: 'tenant', value: 'host' },
+        args: {},
+        taint: 0,
+      }),
+    ).toMatchObject({ effect: 'allow' });
   });
 
   it('safe mode remains a deny floor across every declared risky capability, principal, and taint', () => {
@@ -104,7 +196,14 @@ describe('policy kernel', () => {
       for (const [principal, tenant] of principals) {
         for (const taint of [0, 1, 2, 3] as const) {
           expect(
-            degraded({ principal, tenant, capability: capability.id, resource: { kind: 'none' }, args: {}, taint }),
+            degraded({
+              principal,
+              tenant,
+              capability: capability.id,
+              resource: { kind: 'none' },
+              args: {},
+              taint,
+            }),
             `${capability.id}/${principal.kind}/taint-${taint}`,
           ).toMatchObject({ effect: 'deny', code: 'safe_mode' });
         }
@@ -209,9 +308,29 @@ describe('policy kernel', () => {
         [
           ...decls,
           // era il default della classe: la riga 'context' non lo eredita più
-          { id: 'outward.publish', effect: 'context', maxTaint: 1, risk: 'high', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: false },
+          {
+            id: 'outward.publish',
+            effect: 'context',
+            maxTaint: 1,
+            risk: 'high',
+            reversible: 'no',
+            rerunnable: false,
+            resourceKind: 'none',
+            policyArgs: [],
+            hostOnly: false,
+          },
           // era il default della classe: la riga 'context' non lo eredita più
-          { id: 'outward.email.send', effect: 'context', maxTaint: 1, risk: 'medium', reversible: 'no', rerunnable: false, resourceKind: 'none', policyArgs: [], hostOnly: false },
+          {
+            id: 'outward.email.send',
+            effect: 'context',
+            maxTaint: 1,
+            risk: 'medium',
+            reversible: 'no',
+            rerunnable: false,
+            resourceKind: 'none',
+            policyArgs: [],
+            hostOnly: false,
+          },
         ].map((d) => [d.id, d as CapabilityDecl]),
       ),
       matrix: POLICY_FLOOR,
@@ -221,7 +340,10 @@ describe('policy kernel', () => {
 
     for (const capability of ['outward.send', 'outward.publish', 'outward.email.send']) {
       for (const taint of [0, 1, 2, 3] as const) {
-        expect(withSiblings(req(scheduler, 'host', capability, taint)), `${capability} @ taint ${taint}`).toMatchObject({
+        expect(
+          withSiblings(req(scheduler, 'host', capability, taint)),
+          `${capability} @ taint ${taint}`,
+        ).toMatchObject({
           effect: 'deny',
           code: 'principal_forbidden',
         });
@@ -246,13 +368,20 @@ describe('policy kernel', () => {
    * alla macchina. Un `rm -rf` non diventa disfabile perche' la radice di
    * fiducia appartiene a un altro utente UNIX.
    */
-  it('un comando che non si puo\' annullare chiede anche in hardened, anche a taint 0', () => {
-    expect(kernel({ hardened: true })(req(owner, 'host', 'sys.shell', 0))).toMatchObject({ effect: 'ask' });
-    expect(kernel({ hardened: false })(req(owner, 'host', 'sys.shell', 0))).toMatchObject({ effect: 'ask' });
+  it("un comando che non si puo' annullare chiede anche in hardened, anche a taint 0", () => {
+    expect(kernel({ hardened: true })(req(owner, 'host', 'sys.shell', 0))).toMatchObject({
+      effect: 'ask',
+    });
+    expect(kernel({ hardened: false })(req(owner, 'host', 'sys.shell', 0))).toMatchObject({
+      effect: 'ask',
+    });
     // E la risposta e' la stessa a ogni taint sotto il soffitto della riga
     // `host`: il taint non e' piu' la ragione, quindi non e' piu' una differenza.
     for (const taint of [0, 1, 2] as const) {
-      expect(kernel({ hardened: true })(req(owner, 'host', 'sys.shell', taint)), `taint ${taint}`).toMatchObject({
+      expect(
+        kernel({ hardened: true })(req(owner, 'host', 'sys.shell', taint)),
+        `taint ${taint}`,
+      ).toMatchObject({
         effect: 'ask',
       });
     }
@@ -286,7 +415,9 @@ describe('policy kernel', () => {
       effect: 'deny',
       code: 'budget_exhausted',
     });
-    expect(perTenant(req(owner, 'host', 'fs.write', 0))).not.toMatchObject({ code: 'budget_exhausted' });
+    expect(perTenant(req(owner, 'host', 'fs.write', 0))).not.toMatchObject({
+      code: 'budget_exhausted',
+    });
     expect(seen).toContain('group:telegram:42');
     expect(seen).toContain('host');
   });
@@ -361,9 +492,17 @@ describe('egress branch — the allowlist in the root of trust speaks for URLs',
     // outcome alone cannot tell the two apart. What the branch buys is that a
     // caller which forgot to supply the declared resource is told exactly that,
     // instead of being sent to look at a URL that was never the problem.
-    for (const resource of [{ kind: 'none' } as const, { kind: 'path', value: '/tmp/x' } as const]) {
+    for (const resource of [
+      { kind: 'none' } as const,
+      { kind: 'path', value: '/tmp/x' } as const,
+    ]) {
       const d = withList()({
-        principal: owner, tenant: 'host', capability: 'sys.http', resource, args: {}, taint: 0,
+        principal: owner,
+        tenant: 'host',
+        capability: 'sys.http',
+        resource,
+        args: {},
+        taint: 0,
       });
       expect(d).toMatchObject({ effect: 'deny', code: 'resource_denied' });
       expect(d.effect === 'deny' && d.detail).toMatch(/declares a url resource but received/);
@@ -401,33 +540,76 @@ describe('params gate — model-chosen bytes above a ceiling, whichever tool car
   });
   const withList = () => kernel({ egressAllowed: (host) => host === 'allowed.example.com' });
 
-  it('http_get: an allowlisted host with a query string is fine at taint <= paramsMaxTaint (ships 1)', () => {
-    expect(withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=hello', 1))).toMatchObject({
-      effect: 'allow',
-    });
+  it('http_get: a query, userinfo or fragment always asks the owner unless quoted, even at taint 0', () => {
+    expect(
+      withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=hello', 0)).effect,
+    ).toBe('ask');
+    expect(
+      withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=hello', 1)).effect,
+    ).toBe('ask');
     // Lane #624 + #641: tier 2 is attacker-influenced disk content, not the
-    // owner's own words — a composed query at taint 2 asks the owner and
-    // shows the whole URL (reversing the 2026-08-17 "Ships 2" decision).
-    expect(withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=hello', 2)).effect).toBe(
-      'ask',
-    );
+    // owner's own words — a composed query at taint 2 still asks and shows
+    // the whole URL.
+    expect(
+      withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=hello', 2)).effect,
+    ).toBe('ask');
+    // The quoted exception is unchanged: a URL the owner pasted, or copied
+    // from web_search, passes at any taint.
+    expect(
+      withList()({
+        ...paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=hello', 3),
+        quoted: true,
+      }),
+    ).toMatchObject({ effect: 'allow' });
+    expect(
+      withList()(
+        paramsUrlReq(member, 'group:telegram:42', 'https://allowed.example.com/?q=hello', 0),
+      ),
+    ).toMatchObject({ effect: 'deny', code: 'resource_denied' });
+  });
+
+  it('http_get: a clean public path without query is open reading at taint <= paramsMaxTaint', () => {
+    // The Node.js case: a public GET to a real path, no untrusted ingress.
+    expect(
+      withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/dist/index.json', 0)),
+    ).toMatchObject({ effect: 'allow' });
+    expect(
+      withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/dist/index.json', 1)),
+    ).toMatchObject({ effect: 'allow' });
+    expect(
+      withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/dist/index.json', 2))
+        .effect,
+    ).toBe('ask');
   });
 
   it('http_get: a composed query at taint 2 shows the whole URL in the ask', () => {
-    const d = withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=MUFFIN-SECRET', 2));
+    const d = withList()(
+      paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=MUFFIN-SECRET', 2),
+    );
     expect(d.effect).toBe('ask');
-    if (d.effect === 'ask') expect(d.ask.prompt).toContain('https://allowed.example.com/?q=MUFFIN-SECRET');
+    if (d.effect === 'ask')
+      expect(d.ask.prompt).toContain('https://allowed.example.com/?q=MUFFIN-SECRET');
   });
 
   it('http_get: the same URL past the ceiling asks the owner and shows the whole URL', () => {
-    const d = withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=MUFFIN-SECRET', 3));
+    const d = withList()(
+      paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=MUFFIN-SECRET', 3),
+    );
     expect(d.effect).toBe('ask');
-    if (d.effect === 'ask') expect(d.ask.prompt).toContain('https://allowed.example.com/?q=MUFFIN-SECRET');
+    if (d.effect === 'ask')
+      expect(d.ask.prompt).toContain('https://allowed.example.com/?q=MUFFIN-SECRET');
   });
 
   it('http_get: the same URL past the ceiling refuses anyone but the owner outright', () => {
     expect(
-      withList()(paramsUrlReq(member, 'group:telegram:42', 'https://allowed.example.com/?q=MUFFIN-SECRET', 3)),
+      withList()(
+        paramsUrlReq(
+          member,
+          'group:telegram:42',
+          'https://allowed.example.com/?q=MUFFIN-SECRET',
+          3,
+        ),
+      ),
     ).toMatchObject({ effect: 'deny', code: 'resource_denied' });
   });
 
@@ -466,26 +648,34 @@ describe('params gate — model-chosen bytes above a ceiling, whichever tool car
   });
 
   it('http_get: an allowlisted host with NO params is unaffected by the ceiling, at any taint', () => {
-    expect(withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/', 3))).toMatchObject({
+    expect(
+      withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/', 3)),
+    ).toMatchObject({
       effect: 'allow',
     });
-    expect(withList()(paramsUrlReq(member, 'group:telegram:42', 'https://allowed.example.com/', 2))).toMatchObject({
+    expect(
+      withList()(paramsUrlReq(member, 'group:telegram:42', 'https://allowed.example.com/', 2)),
+    ).toMatchObject({
       effect: 'allow',
     });
   });
 
   it('http_get: a fragment alone counts as params too', () => {
-    const d = withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/#MUFFIN-SECRET', 3));
+    const d = withList()(
+      paramsUrlReq(owner, 'host', 'https://allowed.example.com/#MUFFIN-SECRET', 3),
+    );
     expect(d.effect).toBe('ask');
   });
 
-  it('sys.search: la ricerca non chiede a nessun taint — `searchMaxTaint` e\' 3 (ADR-0072)', () => {
+  it("sys.search: la ricerca non chiede a nessun taint — `searchMaxTaint` e' 3 (ADR-0072)", () => {
     for (const taint of [0, 1, 2, 3] as const) {
-      expect(kernel()(queryReq(owner, 'host', 'previsioni domani', taint))).toMatchObject({ effect: 'allow' });
+      expect(kernel()(queryReq(owner, 'host', 'previsioni domani', taint))).toMatchObject({
+        effect: 'allow',
+      });
     }
   });
 
-  it("sys.search: il taint 3 e\' il caso che e\' cambiato — cerca, leggi, cerca ancora", () => {
+  it("sys.search: il taint 3 e' il caso che e' cambiato — cerca, leggi, cerca ancora", () => {
     // Il giro piu\' normale che esista portava il turno a 3 dopo la prima
     // pagina, quindi il *secondo* `web_search` chiedeva sempre. Su un
     // processo headless quell'`ask` e\' un `exit 3`: un'approvazione che
@@ -495,7 +685,7 @@ describe('params gate — model-chosen bytes above a ceiling, whichever tool car
     });
   });
 
-  it('ma il numero e\' ancora un cancello: rimetterlo giu\' lo riaccende', () => {
+  it("ma il numero e' ancora un cancello: rimetterlo giu' lo riaccende", () => {
     // La meta\' che impedisce a questa fetta di essere «il gate e\' stato
     // cancellato»: `searchMaxTaint` e\' una manopola che un `rot/policy.json`
     // sigillato puo\' abbassare, non una riga rimossa.
@@ -505,12 +695,12 @@ describe('params gate — model-chosen bytes above a ceiling, whichever tool car
     if (d.effect === 'ask') expect(d.ask.prompt).toContain('MUFFIN-SECRET-sk-live-9f3a7c21');
   });
 
-  it("e i parametri di un URL restano a 1: sono i due numeri separati da ADR-0072, con il primo abbassato dalla lane #624 + #641", () => {
+  it('e i parametri di un URL restano a 1: sono i due numeri separati da ADR-0072, con il primo abbassato dalla lane #624 + #641', () => {
     // Il confine che regge il rischio: il *dove* di una ricerca e\' una
     // costante allowlisted, quello di un URL lo sceglie il modello.
-    expect(withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/c?q=SEGRETO', 3)).effect).toBe(
-      'ask',
-    );
+    expect(
+      withList()(paramsUrlReq(owner, 'host', 'https://allowed.example.com/c?q=SEGRETO', 3)).effect,
+    ).toBe('ask');
   });
 
   it('sys.search: a group member never reaches the params gate at all — host-only refuses first', () => {
@@ -544,10 +734,20 @@ describe('params gate — model-chosen bytes above a ceiling, whichever tool car
       matrix: { ...POLICY_FLOOR, paramsMaxTaint: 2 },
       egressAllowed: (host) => host === 'allowed.example.com',
     });
-    expect(raised(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=x', 2))).toMatchObject({
+    // A raised path ceiling can still move the *path* ask threshold...
+    expect(
+      raised(paramsUrlReq(owner, 'host', 'https://allowed.example.com/secret', 2)),
+    ).toMatchObject({
       effect: 'allow',
     });
-    expect(raised(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=x', 3)).effect).toBe('ask');
+    expect(
+      raised(paramsUrlReq(owner, 'host', 'https://allowed.example.com/secret', 3)).effect,
+    ).toBe('ask');
+    // ...but a query/userinfo/fragment is always asked, even if the sealed
+    // matrix (direct construction here) tried to raise the ceiling.
+    expect(raised(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=x', 2)).effect).toBe(
+      'ask',
+    );
   });
 
   it('the owner can lower the ceiling from the sealed policy file too', () => {
@@ -555,7 +755,9 @@ describe('params gate — model-chosen bytes above a ceiling, whichever tool car
       matrix: { ...POLICY_FLOOR, paramsMaxTaint: 0 },
       egressAllowed: (host) => host === 'allowed.example.com',
     });
-    expect(lowered(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=x', 1)).effect).toBe('ask');
+    expect(lowered(paramsUrlReq(owner, 'host', 'https://allowed.example.com/?q=x', 1)).effect).toBe(
+      'ask',
+    );
   });
 });
 
@@ -674,7 +876,11 @@ describe("il prompt dell'ask dice cosa non si può annullare — ADR-0074", () =
     policyArgs: [],
     hostOnly: false,
   };
-  const base = { matrix: POLICY_FLOOR, capabilities: new Map([[decl.id, decl]]), budgetExhausted: () => false };
+  const base = {
+    matrix: POLICY_FLOOR,
+    capabilities: new Map([[decl.id, decl]]),
+    budgetExhausted: () => false,
+  };
   const req0 = {
     principal: owner,
     tenant: 'host',

@@ -601,7 +601,7 @@ try {
     const ask = await expectOnWire('nessuna domanda con tastiera', () =>
       calls().find((c) => accepted(c) && isTextSend(c) && buttons(c).length > 0),
     );
-    const allow = buttons(ask).find((b) => b.text === 'Consenti "sys.shell.write"')?.callback_data;
+    const allow = buttons(ask).find((b) => b.text === 'Consenti il comando')?.callback_data;
     const approvalId = allow?.match(/^ok:([0-9a-f]+)$/)?.[1];
     if (
       approvalId === undefined ||

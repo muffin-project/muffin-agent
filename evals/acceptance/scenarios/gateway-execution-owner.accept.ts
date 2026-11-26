@@ -117,12 +117,19 @@ describe('acceptance · #533 · il gateway è l unico execution owner', () => {
             throw new Error(`exit ${run.code} invece di 0:\n${run.out}\n${run.err}`);
           // La domanda è arrivata a *questo* terminale (e il sì è tornato
           // dentro): la riga del prompt `[s/N]` non si stampa su una pipe,
-          // ma il kernel chiede per capability e il verdetto resta.
-          if (!run.err.includes('sys.shell.write')) {
+          // ma la card italiana e il verdetto restano su stderr.
+          if (!run.err.includes('Vuoi che esegua questo comando?')) {
             throw new Error(`la domanda di approvazione non è arrivata al terminale:\n${run.err}`);
           }
-          if (!run.err.includes('consentito')) {
+          if (!run.err.includes('comando: consentito')) {
             throw new Error(`il sì non è stato registrato:\n${run.err}`);
+          }
+          if (
+            /taint/i.test(run.err) ||
+            run.err.includes('sys.shell') ||
+            run.err.includes('livello 3')
+          ) {
+            throw new Error(`il terminale mostra gergo del kernel:\n${run.err}`);
           }
           if (!run.out.includes('comando eseguito dopo il tuo sì')) {
             throw new Error(`il turno non ha ripreso dopo il sì:\n${run.out}`);

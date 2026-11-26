@@ -1,21 +1,21 @@
-import DatabaseCtor from 'better-sqlite3';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { createDecide } from '../core/policy/decide.js';
 import { POLICY_FLOOR } from '../core/policy/matrix.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import { SessionStore } from '../core/session/store.js';
+import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
 import { TurnStore } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
-import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
-import { runTurn, type LoopDeps, type RegisteredTool, type ToolOutcome } from './loop.js';
+import { type LoopDeps, type RegisteredTool, runTurn, type ToolOutcome } from './loop.js';
 import { CONSERVATIVE } from './profiles/profile.js';
 import type { ChatResult, Provider } from './providers/types.js';
-import { fsCapabilities, makeFsTools, type FsScope } from './tools/fs.js';
+import { type FsScope, fsCapabilities, makeFsTools } from './tools/fs.js';
 import { httpCapability } from './tools/http.js';
-import { makeSearchTool, searchCapability, type SearchBackend } from './tools/search.js';
+import { makeSearchTool, type SearchBackend, searchCapability } from './tools/search.js';
 import { shellWriteCapability } from './tools/shell.js';
 
 /**
@@ -77,9 +77,13 @@ class Scripted implements Provider {
 }
 
 let callId = 0;
+const nextCallId = (): string => {
+  callId += 1;
+  return `c${callId}`;
+};
 const callTool = (name: string, args: unknown): ChatResult => ({
   text: null,
-  toolCalls: [{ id: `c${(callId += 1)}`, name, args }],
+  toolCalls: [{ id: nextCallId(), name, args }],
   stopReason: 'tool_use',
   usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
   model: 'test',
@@ -411,8 +415,8 @@ describe('the price of the same rule, through the same turn', () => {
     // e' esattamente cio' che a taint 3 non era possibile.
     expect(ran).toEqual(['shell_run_write']);
     expect(h.approvals).toEqual([
-      "non si torna indietro: cambia questa macchina — sys.shell.write\n\n" +
-        "questo turno contiene contenuto di livello 3: il risultato di web_like",
+      'non si torna indietro: cambia questa macchina — sys.shell.write\n\n' +
+        'questo turno contiene contenuto di livello 3: il risultato di web_like',
     ]);
     // E nessun rifiuto per taint da nessuna parte in cio' che il modello ha
     // letto: la meta' negativa, perche' «ha chiesto» sarebbe verde anche in un
@@ -622,7 +626,7 @@ describe('params on any host — the gate http_get skipped until P04-1, unaffect
     expect(h.fetched).toEqual([`https://${ALLOWED_HOST}/pagina`, WITH_PARAMS]);
   });
 
-  it('the same fetch needs no approval at all with no read behind it (taint 0, below the ceiling)', async () => {
+  it('a query string asks even at taint 0; a clean public path does not', async () => {
     const h = harness([callTool('http_get', { url: WITH_PARAMS })]);
     h.deps.decide = withParamsAllowed();
 
@@ -634,8 +638,25 @@ describe('params on any host — the gate http_get skipped until P04-1, unaffect
       text: 'apri quel link',
     });
 
-    expect(h.approvals).toEqual([]);
+    // Query, userinfo and fragment are an exfiltration channel even on a
+    // clean turn: the owner is asked and shown the exact URL. The harness
+    // approves, so the fetch still goes out (a gate, not a wall).
+    expect(h.approvals).toEqual([`lettura con parametri scelti dal contenuto: ${WITH_PARAMS}`]);
     expect(h.fetched).toEqual([WITH_PARAMS]);
+
+    const clean = harness([
+      callTool('http_get', { url: `https://${ALLOWED_HOST}/dist/index.json` }),
+    ]);
+    clean.deps.decide = withParamsAllowed();
+    await runTurn(clean.deps, {
+      principal: owner,
+      tenant: 'host',
+      surface: 'cli',
+      session: clean.deps.sessions.open('s-params-2b'),
+      text: 'leggi la lista',
+    });
+    expect(clean.approvals).toEqual([]);
+    expect(clean.fetched).toEqual([`https://${ALLOWED_HOST}/dist/index.json`]);
   });
 
   it('a host with NO params still needs no approval after the same read (unaffected by this gate)', async () => {
