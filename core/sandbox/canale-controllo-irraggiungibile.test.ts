@@ -5,7 +5,7 @@ import { platform, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { TurnResult } from '../../agent/loop/types.js';
-import { capability } from '../../test-support/requires.js';
+import { capability, withReason } from '../../test-support/requires.js';
 import {
   type ControlServer,
   resolveSocketPath,
@@ -61,7 +61,7 @@ describe('il falsificatore dichiara se e girato', () => {
     }
     if (containmentRequired && host === 'linux') {
       throw new Error(
-        `MUFFIN_REQUIRE_SANDBOX=1 e il falsificatore del canale non e girato su Linux — ${linuxGate.why}.`,
+        `sandbox richiesta (MUFFIN_REQUIRE_CAPABILITIES) e il falsificatore del canale non e girato su Linux — ${linuxGate.why}.`,
       );
     }
     console.warn(`[sandbox] canale di controllo NON provato live — ${linuxGate.why}`);
@@ -70,7 +70,11 @@ describe('il falsificatore dichiara se e girato', () => {
 });
 
 describe.runIf(linuxGate.run)(
-  `runReadOnly non raggiunge il socket di controllo (${linuxGate.why})`,
+  withReason('runReadOnly non raggiunge il socket di controllo', {
+    ...sandboxCap,
+    ok: linuxGate.run,
+    reason: linuxGate.why,
+  }),
   () => {
     it.each([
       { label: 'home breve', longHome: false },

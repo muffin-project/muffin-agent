@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { capability } from '../../test-support/requires.js';
+import { capability, withReason } from '../../test-support/requires.js';
 import { SandboxExecutor } from './executor.js';
 
 /**
@@ -60,7 +60,7 @@ describe('shell outcome integrity dichiara se è stata provata', () => {
     }
     if (containmentRequired) {
       throw new Error(
-        `MUFFIN_REQUIRE_SANDBOX=1 e nessun contenimento reale è girato su questo host — ${gate.why}.`,
+        `sandbox richiesta (MUFFIN_REQUIRE_CAPABILITIES) e nessun contenimento reale è girato su questo host — ${gate.why}.`,
       );
     }
     console.warn(`[sandbox] shell-outcome NON provato — ${gate.why}`);
@@ -68,7 +68,9 @@ describe('shell outcome integrity dichiara se è stata provata', () => {
   });
 });
 
-describe.runIf(gate.run)(`shell outcome integrity (real containment — ${gate.why})`, () => {
+const titolo = withReason('shell outcome integrity (real containment)', sandboxCap);
+
+describe.runIf(gate.run)(titolo, () => {
   const base = mkdtempSync(join(tmpdir(), 'muffin-shell-outcome-'));
   const workspace = join(base, 'workspace');
   mkdirSync(workspace, { recursive: true });
@@ -114,7 +116,9 @@ describe.runIf(gate.run)(`shell outcome integrity (real containment — ${gate.w
       const probe = await executor.runReadOnly({ command: 'git --version', cwd: workspace });
       if (probe.code !== 0) {
         if (containmentRequired) {
-          throw new Error('MUFFIN_REQUIRE_SANDBOX=1 ma git non è eseguibile nel sandbox.');
+          throw new Error(
+            'sandbox richiesta (MUFFIN_REQUIRE_CAPABILITIES) ma git non è eseguibile nel sandbox.',
+          );
         }
         console.warn('[sandbox] git assente nel sandbox — scenario git non provato');
         return;

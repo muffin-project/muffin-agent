@@ -269,7 +269,11 @@ export type WakeReason = 'timer' | 'event' | 'answer' | 'early';
  * expired wait means. It is also told **which** barrier ended the wait, because
  * "the process exited" and "you ran out of time" lead to different next moves.
  */
-export function wakeReport(waitFor: WaitFor | null, reason: WakeReason): string {
+export function wakeReport(
+  waitFor: WaitFor | null,
+  reason: WakeReason,
+  boundApproval = false,
+): string {
   if (waitFor?.kind === 'owner_reply') {
     return reason === 'timer'
       ? 'No reply arrived to your question before the deadline. Do not assume an answer.'
@@ -280,6 +284,9 @@ export function wakeReport(waitFor: WaitFor | null, reason: WakeReason): string 
     // chiamata, perché è quello che ha letto il registro. Qui si dice soltanto
     // che l'attesa è finita e come — e le due uscite portano a mosse diverse.
     if (reason === 'event') {
+      if (boundApproval) {
+        return "L'owner ha risposto. Leggi il risultato della chiamata registrata prima di rispondere.";
+      }
       return "L'owner ha risposto alla richiesta di approvazione. Rifai la chiamata che stavi facendo: se ha detto di sì parte, se ha detto di no te lo dico e non insisti.";
     }
     if (reason === 'answer') {

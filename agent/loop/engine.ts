@@ -1,3 +1,4 @@
+import { speakerAttributedContent } from '../../core/memory/authorship.js';
 import { recall, recallTaint, renderForPrompt } from '../../core/memory/recall.js';
 import { memoryWriteCapability, replyCapability } from '../../core/policy/doors.js';
 import type { CapabilityId, Decision, DecisionRequest } from '../../core/policy/types.js';
@@ -224,6 +225,9 @@ async function runClaimedTurn(
      */
     session: options.session ?? deps.sessions.open(record.sessionId),
     text: record.inputText ?? lastUserText(messages),
+    // Older checkpoints did not separate the sender's words from context.
+    authoredText:
+      typeof persistedInput?.authoredText === 'string' ? persistedInput.authoredText : '',
     // Event wakes run as `system:automation`, but their input contains matched
     // external data. Preserve the marker; legacy automation rows fail closed
     // as external rather than acquiring owner provenance on recovery.
@@ -277,12 +281,8 @@ async function runClaimedTurn(
   // `resumeTurn` §2. On a fresh turn the two agree by construction, which is
   // exactly why deriving it looked safe for as long as nothing resumed.
   const snapshot = makeSnapshot(deps.decide, input.principal, input.tenant, record.taint);
-  // La prima cosa entrata in questo turno: le parole della persona. Un URL che
-  // l'owner incolla lui stesso non è «scelto dal modello», ed è il caso più
-  // ovvio che il gate sui parametri trattava come tale. Senza capability:
-  // il messaggio umano è la classe di provenienza che rende «citata» una URL
-  // intera (lane #624 + #641 — un file tier-2 non lo è).
-  snapshot.recordInput(input.text, undefined, input.inputOrigin ?? 'owner');
+  const inputOrigin = input.inputOrigin ?? 'owner';
+  snapshot.recordInput(input.authoredText ?? '', undefined, inputOrigin);
   const turnClass = tenantClass(input.principal, input.tenant);
 
   /**
@@ -457,8 +457,26 @@ async function runClaimedTurn(
           canDiscover: () => catalogueDecision(discoveryTool.capability).effect === 'allow',
         }),
   });
+  // Prioritize an authored link without treating forwards or quotations as
+  // owner instructions. The actual URL is authorized in the ordinary call.
+  const linkReader =
+    input.principal.kind === 'owner' &&
+    input.inputOrigin !== 'external' &&
+    input.text.includes('://') &&
+    speakerAttributedContent(input.text)
+      .match(/\bhttps?:\/\/[^\s<>"'`]+/gi)
+      ?.some((url) => URL.canParse(url) || URL.canParse(url.replace(/[),.!?;]+$/, '')))
+      ? eligibleTools.find((tool) => tool.spec.name === 'http_get')
+      : undefined;
+  // The URL capability rejects a missing resource. That synthetic probe
+  // distinguishes availability (e.g. safe mode) from the eventual URL check.
+  const readerDecision = linkReader && catalogueDecision(linkReader.capability);
+  const firstName =
+    readerDecision?.effect === 'deny' && readerDecision.code !== 'resource_denied'
+      ? undefined
+      : linkReader?.spec.name;
   const preloaded = capabilityExposure.pressured
-    ? preloadCapabilitiesForTask(capabilityExposure, input.text, 2)
+    ? preloadCapabilitiesForTask(capabilityExposure, input.text, 2, firstName)
     : null;
   const exposed = capabilityExposure.exposed;
   const initialProjection = capabilityExposure.snapshot();
@@ -820,7 +838,9 @@ async function runClaimedTurn(
       // Harness control (a transition report for this resume), not owner
       // words: a continuation to a new lease archives it instead of replaying
       // it — the approved work it refers to already completed.
-      let testo = wakeReport(waitFor, why);
+      const boundApproval =
+        waitFor?.kind === 'approval' && deps.approvals?.get(waitFor.id)?.invocation != null;
+      let testo = wakeReport(waitFor, why, boundApproval);
       // #762(b) — il trade è esplicito. Su una barriera d'approvazione la
       // guardia di ripresa e il referto parlano già di domande e risposte; su
       // un processo (o senza barriera) il modello riceveva solo il referto
@@ -829,7 +849,7 @@ async function runClaimedTurn(
       if (waitFor?.kind !== 'approval') {
         const nota = approvalFootnote(
           deps.approvals?.open(record.id)?.capability ?? null,
-          rispostaNelRegistro,
+          deps.approvals?.decidedUnconsumed(record.id, true) ?? false,
         );
         if (nota !== null) testo += `\n${nota}`;
       }

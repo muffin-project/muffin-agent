@@ -33,10 +33,15 @@ export function capability(name: CapabilityName): Capability {
 }
 
 /**
- * Il nome del test con il motivo del salto, solo quando salta: in CI, dove la
- * capacità c'è, i nomi restano quelli di sempre. Con Vitest 2 il nome è
- * l'unico posto in cui un motivo arriva al report.
+ * Il nome del test con l'etichetta della capacità, sempre: `[richiede sandbox]`
+ * quando gira, `[richiede sandbox — saltato: motivo]` quando salta. Con Vitest 2
+ * (niente `tags`) il nome è l'unico posto in cui un'etichetta e un motivo
+ * arrivano al report JSON, ed è da lì che `scripts/test-capability-report.ts`
+ * conta quanti test marcati hanno girato davvero. Un `describe` etichettato
+ * marca tutti i test che contiene.
  */
-export function withReason(name: string, c: Capability, label = 'saltato'): string {
-  return c.ok ? name : `${name} [${label}: ${c.reason}]`;
+export function withReason(name: string, c: Capability): string {
+  return c.ok
+    ? `${name} [richiede ${c.name}]`
+    : `${name} [richiede ${c.name} — saltato: ${c.reason}]`;
 }

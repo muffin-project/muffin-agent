@@ -213,6 +213,7 @@ CREATE TABLE IF NOT EXISTS memory_proposals (
   -- JSON array of episode ids this candidate derives from. Never empty: a
   -- belief without provenance is not staged.
   source_episodes   TEXT    NOT NULL,
+  owner_ingress_episode_id INTEGER REFERENCES episodes(id),
   -- The candidate sentence, shown to the judge as the incoming evidence.
   content           TEXT    NOT NULL,
   -- worst tier among the source episodes, taken at propose time. Never
@@ -311,7 +312,9 @@ export const REQUEST_PREDICATE_STEMS = ['asked', 'asks'] as const;
 
 /** Whether a predicate names a request, on the stems above. */
 export function isRequestPredicate(predicate: string): boolean {
-  return REQUEST_PREDICATE_STEMS.some((stem) => predicate === stem || predicate.startsWith(`${stem}_`));
+  return REQUEST_PREDICATE_STEMS.some(
+    (stem) => predicate === stem || predicate.startsWith(`${stem}_`),
+  );
 }
 
 /**

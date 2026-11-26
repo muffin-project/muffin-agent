@@ -13,7 +13,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
+import { reconcileProposal } from '../../core/memory/ingest.js';
 import { resolveContradiction } from '../../core/memory/maintenance.js';
+import { proposeMemoryRecord } from '../../core/memory/proposals.js';
 import { MemoryStore } from '../../core/memory/store.js';
 import { JsonlExporter, SimpleTracer } from '../../core/tracing/tracer.js';
 import type { ChatCall, ChatResult, Provider } from '../providers/types.js';
@@ -452,6 +454,153 @@ describe('memory_propose — owner-stated solo da ingress autenticato (#776)', (
     });
   });
 
+  it('reconciles a correction with the verified words and keeps its source', async () => {
+    const correction = 'Correggi il ricordo: da oggi la mia commercialista è Lucia.';
+    const unrelated = 'Parola privata di prova: keystone.';
+    let judgeInput = '';
+    const h = seed([], {
+      kind: 'openai-compat',
+      async chat(request) {
+        judgeInput = JSON.stringify(request.messages);
+        const verdict = judgeInput.includes(correction) ? 'supersede' : 'review';
+        return new Scripted([
+          JSON.stringify({ reasoning: 'fixture', verdict, confidence: 1 }),
+        ]).chat();
+      },
+    });
+    await proposeMemory(h.deps, ctxFor('ricorda che il mio commercialista è Mario'), {
+      ...ricorda,
+      instruction: 'ricorda che il mio commercialista è Mario',
+    });
+    const initial = h.store.listProposals('host')[0]!.resultingFactIds[0]!;
+    const turnId = 'turn-correction';
+    const text = `${unrelated}\n${correction}`;
+    const currentEvidence = h.store.addEpisode({
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 't',
+      role: 'user',
+      kind: 'message',
+      content: text,
+      trustTier: 0,
+      createdAt: NOW().toISOString(),
+      turnId,
+    });
+    const out = await proposeMemory(
+      h.deps,
+      { ...ctxFor(text, { id: turnId }), turnId },
+      { ...ricorda, object: 'Lucia', instruction: correction, evidence_ids: [h.turnEpisode] },
+    );
+
+    expect(out.content).toContain('Aggiorno:');
+    expect(judgeInput).toContain(correction);
+    expect(judgeInput).not.toContain(unrelated);
+    const updated = h.store.listProposals('host', { status: 'superseded' })[0]!;
+    expect(updated).toMatchObject({
+      producer: 'owner-stated',
+      sourceEpisodeIds: [currentEvidence, h.turnEpisode],
+      ownerIngressEpisodeId: currentEvidence,
+    });
+    expect(h.store.factById('host', initial)?.supersededBy).toBe(updated.resultingFactIds[0]);
+    expect(h.store.factById('host', updated.resultingFactIds[0]!)?.episodeId).toBe(currentEvidence);
+  });
+
+  it.each([
+    { removed: 'owner ingress', withdrawIngress: true, expected: 'rejected' },
+    { removed: 'additional citation', withdrawIngress: false, expected: 'superseded' },
+  ])('reconciles after withdrawing $removed', async ({ withdrawIngress, expected }) => {
+    const correction = 'Correggi il ricordo: da oggi la mia commercialista è Lucia.';
+    let judgeInput = '';
+    const h = seed([], {
+      kind: 'openai-compat',
+      async chat(request) {
+        judgeInput = JSON.stringify(request.messages);
+        const verdict = judgeInput.includes(correction) ? 'supersede' : 'coexist';
+        return new Scripted([
+          JSON.stringify({ reasoning: 'fixture', verdict, confidence: 1 }),
+        ]).chat();
+      },
+    });
+    await proposeMemory(h.deps, ctxFor('ricorda che il mio commercialista è Mario'), ricorda);
+    const source = h.store.addEpisode({
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 't',
+      role: 'user',
+      kind: 'message',
+      content: correction,
+      trustTier: 0,
+      createdAt: NOW().toISOString(),
+    });
+    const citation = h.store.addEpisode({
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 't',
+      role: 'user',
+      kind: 'message',
+      content: 'Contatto secondario del commercialista.',
+      trustTier: 0,
+      createdAt: NOW().toISOString(),
+    });
+    const { id } = proposeMemoryRecord(h.store, {
+      tenantId: 'host',
+      subject: 'owner',
+      predicate: 'accountant',
+      object: 'Lucia',
+      producer: 'owner-stated',
+      sourceEpisodeIds: [citation, source],
+      ownerIngressEpisodeId: source,
+      confidence: 0.8,
+      content: correction,
+    });
+    h.store.supersedeEpisodes('host', [withdrawIngress ? source : citation], NOW().toISOString());
+
+    const result = await reconcileProposal(h.deps, 'host', id, { at: NOW() });
+
+    expect(result.status).toBe(expected);
+    const ownerId = h.store.findEntity('host', 'owner')!;
+    expect(
+      h.store.activeFacts('host', ownerId, 'accountant').map((fact) => fact.objectValue),
+    ).toEqual([withdrawIngress ? 'Mario' : 'Lucia']);
+    if (withdrawIngress) expect(judgeInput).toBe('');
+    else expect(judgeInput).toContain(correction);
+  });
+
+  it('does not attribute a quote to the owner without its durable current ingress', async () => {
+    const h = seed();
+    const instruction = 'Correggi il ricordo: da oggi la mia commercialista è Lucia.';
+    const turnId = 'turn-without-episode';
+    await proposeMemory(
+      h.deps,
+      { ...ctxFor(instruction, { id: turnId }), turnId },
+      { ...ricorda, instruction, object: 'Lucia', evidence_ids: [h.turnEpisode] },
+    );
+    expect(h.store.listProposals('host')[0]).toMatchObject({
+      producer: 'agent-inference',
+      content: 'owner accountant Lucia',
+    });
+  });
+
+  it('leaves an unanchored legacy owner proposal for a fresh instruction', async () => {
+    const h = seed();
+    const { id } = proposeMemoryRecord(h.store, {
+      tenantId: 'host',
+      subject: 'owner',
+      predicate: 'accountant',
+      object: 'Lucia',
+      producer: 'owner-stated',
+      sourceEpisodeIds: [h.turnEpisode],
+      confidence: 0.8,
+      content: 'owner accountant Lucia',
+    });
+
+    const legacy = await reconcileProposal(h.deps, 'host', id, { at: NOW() });
+
+    expect(legacy.status).toBe('rejected');
+    expect(legacy.factIds).toEqual([]);
+    expect(h.store.proposalById('host', id)?.detail).toContain('ripeti');
+  });
+
   it('virgolettato non autorizza: resta agent-inference', async () => {
     const h = seed();
     const out = await proposeMemory(
@@ -477,7 +626,10 @@ describe('memory_propose — owner-stated solo da ingress autenticato (#776)', (
       object: 'Mario',
     });
     expect(out.isError).toBeUndefined();
-    expect(h.store.listProposals('host')[0]).toMatchObject({ producer: 'agent-inference' });
+    expect(h.store.listProposals('host')[0]).toMatchObject({
+      producer: 'agent-inference',
+      content: 'owner accountant Mario',
+    });
   });
 
   it('principal non owner: resta agent-inference', async () => {

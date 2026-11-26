@@ -1,8 +1,8 @@
-import DatabaseCtor from 'better-sqlite3';
-import * as sqliteVec from 'sqlite-vec';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import DatabaseCtor from 'better-sqlite3';
+import * as sqliteVec from 'sqlite-vec';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type ChatResult, type Provider, ProviderError } from '../agent/providers/types.js';
 import { paths } from '../core/config/config.js';
@@ -101,41 +101,80 @@ function homeWithFact(): { home: string; factId: number } {
   const db = new DatabaseCtor(paths(home).db);
   const store = new MemoryStore(db);
   const episodeId = store.addEpisode({
-    tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
-    kind: 'message', content: 'mi chiamo Giusto', trustTier: 0, createdAt: '2026-08-26T10:00:00Z',
+    tenantId: 'host',
+    connector: 'cli',
+    threadKey: 't',
+    role: 'user',
+    kind: 'message',
+    content: 'mi chiamo Giusto',
+    trustTier: 0,
+    createdAt: '2026-08-26T10:00:00Z',
   });
   const subjectId = store.upsertEntity('host', 'owner', 'person', '2026-08-26T10:00:00Z');
   const factId = store.addFact({
-    tenantId: 'host', subjectId, predicate: 'name', objectValue: 'Giusto',
-    episodeId, trustTier: 0, confidence: 0.9, extractionV: 1, recordedAt: '2026-08-26T10:00:00Z',
+    tenantId: 'host',
+    subjectId,
+    predicate: 'name',
+    objectValue: 'Giusto',
+    episodeId,
+    trustTier: 0,
+    confidence: 0.9,
+    extractionV: 1,
+    recordedAt: '2026-08-26T10:00:00Z',
   });
   db.close();
   return { home, factId };
 }
 
-async function homeWithProposalTransportFailure(canary: string): Promise<{ home: string; incomingFactId: number }> {
+async function homeWithProposalTransportFailure(
+  canary: string,
+): Promise<{ home: string; incomingFactId: number }> {
   const home = mkdtempSync(join(tmpdir(), 'muffin-memory-proposal-failure-'));
   const db = new DatabaseCtor(paths(home).db);
   const store = new MemoryStore(db);
   const existingEpisode = store.addEpisode({
-    tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
-    content: 'il mio commercialista è Marco', trustTier: 0, createdAt: '2026-08-13T10:00:00Z',
+    tenantId: 'host',
+    connector: 'cli',
+    threadKey: 't',
+    role: 'user',
+    kind: 'message',
+    content: 'il mio commercialista è Marco',
+    trustTier: 0,
+    createdAt: '2026-08-13T10:00:00Z',
   });
   const subjectId = store.upsertEntity('host', 'owner', 'person', '2026-08-13T10:00:00Z');
   store.addFact({
-    tenantId: 'host', subjectId, predicate: 'accountant', objectValue: 'Marco',
-    episodeId: existingEpisode, trustTier: 0, confidence: 0.9, extractionV: 1,
+    tenantId: 'host',
+    subjectId,
+    predicate: 'accountant',
+    objectValue: 'Marco',
+    episodeId: existingEpisode,
+    trustTier: 0,
+    confidence: 0.9,
+    extractionV: 1,
     recordedAt: '2026-08-13T10:00:00Z',
   });
   const proposalEpisode = store.addEpisode({
-    tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
-    content: 'ricorda che il mio commercialista ora è Lucia', trustTier: 0,
+    tenantId: 'host',
+    connector: 'cli',
+    threadKey: 't',
+    role: 'user',
+    kind: 'message',
+    content: 'ricorda che il mio commercialista ora è Lucia',
+    trustTier: 0,
     createdAt: '2026-08-13T10:01:00Z',
   });
   const proposal = proposeMemoryRecord(store, {
-    tenantId: 'host', subject: 'owner', subjectKind: 'person', predicate: 'accountant',
-    object: 'Lucia', producer: 'owner-stated', sourceEpisodeIds: [proposalEpisode],
-    content: 'ricorda che il mio commercialista ora è Lucia', confidence: 0.95,
+    tenantId: 'host',
+    subject: 'owner',
+    subjectKind: 'person',
+    predicate: 'accountant',
+    object: 'Lucia',
+    producer: 'owner-stated',
+    sourceEpisodeIds: [proposalEpisode],
+    ownerIngressEpisodeId: proposalEpisode,
+    content: 'ricorda che il mio commercialista ora è Lucia',
+    confidence: 0.95,
   });
   const provider: Provider = {
     kind: 'openai-compat',
@@ -143,39 +182,72 @@ async function homeWithProposalTransportFailure(canary: string): Promise<{ home:
       throw new ProviderError(`502 upstream echoed Authorization: Bearer ${canary}`, false, 502);
     },
   };
-  const out = await reconcileProposal({
-    store, provider, model: 'test-light', tracer: new SimpleTracer(new JsonlExporter(home)),
-    now: () => new Date('2026-08-13T10:02:00Z'),
-  }, 'host', proposal.id);
+  const out = await reconcileProposal(
+    {
+      store,
+      provider,
+      model: 'test-light',
+      tracer: new SimpleTracer(new JsonlExporter(home)),
+      now: () => new Date('2026-08-13T10:02:00Z'),
+    },
+    'host',
+    proposal.id,
+  );
   db.close();
   const incomingFactId = out.factIds[0];
   if (incomingFactId === undefined) throw new Error('review did not record the incoming fact');
   return { home, incomingFactId };
 }
 
-async function homeWithProposalMalformedJudge(response: string): Promise<{ home: string; incomingFactId: number }> {
+async function homeWithProposalMalformedJudge(
+  response: string,
+): Promise<{ home: string; incomingFactId: number }> {
   const home = mkdtempSync(join(tmpdir(), 'muffin-memory-proposal-malformed-'));
   const db = new DatabaseCtor(paths(home).db);
   const store = new MemoryStore(db);
   const existingEpisode = store.addEpisode({
-    tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
-    content: 'il mio commercialista è Marco', trustTier: 0, createdAt: '2026-08-13T10:00:00Z',
+    tenantId: 'host',
+    connector: 'cli',
+    threadKey: 't',
+    role: 'user',
+    kind: 'message',
+    content: 'il mio commercialista è Marco',
+    trustTier: 0,
+    createdAt: '2026-08-13T10:00:00Z',
   });
   const subjectId = store.upsertEntity('host', 'owner', 'person', '2026-08-13T10:00:00Z');
   store.addFact({
-    tenantId: 'host', subjectId, predicate: 'accountant', objectValue: 'Marco',
-    episodeId: existingEpisode, trustTier: 0, confidence: 0.9, extractionV: 1,
+    tenantId: 'host',
+    subjectId,
+    predicate: 'accountant',
+    objectValue: 'Marco',
+    episodeId: existingEpisode,
+    trustTier: 0,
+    confidence: 0.9,
+    extractionV: 1,
     recordedAt: '2026-08-13T10:00:00Z',
   });
   const proposalEpisode = store.addEpisode({
-    tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user', kind: 'message',
-    content: 'ricorda che il mio commercialista ora è Lucia', trustTier: 0,
+    tenantId: 'host',
+    connector: 'cli',
+    threadKey: 't',
+    role: 'user',
+    kind: 'message',
+    content: 'ricorda che il mio commercialista ora è Lucia',
+    trustTier: 0,
     createdAt: '2026-08-13T10:01:00Z',
   });
   const proposal = proposeMemoryRecord(store, {
-    tenantId: 'host', subject: 'owner', subjectKind: 'person', predicate: 'accountant',
-    object: 'Lucia', producer: 'owner-stated', sourceEpisodeIds: [proposalEpisode],
-    content: 'ricorda che il mio commercialista ora è Lucia', confidence: 0.95,
+    tenantId: 'host',
+    subject: 'owner',
+    subjectKind: 'person',
+    predicate: 'accountant',
+    object: 'Lucia',
+    producer: 'owner-stated',
+    sourceEpisodeIds: [proposalEpisode],
+    ownerIngressEpisodeId: proposalEpisode,
+    content: 'ricorda che il mio commercialista ora è Lucia',
+    confidence: 0.95,
   });
   const provider: Provider = {
     kind: 'openai-compat',
@@ -189,10 +261,17 @@ async function homeWithProposalMalformedJudge(response: string): Promise<{ home:
       };
     },
   };
-  const out = await reconcileProposal({
-    store, provider, model: 'test-light', tracer: new SimpleTracer(new JsonlExporter(home)),
-    now: () => new Date('2026-08-13T10:02:00Z'),
-  }, 'host', proposal.id);
+  const out = await reconcileProposal(
+    {
+      store,
+      provider,
+      model: 'test-light',
+      tracer: new SimpleTracer(new JsonlExporter(home)),
+      now: () => new Date('2026-08-13T10:02:00Z'),
+    },
+    'host',
+    proposal.id,
+  );
   db.close();
   const incomingFactId = out.factIds[0];
   if (incomingFactId === undefined) throw new Error('review did not record the incoming fact');
@@ -380,6 +459,7 @@ describe('muffin memory review', () => {
       object: 'Sara',
       producer: 'owner-stated',
       sourceEpisodeIds: [proposalEpisode],
+      ownerIngressEpisodeId: proposalEpisode,
       content: 'il mio commercialista ora è Sara',
       confidence: 0.95,
     });
@@ -410,7 +490,11 @@ describe('muffin memory review', () => {
       proposal.id,
     );
     const reviewDecision: ChatResult = {
-      text: JSON.stringify({ reasoning: 'serve una scelta del proprietario', verdict: 'review', confidence: 0.5 }),
+      text: JSON.stringify({
+        reasoning: 'serve una scelta del proprietario',
+        verdict: 'review',
+        confidence: 0.5,
+      }),
       toolCalls: [],
       stopReason: 'end',
       usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
@@ -438,7 +522,9 @@ describe('muffin memory review', () => {
       expect(retry.out.join('')).toContain('deciso');
       expect(store.openContradictions('host')).toHaveLength(0);
       expect(store.factById('host', incoming)?.expiredAt).toBeNull();
-      expect(store.activeFacts('host', store.findEntity('host', 'owner')!, 'accountant')).toHaveLength(1);
+      expect(
+        store.activeFacts('host', store.findEntity('host', 'owner')!, 'accountant'),
+      ).toHaveLength(1);
     } finally {
       finishJudge(reviewDecision);
       await reconciliation.catch(() => undefined);
@@ -593,20 +679,34 @@ describe('muffin memory search — cmdMemorySearch reached beyond the argv rejec
     const db = new DatabaseCtor(paths(home).db);
     const store = new MemoryStore(db);
     const source = store.addEpisode({
-      tenantId: 'host', connector: 'cli', threadKey: 'synthetic', role: 'user',
-      kind: 'message', content: 'Inspect the tool catalog.', trustTier: 0,
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 'synthetic',
+      role: 'user',
+      kind: 'message',
+      content: 'Inspect the tool catalog.',
+      trustTier: 0,
       createdAt: '2026-10-14T00:00:00Z',
     });
     const owner = store.upsertEntity('host', 'owner', 'person', '2026-10-14T00:00:00Z');
     const fact = store.addFact({
-      tenantId: 'host', subjectId: owner, predicate: 'works_as', objectValue: 'Synthetic accountant',
-      episodeId: source, trustTier: 0, origin: 'inferred', confidence: 0.99, extractionV: 1,
+      tenantId: 'host',
+      subjectId: owner,
+      predicate: 'works_as',
+      objectValue: 'Synthetic accountant',
+      episodeId: source,
+      trustTier: 0,
+      origin: 'inferred',
+      confidence: 0.99,
+      extractionV: 1,
       recordedAt: '2026-10-14T00:00:00Z',
     });
     db.close();
     const { out } = capture();
     expect(await cmdMemorySearch(home, 'owner', {})).toBe(0);
-    expect(out.join('')).toMatch(new RegExp(`\\[fact #${fact}\\][^\\n]*dedotto — non detto\\n[^\\n]*Synthetic accountant`));
+    expect(out.join('')).toMatch(
+      new RegExp(`\\[fact #${fact}\\][^\\n]*dedotto — non detto\\n[^\\n]*Synthetic accountant`),
+    );
   });
 
   /**
@@ -626,18 +726,44 @@ describe('muffin memory search — cmdMemorySearch reached beyond the argv rejec
     const store = new MemoryStore(db);
     const me = store.upsertEntity('host', 'Giusto', 'person', '2026-06-01T10:00:00Z');
     const ep = store.addEpisode({
-      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
-      kind: 'message', content: 'note sul commercialista', trustTier: 0, createdAt: '2026-06-01T10:00:00Z',
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 't',
+      role: 'user',
+      kind: 'message',
+      content: 'note sul commercialista',
+      trustTier: 0,
+      createdAt: '2026-06-01T10:00:00Z',
     });
-    const base = { tenantId: 'host', subjectId: me, episodeId: ep, trustTier: 0 as const, confidence: 0.9, extractionV: 1 };
-    const marco = store.addFact({ ...base, predicate: 'accountant', objectValue: 'Marco', recordedAt: '2026-06-01T10:00:00Z' });
-    const lucia = store.addFact({ ...base, predicate: 'accountant', objectValue: 'Lucia', recordedAt: '2026-08-01T10:00:00Z' });
+    const base = {
+      tenantId: 'host',
+      subjectId: me,
+      episodeId: ep,
+      trustTier: 0 as const,
+      confidence: 0.9,
+      extractionV: 1,
+    };
+    const marco = store.addFact({
+      ...base,
+      predicate: 'accountant',
+      objectValue: 'Marco',
+      recordedAt: '2026-06-01T10:00:00Z',
+    });
+    const lucia = store.addFact({
+      ...base,
+      predicate: 'accountant',
+      objectValue: 'Lucia',
+      recordedAt: '2026-08-01T10:00:00Z',
+    });
     store.supersede('host', marco, lucia, '2026-08-01T10:00:00Z');
     // A live fact with a stated start and no end, so "valido X → oggi" has a
     // row to come from — Marco/Lucia's own validTo is always a real date.
     store.addFact({
-      ...base, predicate: 'lives_in', objectValue: 'Cagliari',
-      validFrom: '2020-01-01T00:00:00Z', recordedAt: '2020-01-01T00:00:00Z',
+      ...base,
+      predicate: 'lives_in',
+      objectValue: 'Cagliari',
+      validFrom: '2020-01-01T00:00:00Z',
+      recordedAt: '2020-01-01T00:00:00Z',
     });
     db.close();
 
@@ -660,12 +786,24 @@ describe('muffin memory search — cmdMemorySearch reached beyond the argv rejec
     const db = new DatabaseCtor(paths(home).db);
     const store = new MemoryStore(db);
     store.addEpisode({
-      tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
-      kind: 'message', content: 'promemoria dal terminale', trustTier: 0, createdAt: '2026-08-01T10:00:00Z',
+      tenantId: 'host',
+      connector: 'cli',
+      threadKey: 't',
+      role: 'user',
+      kind: 'message',
+      content: 'promemoria dal terminale',
+      trustTier: 0,
+      createdAt: '2026-08-01T10:00:00Z',
     });
     store.addEpisode({
-      tenantId: 'host', connector: 'telegram', threadKey: 'g', role: 'user',
-      kind: 'message', content: 'promemoria da telegram', trustTier: 0, createdAt: '2026-08-01T10:00:00Z',
+      tenantId: 'host',
+      connector: 'telegram',
+      threadKey: 'g',
+      role: 'user',
+      kind: 'message',
+      content: 'promemoria da telegram',
+      trustTier: 0,
+      createdAt: '2026-08-01T10:00:00Z',
     });
     db.close();
 
@@ -684,8 +822,14 @@ describe('muffin memory search — cmdMemorySearch reached beyond the argv rejec
     const store = new MemoryStore(db);
     const fill = (content: string, minute: number) =>
       store.addEpisode({
-        tenantId: 'host', connector: 'cli', threadKey: 't', role: 'user',
-        kind: 'message', content, trustTier: 0, createdAt: `2026-08-01T10:0${minute}:00Z`,
+        tenantId: 'host',
+        connector: 'cli',
+        threadKey: 't',
+        role: 'user',
+        kind: 'message',
+        content,
+        trustTier: 0,
+        createdAt: `2026-08-01T10:0${minute}:00Z`,
       });
     fill('un messaggio prima', 1);
     const anchor = fill('il codice segreto è ZK-9', 2);
@@ -713,7 +857,10 @@ describe('muffin memory search — cmdMemorySearch reached beyond the argv rejec
  */
 describe('drenare l indice e progresso quanto estrarre', () => {
   const giro = (marked: number, indexed: number, fetched: number, proposalPageFull = false) => ({
-    marked, indexed, fetched, proposalPageFull,
+    marked,
+    indexed,
+    fetched,
+    proposalPageFull,
   });
 
   it('continua quando l estrazione e ferma ma l indice si sta drenando', () => {
@@ -875,7 +1022,8 @@ describe('drenare l indice e progresso quanto estrarre', () => {
     const consolidation = new Consolidator({
       db,
       budgetExhausted: () => false,
-      ingest: (limit) => ingestPending({ store, provider, model: 'test', tracer, vectors }, 'host', limit),
+      ingest: (limit) =>
+        ingestPending({ store, provider, model: 'test', tracer, vectors }, 'host', limit),
     });
     const { out } = capture();
     vi.doMock('../agent/runtime.js', () => ({
@@ -939,7 +1087,11 @@ function homeConIndiceIndietro(): string {
   }
   // Costruire l indice crea le sue tabelle e non indicizza niente: chunks
   // esiste, ed e vuoto, mentre tre episodi aspettano.
-  new VectorIndex(db, { id: 'finto:v1', dimensions: 4, embed: async (t) => t.map(() => Float32Array.from([0, 0, 0, 0])) });
+  new VectorIndex(db, {
+    id: 'finto:v1',
+    dimensions: 4,
+    embed: async (t) => t.map(() => Float32Array.from([0, 0, 0, 0])),
+  });
   db.close();
   return home;
 }
@@ -962,7 +1114,10 @@ describe("muffin memory stats — l'indice non puo dirsi in pari quando non lo e
     const { out } = capture();
 
     expect(cmdMemoryStats(home)).toBe(0);
-    const riga = out.join('').split('\n').find((r) => r.startsWith('indice vett.'));
+    const riga = out
+      .join('')
+      .split('\n')
+      .find((r) => r.startsWith('indice vett.'));
     expect(riga).toBeDefined();
     // Ci sono episodi e nessun vettore: la riga deve dirlo, non tacere.
     expect(riga).toMatch(/sorgenti senza vettore/);
@@ -979,7 +1134,11 @@ describe("muffin memory stats — l'indice non puo dirsi in pari quando non lo e
     const home = homeConIndiceIndietro();
     const { out } = capture();
     cmdMemoryStats(home);
-    const riga = out.join('').split('\n').find((r) => r.startsWith('indice vett.')) ?? '';
+    const riga =
+      out
+        .join('')
+        .split('\n')
+        .find((r) => r.startsWith('indice vett.')) ?? '';
     expect(riga).not.toContain('in pari');
   });
 });

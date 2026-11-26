@@ -55,7 +55,11 @@ export type CapabilityDiscoveryPort = {
    * tool still reaches the normal kernel path, preserving Muffin's existing
    * defence-in-depth rule for forbidden calls.
    */
-  readonly searchAndLoad: (query: string, maxResults: number) => CapabilityLoadResult;
+  readonly searchAndLoad: (
+    query: string,
+    maxResults: number,
+    firstName?: string,
+  ) => CapabilityLoadResult;
   /** Apply the batch at the model boundary and return whether discovery remains available. */
   readonly activatePending: () => boolean;
 };
@@ -187,10 +191,14 @@ export function createCapabilityExposure<T extends CapabilityTool>(input: {
   const loadedTools = new Map<string, T>();
 
   const discovery: CapabilityDiscoveryPort = {
-    searchAndLoad(query, maxResults) {
+    searchAndLoad(query, maxResults, firstName) {
       const limit = Math.max(1, Math.floor(maxResults));
       const ranked = searchable
-        .map((tool, index) => ({ tool, index, score: score(tool, query) }))
+        .map((tool, index) => ({
+          tool,
+          index,
+          score: tool.spec.name === firstName ? Number.MAX_SAFE_INTEGER : score(tool, query),
+        }))
         .filter((row) => row.score > 0)
         .sort((left, right) => right.score - left.score || left.index - right.index);
 
@@ -248,8 +256,9 @@ export function preloadCapabilitiesForTask<T extends CapabilityTool>(
   exposure: CapabilityExposure<T>,
   query: string,
   maxResults = 2,
+  firstName?: string,
 ): CapabilityLoadResult | null {
   if (!exposure.pressured || exposure.discovery === undefined) return null;
-  const result = exposure.discovery.searchAndLoad(query, maxResults);
+  const result = exposure.discovery.searchAndLoad(query, maxResults, firstName);
   return exposure.discovery.activatePending() ? result : null;
 }

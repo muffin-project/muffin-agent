@@ -262,11 +262,12 @@ things until 2026-09-06:
 - **`hardened` no longer skips one.** The `hardened && owner && taint === 0`
   auto-allow is gone. OS hardening and effect approval are separate questions.
 
-Egress is a separate authority and is untouched by this: model-composed bytes
-riding out in a URL's query or fragment still ask the owner and refuse every
-other principal (ADR-0071), and a search's text answers to its own ceiling
-(ADR-0072). Both remain sources of an `ask` that has nothing to do with the
-rule above.
+Egress has its own checks. Above the parameter ceiling, a web-read URL with
+a path, userinfo, query or fragment needs approval unless the whole URL came
+from the sender's own words or an open-web read or search result (ADR-0090).
+The loop applies this rule to the authored portion of the current message,
+including a non-forwarded caption. Forwarded and quoted material stays
+available as context. Search text follows its own ceiling (ADR-0072).
 
 ### What the ceiling does above it (ADR-0075)
 
@@ -934,6 +935,15 @@ execution.
 
 Delivery is an effect with its own uncertainty: completed computation and
 definitely delivered output are different facts.
+
+New deferred shell approvals whose argument payload survives checkpoint redaction
+bind the original invocation to the canonical workspace and working directory. On wake, the current kernel rules
+on that call, and one transaction consumes the consent and records the effect
+intent under the active turn claim. Only then can the existing contained
+executor run it. The original tool result is recovered from the journal when
+available. A consumed approval with an unfinished intent yields an uncertain
+result instead of invoking the shell again.
+[ADR-0109](../decisions/0109-resume-the-exact-approved-shell-call.md).
 
 For remote Nodes the same effect semantics cross the protocol. Lost connection
 after `started` but before outcome must remain uncertain; it must not become

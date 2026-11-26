@@ -182,32 +182,37 @@ jobs:
       # È una regola di questo repo e vale a maggior ragione dove il verde è
       # letto da una macchina.
       #
-      # `MUFFIN_REQUIRE_SANDBOX=1` è il motivo per cui questo job può ancora
-      # dire qualcosa sul sandbox. Questo runner è l'unico Linux che tocchiamo,
-      # e sta al posto della VPS di produzione: qui un contenimento saltato è un
-      # difetto, non una proprietà della macchina. Senza la variabile il salto
-      # resta un salto (è il caso del portatile macOS su piattaforme che il
-      # sandbox non copre); con la variabile diventa rosso, ed è l'unica forma
-      # in cui «9 saltati» smette di leggersi come «9 passati».
-      # `MUFFIN_REQUIRE_SYSTEMD=1` è la stessa disciplina per l'altro pezzo di
-      # produzione: la unit systemd. Il plist ha `plutil -lint` sul portatile;
-      # la unit — il file della VPS — aveva solo asserzioni su stringhe, e
-      # questo è l'unico runner con `systemd-analyze`. Se il parser sparisse
-      # dall'immagine, senza la variabile il test tornerebbe a saltare in
-      # silenzio e l'unica verifica reale della unit sparirebbe con lui.
+      # `MUFFIN_REQUIRE_CAPABILITIES` è il motivo per cui questo job può ancora
+      # dire qualcosa sul sandbox e sulla unit systemd. Questo runner è l'unico
+      # Linux che tocchiamo, e sta al posto della VPS di produzione: qui un
+      # contenimento saltato è un difetto, non una proprietà della macchina.
+      # Il globalSetup (`vitest.capabilities.ts`) misura ogni capacità una
+      # volta; se una di quelle elencate manca, la run si ferma prima del
+      # primo test, ed è l'unica forma in cui «9 saltati» smette di leggersi
+      # come «9 passati». Sul portatile la variabile non c'è e i test saltano
+      # con il motivo nel nome. `systemd-analyze` è la stessa disciplina per
+      # l'altro pezzo di produzione, la unit: il plist ha `plutil -lint` sul
+      # portatile, la unit ha solo questo runner. Le vecchie variabili
+      # `MUFFIN_REQUIRE_SANDBOX`/`MUFFIN_REQUIRE_SYSTEMD` restano alias.
       # `--exclude`: le suite possedute dai job narrow required non si
       # ripetono qui — `docs/collegamenti*` è di `collegamenti`, `.claude/**`
       # è di `strumenti`, ed entrambi girano su ogni PR. `npm test` locale
       # resta la suite intera; la partizione è una proprietà della CI.
-      #
-      # `MUFFIN_REQUIRE_CAPABILITIES` (test-support/capabilities.ts) è la forma
-      # generica delle due variabili sopra, che restano alias: il globalSetup
-      # misura ogni capacità una volta, e se una di queste manca la run si
-      # ferma prima del primo test invece di contare salti.
       - name: suite
         env:
           MUFFIN_REQUIRE_CAPABILITIES: 'sandbox,shell-boundary,systemd-analyze'
-        run: npx vitest run --reporter=dot --exclude 'docs/collegamenti*.test.ts' --exclude '**/.claude/**/*.test.ts'
+        run: npx vitest run --reporter=dot --reporter=json --outputFile.json=${{ runner.temp }}/suite.json --exclude 'docs/collegamenti*.test.ts' --exclude '**/.claude/**/*.test.ts'
+
+      # La seconda cintura. Il globalSetup ferma la run se una capacità
+      # richiesta manca; questo step legge il report JSON e controlla che i
+      # test marcati `[richiede <capacità>]` abbiano girato davvero: nessun
+      # salto di una capacità richiesta, e almeno quanti ne registra
+      # `test-support/capability-minimums.json`. Un'etichetta tolta o un test
+      # sparito senza dirlo diventano rossi qui, non un conteggio da leggere.
+      - name: test marcati per capacità (nessun salto delle capacità richieste, minimi rispettati)
+        env:
+          MUFFIN_REQUIRE_CAPABILITIES: 'sandbox,shell-boundary,systemd-analyze'
+        run: npx tsx scripts/test-capability-report.ts --ci "${{ runner.temp }}/suite.json"
 
       # Mutation proof for the AppArmor hook rules: remove the shared
       # profile's hook policy, then run the same production-path test. Its
@@ -441,7 +446,8 @@ jobs:
 #      macOS** (os e child_process mockati): il rilevatore di root, l'ENOENT,
 #      il messaggio verbatim di Ubuntu 24.04, e che niente risponde
 #      «disponibile» senza un exit zero di bwrap;
-#   3. `MUFFIN_REQUIRE_SANDBOX=1` fa fallire il salto invece di contarlo.
+#   3. una capacità richiesta che manca fa fallire la run invece di contare
+#      salti (oggi `MUFFIN_REQUIRE_CAPABILITIES`, prima `MUFFIN_REQUIRE_SANDBOX=1`).
 #
 # E l'apt-get non era un prerequisito, erano tre: senza `socat` e `ripgrep` la
 # libreria non inizializza affatto. La riga di prima era vera e incompleta —

@@ -1,31 +1,31 @@
-import DatabaseCtor from 'better-sqlite3';
-import { readFileSync, readdirSync, mkdtempSync, statSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it, vi } from 'vitest';
 import type { Update } from '@grammyjs/types';
-import { buildRuntime } from '../../../agent/runtime.js';
+import type DatabaseCtor from 'better-sqlite3';
+import { describe, expect, it, vi } from 'vitest';
 import type { LoopDeps } from '../../../agent/loop.js';
 import type { ChatCall, Provider } from '../../../agent/providers/types.js';
+import { buildRuntime } from '../../../agent/runtime.js';
 import { runInit } from '../../../cli/init.js';
 import { INGRESS_PORT_IDS } from '../../../cli/surface.js';
 import { Pausa } from '../../../core/runtime/pausa.js';
+import { type FileMode, PLACES, type Place, type StreamMode } from '../../../core/surface/types.js';
+import { ModelLane } from '../../../core/turns/model-lane.js';
 import type { DiscordApi, DiscordMessage } from '../../discord/api.js';
 import { DiscordConnector } from '../../discord/connector.js';
-import { ModelLane } from '../../../core/turns/model-lane.js';
 import { FakeSocket, HELLO, READY } from '../../discord/fake-socket.js';
 import { DiscordInbox } from '../../discord/inbox.js';
+import { discordPort } from '../../discord/surface.js';
 import type { TelegramApi } from '../../telegram/api.js';
 import { TelegramConnector } from '../../telegram/connector.js';
 import { TelegramDeliveryStore } from '../../telegram/delivery.js';
+import { telegramPort } from '../../telegram/surface.js';
 import { UpdateInbox } from '../../telegram/updates.js';
 import { AVVISO_IN_PAUSA } from './lane.js';
-import { INGRESS_STAGES, witnessIngress, type IngressStage, type IngressVisit } from './router.js';
-import { PLACES, type FileMode, type Place, type StreamMode } from '../../../core/surface/types.js';
+import { INGRESS_STAGES, type IngressStage, type IngressVisit, witnessIngress } from './router.js';
 import type { IngressPort } from './types.js';
-import { telegramPort } from '../../telegram/surface.js';
-import { discordPort } from '../../discord/surface.js';
 
 /**
  * Slice 16 of the ingress decomposition
@@ -93,7 +93,9 @@ function runtimeVero(nome: string, over: { sospendi?: boolean }, chiamate: ChatC
       chiamate.push(call);
       return {
         text: over.sospendi ? '' : RISPOSTA,
-        toolCalls: over.sospendi ? [{ id: 'c1', name: 'wait', args: { seconds: 3600, why: 'aspetto' } }] : [],
+        toolCalls: over.sospendi
+          ? [{ id: 'c1', name: 'wait', args: { seconds: 3600, why: 'aspetto' } }]
+          : [],
         stopReason: over.sospendi ? ('tool_use' as const) : ('end' as const),
         usage,
         model: 'test',
@@ -300,14 +302,12 @@ const DIVERGENZE_AMMESSE: readonly Divergenza[] = [
   {
     porta: 'discord',
     stadio: 'gate',
-    adr:
-      "connectors/discord/connector.ts parseMessage:155-156 — solo i DM uno-a-uno passano, quindi ogni evento arriva direct:true per costruzione e non esiste un ramo di gruppo che il gate possa rifiutare (ADR-0063 riguarda Telegram)",
+    adr: 'connectors/discord/connector.ts parseMessage:155-156 — solo i DM uno-a-uno passano, quindi ogni evento arriva direct:true per costruzione e non esiste un ramo di gruppo che il gate possa rifiutare (ADR-0063 riguarda Telegram)',
   },
   {
     porta: 'discord',
     stadio: 'remember',
-    adr:
-      "connectors/discord/connector.ts parseMessage:155-156 — ricorda-senza-rispondere è il ramo che il gate dirotta, e senza un gate che rifiuti non c'è niente da ricordare senza rispondere",
+    adr: "connectors/discord/connector.ts parseMessage:155-156 — ricorda-senza-rispondere è il ramo che il gate dirotta, e senza un gate che rifiuti non c'è niente da ricordare senza rispondere",
   },
 ];
 
@@ -471,7 +471,9 @@ describe('2. la stessa scena produce lo stesso esito su ogni porta', () => {
           p.pausa.metti();
           p.manda('ci sei?');
           // Byte per byte la stessa frase, §4 invariante 9.
-          await vi.waitFor(() => expect(p.inviati()).toContain(AVVISO_IN_PAUSA), { timeout: 15_000 });
+          await vi.waitFor(() => expect(p.inviati()).toContain(AVVISO_IN_PAUSA), {
+            timeout: 15_000,
+          });
           // Niente modello, niente riga di turno, e l'evento resta dov'era: è
           // ciò che lo fa ri-drenare alla ripresa (§2.4, `{kind:'queued'}`).
           expect(p.chiamateAlModello()).toBe(0);
@@ -487,7 +489,9 @@ describe('2. la stessa scena produce lo stesso esito su ogni porta', () => {
         try {
           p.manda('aspetta');
           await vi.waitFor(() => expect(p.turni()).toHaveLength(1), { timeout: 15_000 });
-          await vi.waitFor(() => expect(p.turni()[0]?.status).not.toBe('running'), { timeout: 15_000 });
+          await vi.waitFor(() => expect(p.turni()[0]?.status).not.toBe('running'), {
+            timeout: 15_000,
+          });
           // `renderForDiscord('')` è `['(risposta vuota)']` e il render di
           // Telegram manderebbe un messaggio vuoto: nessuna delle due deve
           // partire, o l'owner legge il vuoto come la risposta.
@@ -536,14 +540,15 @@ function fileNonTest(dir: string): string[] {
 
 /** Un import di **valore** (non `import type`) del nome dato. */
 function importaComeValore(sorgente: string, nome: string): boolean {
-  const righe = sorgente.split('\n');
-  return righe.some((r) => {
-    const m = /^import\s+(?!type\b)(.+?)\s+from\s+['"](.+?)['"];?$/.exec(r.trim());
-    if (m === null) return false;
-    const clausola = m[1] ?? '';
-    // `import { type X, runTurn }` conta; `import { type X }` no.
-    return new RegExp(`(^|[{,\\s])${nome}(\\s|,|}|$)`).test(clausola.replace(/\btype\s+\w+/g, ''));
-  });
+  // The formatter may wrap the named bindings across several lines.
+  const imports = sorgente.matchAll(
+    /^[ \t]*import[ \t]+(?![ \t]*type\b)([\w$*,\t ]*\{[^}]*\}|[^{};\r\n]+?)\s+from[ \t]+['"][^'"\r\n]+['"][ \t]*;?[ \t]*$/gm,
+  );
+  const binding = new RegExp(`(^|[{,\\s])${nome}(\\s|,|}|$)`);
+  for (const [, clause = ''] of imports) {
+    if (binding.test(clause.replace(/\btype\s+\w+/g, ''))) return true;
+  }
+  return false;
 }
 
 /**
@@ -568,7 +573,9 @@ describe('3. nessun connettore possiede il loop', () => {
   }));
 
   it('sotto connectors/ solo lo stadio work importa runTurn come valore', () => {
-    const colpevoli = sorgenti.filter((s) => s.path.startsWith('connectors/') && importaComeValore(s.testo, 'runTurn'));
+    const colpevoli = sorgenti.filter(
+      (s) => s.path.startsWith('connectors/') && importaComeValore(s.testo, 'runTurn'),
+    );
     // Un elemento solo, e non «zero fra i connettori»: lo stadio `work` **è**
     // sotto `connectors/`, ed è deliberato (§2.2, il cammino condiviso nasce
     // in `connectors/shared/`, non nel nucleo). La clausola che conta è che
@@ -583,17 +590,23 @@ describe('3. nessun connettore possiede il loop', () => {
     // P0-B: la seconda bocca verso il modello (la nuova lease) ha lo stesso
     // domicilio obbligato della prima — il connettore invoca il resolver per
     // la bind, mai la continuazione per l'esecuzione.
-    const colpevoli = sorgenti.filter((s) => s.path.startsWith('connectors/') && importaComeValore(s.testo, 'continueTurn'));
+    const colpevoli = sorgenti.filter(
+      (s) => s.path.startsWith('connectors/') && importaComeValore(s.testo, 'continueTurn'),
+    );
     expect(colpevoli.map((s) => s.path)).toEqual(['connectors/shared/ingress/work.ts']);
   });
 
   it('sotto cli/ solo resume importa continueTurn come valore', () => {
-    const colpevoli = sorgenti.filter((s) => s.path.startsWith('cli/') && importaComeValore(s.testo, 'continueTurn'));
+    const colpevoli = sorgenti.filter(
+      (s) => s.path.startsWith('cli/') && importaComeValore(s.testo, 'continueTurn'),
+    );
     expect(colpevoli.map((s) => s.path)).toEqual(['cli/resume.ts']);
   });
 
   it('sotto cli/ solo il terminale lo fa, e i due file sono nominati', () => {
-    const colpevoli = sorgenti.filter((s) => s.path.startsWith('cli/') && importaComeValore(s.testo, 'runTurn'));
+    const colpevoli = sorgenti.filter(
+      (s) => s.path.startsWith('cli/') && importaComeValore(s.testo, 'runTurn'),
+    );
     expect(colpevoli.map((s) => s.path).sort()).toEqual([...BOCCHE_SENZA_INGRESSO].sort());
   });
 

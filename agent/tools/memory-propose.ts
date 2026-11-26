@@ -184,10 +184,13 @@ export async function proposeMemory(
   );
   const statedByOwner = (quote: string): boolean =>
     quote.includes(object) && (subject === 'owner' || quote.includes(subject));
+  const ingress = deps.store.episodeIdByTurnId(ctx.tenant, ctx.turnId);
+  const ownerStatement =
+    ingress !== null && instruction !== null && statedByOwner(instruction)
+      ? { wording: instruction, episodeId: ingress }
+      : null;
   const producer =
-    instruction === null || !statedByOwner(instruction)
-      ? ('agent-inference' as const)
-      : ('owner-stated' as const);
+    ownerStatement === null ? ('agent-inference' as const) : ('owner-stated' as const);
 
   let evidenceIds: number[] = [];
   if (raw.evidence_ids !== undefined) {
@@ -210,11 +213,10 @@ export async function proposeMemory(
       evidenceIds.push(n);
     }
   }
-  // Cite the durable ingress when no explicit source was supplied. The owner's
-  // original words remain evidence; this tool's extracted tuple is inferred.
-  if (evidenceIds.length === 0) {
-    const ingress = deps.store.episodeIdByTurnId(ctx.tenant, ctx.turnId);
-    if (ingress !== null) evidenceIds = [ingress];
+  // Keep the verified wording with its own ingress, even when the model cites
+  // additional episodes. The tuple alone loses signals such as "from now on".
+  if (ingress !== null && (ownerStatement !== null || evidenceIds.length === 0)) {
+    evidenceIds = [ingress, ...evidenceIds];
   }
   if (evidenceIds.length === 0) {
     return {
@@ -255,8 +257,9 @@ export async function proposeMemory(
       ...(validFrom === null ? {} : { validFrom }),
       producer,
       sourceEpisodeIds: evidenceIds,
+      ownerIngressEpisodeId: ownerStatement?.episodeId,
       contextTier,
-      content: `${subject} ${predicate} ${object}`,
+      content: ownerStatement?.wording ?? `${subject} ${predicate} ${object}`,
       confidence,
       // Layer 4 of ADR-0112: a standing preference is pinned only when the
       // owner said it (verified quote). An inference is staged, never pinned;

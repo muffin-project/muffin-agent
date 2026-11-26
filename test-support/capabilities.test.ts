@@ -7,14 +7,19 @@ import {
   decide,
   describeReport,
   forcedCapabilities,
+  formatMarked,
+  judgeMarked,
   requiredCapabilities,
+  tallyMarked,
 } from './capabilities.js';
 import { withReason } from './requires.js';
 
-const probes = (over: Partial<Record<CapabilityName, { ok: boolean; reason: string }>> = {}) => ({
+type Probes = Record<CapabilityName, { ok: boolean; reason: string }>;
+const probes = (over: Partial<Probes> = {}): Probes => ({
   sandbox: { ok: false, reason: 'linux: git_hooks_unprotected — fixture' },
   'shell-boundary': { ok: false, reason: 'richiede sandbox — fixture' },
   'systemd-analyze': { ok: true, reason: 'systemd-analyze verify funziona su questo host' },
+  plutil: { ok: false, reason: 'plutil esiste solo su macOS (qui: linux)' },
   ...over,
 });
 
@@ -48,6 +53,7 @@ describe('registro delle capacità: decisione', () => {
   it('una capacità assente e non richiesta salta, con il motivo del probe', () => {
     const { report, missingRequired } = decide(probes(), new Set(), new Set());
     expect(report.sandbox).toEqual({
+      name: 'sandbox',
       ok: false,
       reason: 'linux: git_hooks_unprotected — fixture',
       required: false,
@@ -91,15 +97,71 @@ describe('registro delle capacità: decisione', () => {
   });
 });
 
-describe('il nome del test porta il motivo solo quando salta', () => {
-  it('capacità presente: nome invariato (in CI i nomi non cambiano)', () => {
-    expect(withReason('t', { ok: true, reason: 'x', required: true, forced: false })).toBe('t');
+describe('il nome del test porta sempre l etichetta, e il motivo quando salta', () => {
+  const cap = (ok: boolean, reason: string) =>
+    ({ name: 'sandbox', ok, reason, required: false, forced: false }) as const;
+
+  it('capacità presente: solo l etichetta (è quella che la CI conta)', () => {
+    expect(withReason('t', cap(true, 'x'))).toBe('t [richiede sandbox]');
   });
 
-  it('capacità assente: il motivo è nel nome', () => {
-    expect(
-      withReason('t', { ok: false, reason: 'manca AppArmor', required: false, forced: false }),
-    ).toBe('t [saltato: manca AppArmor]');
+  it('capacità assente: etichetta e motivo', () => {
+    expect(withReason('t', cap(false, 'manca AppArmor'))).toBe(
+      't [richiede sandbox — saltato: manca AppArmor]',
+    );
+  });
+});
+
+describe('conteggio dei test marcati dal report JSON', () => {
+  const t = (fullName: string, status: string) => ({ file: 'f.test.ts', fullName, status });
+
+  it('conta per capacità chi ha girato e chi è saltato, con il motivo', () => {
+    const s = tallyMarked([
+      t('a [richiede sandbox] uno', 'passed'),
+      t('a [richiede sandbox] due', 'failed'),
+      t('b [richiede sandbox — saltato: manca AppArmor] tre', 'skipped'),
+      t('c [richiede systemd-analyze — saltato: niente /run] quattro', 'skipped'),
+      t('d senza etichetta', 'skipped'),
+      t('e senza etichetta', 'passed'),
+    ]);
+    expect(s.byCapability.sandbox.ran).toBe(2);
+    expect([...s.byCapability.sandbox.skipped]).toEqual([['manca AppArmor', 1]]);
+    expect(s.byCapability['systemd-analyze'].ran).toBe(0);
+    expect(s.unmarkedSkips.map((x) => x.fullName)).toEqual(['d senza etichetta']);
+    expect(formatMarked(s)).toContain('[capacità] sandbox: 2 test eseguiti, 1 saltati');
+  });
+
+  it('un describe e un test con la stessa etichetta contano una volta', () => {
+    const s = tallyMarked([t('g [richiede sandbox] x [richiede sandbox]', 'passed')]);
+    expect(s.byCapability.sandbox.ran).toBe(1);
+  });
+
+  it('richiesta: un salto è un problema, e anche stare sotto il minimo', () => {
+    const s = tallyMarked([
+      t('a [richiede sandbox] uno', 'passed'),
+      t('b [richiede sandbox — saltato: manca AppArmor] due', 'skipped'),
+    ]);
+    const problems = judgeMarked(s, new Set(['sandbox']), { sandbox: 5 });
+    expect(problems).toHaveLength(2);
+    expect(problems[0]).toContain('1 test marcati sono saltati (manca AppArmor)');
+    expect(problems[1]).toContain('hanno girato 1 test marcati, il minimo registrato è 5');
+  });
+
+  it('richiesta senza minimo registrato: è un problema, non un via libera', () => {
+    const s = tallyMarked([t('a [richiede sandbox] uno', 'passed')]);
+    expect(judgeMarked(s, new Set(['sandbox']), {})[0]).toContain('non ha un minimo');
+  });
+
+  it('non richiesta: salti e minimi non si giudicano (il portatile)', () => {
+    const s = tallyMarked([t('b [richiede sandbox — saltato: no] due', 'skipped')]);
+    expect(judgeMarked(s, new Set(), { sandbox: 5 })).toEqual([]);
+  });
+
+  it('un etichetta con un nome sconosciuto è un refuso da segnalare', () => {
+    const s = tallyMarked([t('a [richiede sandbx] uno', 'passed')]);
+    expect(judgeMarked(s, new Set(), {})).toEqual([
+      'etichetta sconosciuta [richiede sandbx]: note sandbox, shell-boundary, systemd-analyze, plutil',
+    ]);
   });
 });
 
