@@ -243,7 +243,9 @@ describe('telegram rich · inbound media count', () => {
         blocks: [
           {
             type: 'list',
-            items: photos(RICH_MAX_MEDIA, (i) => `scatto ${i}`).map((photo) => ({ blocks: [photo] })),
+            items: photos(RICH_MAX_MEDIA, (i) => `scatto ${i}`).map((photo) => ({
+              blocks: [photo],
+            })),
           },
         ],
       },

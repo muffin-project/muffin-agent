@@ -57,7 +57,11 @@ const forwardedRich = (id: number): Update =>
           type: 'list',
           items: [
             { blocks: [{ type: 'paragraph', text: 'da fare' }], has_checkbox: true },
-            { blocks: [{ type: 'paragraph', text: 'fatto' }], has_checkbox: true, is_checked: true },
+            {
+              blocks: [{ type: 'paragraph', text: 'fatto' }],
+              has_checkbox: true,
+              is_checked: true,
+            },
           ],
         },
         { type: 'blockquote', blocks: [{ type: 'paragraph', text: 'parole citate' }] },
@@ -201,7 +205,11 @@ describe('inbound rich · unsupported blocks are named, not dropped', () => {
     const incoming = parseUpdate(
       base(8, {
         rich_message: {
-          blocks: [{ type: 'paragraph', text: 'prima' }, { type: 'teletrasporto', frobnicate: 'x'.repeat(5000) }, { type: 'paragraph', text: 'dopo' }],
+          blocks: [
+            { type: 'paragraph', text: 'prima' },
+            { type: 'teletrasporto', frobnicate: 'x'.repeat(5000) },
+            { type: 'paragraph', text: 'dopo' },
+          ],
         },
       }),
     );
