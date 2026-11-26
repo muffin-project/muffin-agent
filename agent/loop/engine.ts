@@ -1,3 +1,4 @@
+import { speakerAttributedContent } from '../../core/memory/authorship.js';
 import { recall, recallTaint, renderForPrompt } from '../../core/memory/recall.js';
 import { memoryWriteCapability, replyCapability } from '../../core/policy/doors.js';
 import type { CapabilityId, Decision, DecisionRequest } from '../../core/policy/types.js';
@@ -456,8 +457,26 @@ async function runClaimedTurn(
           canDiscover: () => catalogueDecision(discoveryTool.capability).effect === 'allow',
         }),
   });
+  // Prioritize an authored link without treating forwards or quotations as
+  // owner instructions. The actual URL is authorized in the ordinary call.
+  const linkReader =
+    input.principal.kind === 'owner' &&
+    input.inputOrigin !== 'external' &&
+    input.text.includes('://') &&
+    speakerAttributedContent(input.text)
+      .match(/\bhttps?:\/\/[^\s<>"'`]+/gi)
+      ?.some((url) => URL.canParse(url) || URL.canParse(url.replace(/[),.!?;]+$/, '')))
+      ? eligibleTools.find((tool) => tool.spec.name === 'http_get')
+      : undefined;
+  // The URL capability rejects a missing resource. That synthetic probe
+  // distinguishes availability (e.g. safe mode) from the eventual URL check.
+  const readerDecision = linkReader && catalogueDecision(linkReader.capability);
+  const firstName =
+    readerDecision?.effect === 'deny' && readerDecision.code !== 'resource_denied'
+      ? undefined
+      : linkReader?.spec.name;
   const preloaded = capabilityExposure.pressured
-    ? preloadCapabilitiesForTask(capabilityExposure, input.text, 2)
+    ? preloadCapabilitiesForTask(capabilityExposure, input.text, 2, firstName)
     : null;
   const exposed = capabilityExposure.exposed;
   const initialProjection = capabilityExposure.snapshot();
