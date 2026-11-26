@@ -13,9 +13,19 @@ export type RotMigrateReport = {
   writable: boolean;
   ownershipCommand: string | null;
   written: string[];
+  /** Files that would be written; populated even on a preview (`apply: false`). */
+  pendingWrite: string[];
   backedUp: string[];
   preserved: string[];
   notes: string[];
+};
+
+export type MigrateRotHomeOptions = {
+  /**
+   * When false, compute the report without writing or backing up. The default
+   * is true so existing call sites that want the merge still get it.
+   */
+  apply?: boolean;
 };
 
 type BudgetsFile = {
@@ -52,9 +62,12 @@ export function migrateRotHome(
   home: string,
   shippedBudgets: BudgetsFile | null,
   now: Date = new Date(),
+  options: MigrateRotHomeOptions = {},
 ): RotMigrateReport {
+  const apply = options.apply !== false;
   const notes: string[] = [];
   const written: string[] = [];
+  const pendingWrite: string[] = [];
   const backedUp: string[] = [];
   const preserved: string[] = ['rot/identity.md'];
   const ownershipCommand = ROT_OWNERSHIP_COMMAND(home);
@@ -64,6 +77,7 @@ export function migrateRotHome(
       writable: false,
       ownershipCommand: null,
       written,
+      pendingWrite: [],
       backedUp,
       preserved: [],
       notes: [`${join(home, 'rot')} non esiste`],
@@ -75,6 +89,7 @@ export function migrateRotHome(
       writable: false,
       ownershipCommand,
       written,
+      pendingWrite: [],
       backedUp,
       preserved,
       notes: [
@@ -103,17 +118,28 @@ export function migrateRotHome(
     const serialized = `${JSON.stringify(next, null, 2)}\n`;
     const already = readFileSync(budgetsPath, 'utf8');
     if (already !== serialized) {
-      const dest = backupOwnerConfigFile(home, budgetsPath, now);
-      if (dest !== null) backedUp.push(dest);
-      writeFileSync(budgetsPath, serialized, { encoding: 'utf8' });
-      written.push('rot/budgets.json');
+      pendingWrite.push('rot/budgets.json');
       if (current.quietHours !== undefined) preserved.push('rot/budgets.json quietHours');
       if (current.monthlyUsd !== undefined) preserved.push('rot/budgets.json caps');
-      if (current.unmetered === undefined && next.unmetered !== undefined) {
-        notes.push('aggiunto unmetered ai budget, conservati fuso e tetti già impostati');
+      if (apply) {
+        const dest = backupOwnerConfigFile(home, budgetsPath, now);
+        if (dest !== null) backedUp.push(dest);
+        writeFileSync(budgetsPath, serialized, { encoding: 'utf8' });
+        written.push('rot/budgets.json');
+        if (current.unmetered === undefined && next.unmetered !== undefined) {
+          notes.push('aggiunto unmetered ai budget, conservati fuso e tetti già impostati');
+        } else {
+          notes.push(
+            'budget già completi dei campi additivi, o solo riformattati; fuso e tetti conservati',
+          );
+        }
+      } else if (current.unmetered === undefined && next.unmetered !== undefined) {
+        notes.push(
+          'rot/budgets.json sarebbe aggiornato (aggiunto unmetered; fuso e tetti restano). Niente scritto senza --apply.',
+        );
       } else {
         notes.push(
-          'budget già completi dei campi additivi, o solo riformattati; fuso e tetti conservati',
+          'rot/budgets.json sarebbe solo riformattato; fuso e tetti restano. Niente scritto senza --apply.',
         );
       }
     } else {
@@ -133,7 +159,15 @@ export function migrateRotHome(
     'rot/policy.json non è stato riscritto: il kernel già applica i pavimenti di policy sul file esistente',
   );
 
-  return { writable: true, ownershipCommand: null, written, backedUp, preserved, notes };
+  return {
+    writable: true,
+    ownershipCommand: null,
+    written,
+    pendingWrite,
+    backedUp,
+    preserved,
+    notes,
+  };
 }
 
 export function readShippedBudgets(defaultsRotDir: string): BudgetsFile | null {

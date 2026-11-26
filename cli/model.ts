@@ -442,6 +442,25 @@ function mostra(config: Config, out: (l: string) => void): void {
  * la cucitura che `docs/development/JUDGE.md` descrive: corrette separatamente, capaci di
  * non essere d'accordo il giorno che una delle due cambia.
  */
+
+async function noteGatewayRestartIfRunning(
+  home: string,
+  deps: ModelDeps,
+  out: (line: string) => void,
+): Promise<void> {
+  const query =
+    deps.gatewayStatus ?? (() => askGateway(home, 'status') as Promise<GatewayStatus | null>);
+  let status: GatewayStatus | null = null;
+  try {
+    status = await query();
+  } catch {
+    status = null;
+  }
+  if (status?.pid !== undefined && status.pid > 0) {
+    out('Riavvia il gateway per applicare il cambio a un’istanza in esecuzione.');
+  }
+}
+
 export async function cmdModel(home: string, argv: string[], deps: ModelDeps): Promise<number> {
   const { out } = deps;
   const original = loadConfig(home);
@@ -857,7 +876,7 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
         return 1;
       }
       out('Embedding disattivati. La ricerca testuale resta attiva.');
-      out('Riavvia il gateway per applicare il cambio a un’istanza in esecuzione.');
+      await noteGatewayRestartIfRunning(home, deps, out);
       return 0;
     }
     // The OpenAI shortcut replaces the entire embedding route. The probe sends
@@ -927,7 +946,7 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
         ? `Dimensioni: ${prima} → ${dim}. L’indice vettoriale sarà ricostruito dai testi conservati.`
         : 'Se cambia il modello, l’indice vettoriale sarà ricostruito dai testi conservati.',
     );
-    out('Riavvia il gateway per applicare il cambio a un’istanza in esecuzione.');
+    await noteGatewayRestartIfRunning(home, deps, out);
     return 0;
   }
 

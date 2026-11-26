@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { extractMainContent, isHtmlContentType } from './extract.js';
+import {
+  extractMainContent,
+  isHtmlContentType,
+  pageTitleFromHtml,
+  withPageTitle,
+} from './extract.js';
 
 describe('isHtmlContentType', () => {
   it('accepts text/html, with or without a charset suffix', () => {
@@ -87,7 +92,8 @@ describe('extractMainContent', () => {
   it('does not need the plausibility floor to accept a real, compact article behind heavy navigation', async () => {
     const navLinks = Array.from(
       { length: 60 },
-      (_, i) => `<li><a href="/page${i}">Category ${i} — browse our catalogue section ${i}</a></li>`,
+      (_, i) =>
+        `<li><a href="/page${i}">Category ${i} — browse our catalogue section ${i}</a></li>`,
     ).join('\n');
     const html = `<!doctype html>
 <html><head><title>A real short article</title></head><body>
@@ -111,10 +117,16 @@ any reasonable plausibility floor a caller might apply to the ratio between inpu
     await expect(extractMainContent('', 'https://example.com/')).resolves.toBeNull();
     await expect(extractMainContent('   \n  ', 'https://example.com/')).resolves.toBeNull();
     await expect(
-      extractMainContent(JSON.stringify({ hello: 'world', items: [1, 2, 3] }), 'https://example.com/'),
+      extractMainContent(
+        JSON.stringify({ hello: 'world', items: [1, 2, 3] }),
+        'https://example.com/',
+      ),
     ).resolves.toBeNull();
     await expect(
-      extractMainContent('just some plain text, no markup of any kind here at all.', 'https://example.com/'),
+      extractMainContent(
+        'just some plain text, no markup of any kind here at all.',
+        'https://example.com/',
+      ),
     ).resolves.toBeNull();
   });
 
@@ -126,7 +138,8 @@ any reasonable plausibility floor a caller might apply to the ratio between inpu
   it('returns null when extraction is implausibly small next to a substantial input', async () => {
     const navLinks = Array.from(
       { length: 40 },
-      (_, i) => `<li><a href="/page${i}">Category ${i} — browse our catalogue section ${i}</a></li>`,
+      (_, i) =>
+        `<li><a href="/page${i}">Category ${i} — browse our catalogue section ${i}</a></li>`,
     ).join('\n');
     const html = `<!doctype html>
 <html><head><title>x</title></head><body>
@@ -137,5 +150,39 @@ any reasonable plausibility floor a caller might apply to the ratio between inpu
     expect(html.length).toBeGreaterThan(2_000);
     const content = await extractMainContent(html, 'https://example.com/missing');
     expect(content).toBeNull();
+  });
+
+  it('keeps the HTML title for an example.com-style page whose body omits it', async () => {
+    const html = `<!doctype html>
+<html>
+<head>
+    <title>Example Domain</title>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-type" content="text/html; charset=utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+</head>
+<body>
+<div>
+    <h1>Example Domain</h1>
+    <p>This domain is for use in illustrative examples in documents. You may use this
+    domain in literature without prior coordination or asking for permission.</p>
+    <p><a href="https://www.iana.org/domains/example">More information...</a></p>
+</div>
+</body>
+</html>`;
+    const content = await extractMainContent(html, 'https://example.com/');
+    expect(content).not.toBeNull();
+    expect(content).toMatch(/^# Example Domain\n/);
+    expect(content).toContain('illustrative examples');
+    expect(content).not.toMatch(/# Example Domain[\s\S]*# Example Domain/);
+  });
+
+  it('withPageTitle does not duplicate a title the body already opens with', () => {
+    expect(withPageTitle('Example Domain', '# Example Domain\n\nHello.')).toBe(
+      '# Example Domain\n\nHello.',
+    );
+    expect(
+      pageTitleFromHtml({ querySelector: () => ({ textContent: '  Example Domain  ' }) }, ''),
+    ).toBe('Example Domain');
   });
 });

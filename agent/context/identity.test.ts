@@ -247,6 +247,7 @@ describe('doctor: la riga identità', () => {
       (_n, detail) => lines.push({ level: 'ok', detail }),
       (_n, detail, remedy) => lines.push({ level: 'warn', detail, ...(remedy ? { remedy } : {}) }),
       resolveIdentityLayers(home),
+      home,
     );
     return lines;
   };
@@ -256,7 +257,8 @@ describe('doctor: la riga identità', () => {
     writeFileSync(homeCopy(home), '# Identità\n\nPATTO-A-MANO.\n');
     const [line] = run(home);
     expect(line?.level).toBe('warn');
-    expect(line?.remedy).toContain('~/.muffin/user.md');
+    expect(line?.remedy).toContain(paths(home).user);
+    expect(line?.remedy).not.toContain('~/.muffin/user.md');
     expect(line?.remedy).not.toContain('reseal');
     expect(line?.remedy).not.toContain('cp ');
   });

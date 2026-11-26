@@ -108,6 +108,29 @@ describe('muffin status', () => {
     }
   });
 
+  it('--json senza configurazione emette JSON strutturato e non testo libero su stderr', () => {
+    const root = mkdtempSync(join(tmpdir(), 'muffin-status-empty-json-'));
+    roots.push(root);
+    const writes = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const { code, lines } = status(join(root, 'nessuna-home'), ['--json']);
+      expect(code).toBe(78);
+      const report = JSON.parse(lines.join('\n')) as {
+        ok: boolean;
+        error: string;
+        hint: string;
+      };
+      expect(report.ok).toBe(false);
+      expect(report.error).toBe('uninitialized');
+      expect(report.hint).toBe('muffin init');
+      expect(writes.mock.calls.map((c) => String(c[0])).join('')).not.toContain(
+        'Muffin non è ancora configurato',
+      );
+    } finally {
+      writes.mockRestore();
+    }
+  });
+
   it('un flag sconosciuto è un errore d’uso', () => {
     const writes = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {

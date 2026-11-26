@@ -65,4 +65,21 @@ describe('migrateRotHome', () => {
     expect(report.notes.join('\n')).toContain('Non eseguo io il cambio di proprietà');
     chmodSync(join(dir, 'rot'), 0o755);
   });
+
+  it('a preview (apply: false) does not write or back up budgets.json', () => {
+    const dir = homeWith({
+      schemaVersion: 1,
+      monthlyUsd: 80,
+      perTenantDailyUsd: 2,
+      quietHours: { from: '23:00', to: '08:00', timezone: 'Europe/Rome' },
+    });
+    const before = readFileSync(join(dir, 'rot', 'budgets.json'), 'utf8');
+    const report = migrateRotHome(dir, SHIPPED, new Date('2026-11-25T14:20:00Z'), { apply: false });
+    expect(report.writable).toBe(true);
+    expect(report.written).toEqual([]);
+    expect(report.backedUp).toEqual([]);
+    expect(report.pendingWrite).toEqual(['rot/budgets.json']);
+    expect(report.notes.join('\n')).toMatch(/Niente scritto senza --apply/);
+    expect(readFileSync(join(dir, 'rot', 'budgets.json'), 'utf8')).toBe(before);
+  });
 });

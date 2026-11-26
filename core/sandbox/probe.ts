@@ -211,7 +211,8 @@ function probeSeatbelt(): SandboxProbe {
       detail:
         `sandbox-exec failed on an allow-all profile too (${message(error)}), so its failure on ` +
         `the deny-all profile (${denial}) is not evidence of containment`,
-      remedy: 'sandbox-exec itself is failing — check the profile syntax against this macOS release',
+      remedy:
+        'sandbox-exec itself is failing — check the profile syntax against this macOS release',
     };
   }
 
@@ -239,7 +240,17 @@ function probeSeatbelt(): SandboxProbe {
  * same choice the seatbelt branch makes, for the same reason: success there
  * means nothing was contained).
  */
-const DENY_ARGV = ['--ro-bind', '/', '/', '--tmpfs', '/etc', '--unshare-all', '--die-with-parent', 'cat', '/etc/hosts'];
+const DENY_ARGV = [
+  '--ro-bind',
+  '/',
+  '/',
+  '--tmpfs',
+  '/etc',
+  '--unshare-all',
+  '--die-with-parent',
+  'cat',
+  '/etc/hosts',
+];
 /**
  * The positive control: the identical bind and the identical read, minus the
  * tmpfs shadow over /etc. It must succeed, so that a failure of `DENY_ARGV`
@@ -248,7 +259,15 @@ const DENY_ARGV = ['--ro-bind', '/', '/', '--tmpfs', '/etc', '--unshare-all', '-
  * which is exactly the gap the single-command version of this check could not
  * tell apart from a deny holding.
  */
-const ALLOW_ARGV = ['--ro-bind', '/', '/', '--unshare-all', '--die-with-parent', 'cat', '/etc/hosts'];
+const ALLOW_ARGV = [
+  '--ro-bind',
+  '/',
+  '/',
+  '--unshare-all',
+  '--die-with-parent',
+  'cat',
+  '/etc/hosts',
+];
 
 /**
  * Exported so `core/sandbox/executor.ts`'s real self-test (which runs through
@@ -274,6 +293,27 @@ export const SANDBOX_BINARIES_REMEDY =
   'macOS usa Seatbelt integrato: non installare bubblewrap o socat; dei tre nomi citati qui serve solo ripgrep: `brew install ripgrep`. ' +
   'Linux usa tre binari: bubblewrap, socat e ripgrep. Debian/Ubuntu: `sudo apt-get install bubblewrap socat ripgrep`; ' +
   'Fedora: `sudo dnf install bubblewrap socat ripgrep`';
+
+/**
+ * User-facing reason for a failed sandbox probe. Do not say the mechanism is
+ * "non disponibile" when the binary is present and a later check (AppArmor,
+ * Git hooks, user namespaces) failed — that reads as "bwrap is missing".
+ */
+export function describeSandboxProbeFailure(
+  probe: Extract<SandboxProbe, { available: false }>,
+): string {
+  const why = `(${probe.reason}): ${probe.detail}`;
+  if (probe.reason === 'binary_missing' || probe.reason === 'unsupported_platform') {
+    return `${probe.mechanism} non disponibile ${why}`;
+  }
+  if (probe.reason === 'git_hooks_unprotected') {
+    return `${probe.mechanism} è installato, ma il controllo sui hook Git/AppArmor non regge ${why}`;
+  }
+  if (probe.reason === 'userns_denied') {
+    return `${probe.mechanism} non può creare un namespace utente ${why}`;
+  }
+  return `${probe.mechanism} non contiene i comandi su questo host ${why}`;
+}
 
 export const APPARMOR_REMEDY =
   'unprivileged user namespaces may be restricted. ' +
@@ -347,7 +387,8 @@ function probeBubblewrap(): SandboxProbe {
       available: false,
       mechanism: 'bubblewrap',
       reason: 'probe_failed',
-      detail: 'probe ran as root: root bypasses the userns restriction, so the result would be a false positive',
+      detail:
+        'probe ran as root: root bypasses the userns restriction, so the result would be a false positive',
       remedy: 'run this check as the service user that will run the runtime',
     };
   }
@@ -376,7 +417,13 @@ function probeBubblewrap(): SandboxProbe {
       };
     }
     if (isUsernsDenied(detail)) {
-      return { available: false, mechanism: 'bubblewrap', reason: 'userns_denied', detail, remedy: APPARMOR_REMEDY };
+      return {
+        available: false,
+        mechanism: 'bubblewrap',
+        reason: 'userns_denied',
+        detail,
+        remedy: APPARMOR_REMEDY,
+      };
     }
     // The expected outcome: /etc was shadowed, so cat found nothing to read.
     denial = detail;
@@ -388,8 +435,10 @@ function probeBubblewrap(): SandboxProbe {
       available: false,
       mechanism: 'bubblewrap',
       reason: 'probe_failed',
-      detail: 'a deny-configured bwrap still let a process read /etc/hosts: the sandbox is not containing anything',
-      remedy: 'check whether /etc is actually being shadowed — bwrap may lack --tmpfs support, or be intercepted',
+      detail:
+        'a deny-configured bwrap still let a process read /etc/hosts: the sandbox is not containing anything',
+      remedy:
+        'check whether /etc is actually being shadowed — bwrap may lack --tmpfs support, or be intercepted',
     };
   }
 
@@ -400,7 +449,13 @@ function probeBubblewrap(): SandboxProbe {
   } catch (error) {
     const detail = message(error);
     if (isUsernsDenied(detail)) {
-      return { available: false, mechanism: 'bubblewrap', reason: 'userns_denied', detail, remedy: APPARMOR_REMEDY };
+      return {
+        available: false,
+        mechanism: 'bubblewrap',
+        reason: 'userns_denied',
+        detail,
+        remedy: APPARMOR_REMEDY,
+      };
     }
     return {
       available: false,
@@ -409,7 +464,8 @@ function probeBubblewrap(): SandboxProbe {
       detail:
         `bwrap failed on an unrestricted read too (${detail}), so its failure on ` +
         `the deny-configured read (${denial}) is not evidence of containment`,
-      remedy: 'bwrap itself is failing outside any deny — check the invocation against this kernel/bwrap version',
+      remedy:
+        'bwrap itself is failing outside any deny — check the invocation against this kernel/bwrap version',
     };
   }
 

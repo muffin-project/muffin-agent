@@ -1,6 +1,6 @@
 import { discoverOpenAICompatModels } from '../agent/providers/models-discovery.js';
 import type { ProviderKind } from '../core/config/config.js';
-import type { SandboxProbe } from '../core/sandbox/probe.js';
+import { describeSandboxProbeFailure, type SandboxProbe } from '../core/sandbox/probe.js';
 import { promptLine } from './prompt.js';
 
 /** The one base URL we special-case, because it is the key most users bring. */
@@ -137,10 +137,7 @@ export function describeSupervisor(platform: NodeJS.Platform): string {
 export function describeSandboxProbe(probe: SandboxProbe): string {
   const label = 'sandbox'.padEnd(16);
   if (probe.available) return `✓ ${label} ${probe.mechanism}: contenimento verificato\n`;
-  const lines = [
-    `! ${label} ${probe.mechanism} non disponibile (${probe.reason}): ${probe.detail}`,
-    `  → ${probe.remedy}`,
-  ];
+  const lines = [`! ${label} ${describeSandboxProbeFailure(probe)}`, `  → ${probe.remedy}`];
   // The fix is a privileged step (apparmor_parser -r, or lowering the sysctl)
   // that init must never take for you — weakening a sandbox with a sudo the
   // owner never typed is exactly the kind of silent decision ADR-0036 forbids

@@ -10,10 +10,31 @@ import { askPlain } from './approval.js';
 import { negoziazioneTelegram } from './negoziazione.js';
 import { TELEGRAM_MAX } from './render.js';
 import { type OutboundRich, RICH_MAX_CHARS } from './rich.js';
-import { startTranscript } from './transcript.js';
+import { formatDraftStatus, startTranscript } from './transcript.js';
 
 const DM = negoziazioneTelegram('direct');
 const GROUP = negoziazioneTelegram('group');
+
+describe('formatDraftStatus', () => {
+  it('always returns a complete status line with a bound unit, never a stub or a bare number', () => {
+    expect(formatDraftStatus('sto lavorando', 7000)).toBe('sto lavorando · 7\u00a0s');
+    expect(formatDraftStatus('sto preparando il contesto', 0)).toBe(
+      'sto preparando il contesto · 0\u00a0s',
+    );
+    expect(formatDraftStatus('sto lavorando', 7400)).toBe('sto lavorando · 7\u00a0s');
+    for (const line of [
+      formatDraftStatus('sto preparando il contesto', 0),
+      formatDraftStatus('sto lavorando', 1000),
+      formatDraftStatus('sto lavorando', 7000),
+    ]) {
+      expect(line).toMatch(/ · \d+\u00a0s$/);
+      expect(line).not.toBe('prep');
+      expect(line).not.toMatch(/^\d+$/);
+      expect(line).not.toMatch(/\d+$/); // unit is always present; number is not the last char
+      expect(line.includes('\u00a0s')).toBe(true);
+    }
+  });
+});
 
 type Call = {
   method: string;
@@ -140,7 +161,7 @@ describe('ordinary turns', () => {
     expect(calls[0]).toMatchObject({
       method: 'sendRichMessageDraft',
       rich: {
-        blocks: [{ type: 'thinking', text: expect.stringContaining('preparo il contesto') }],
+        blocks: [{ type: 'thinking', text: expect.stringContaining('sto preparando il contesto') }],
       },
       draftOptions: { canStop: true },
     });
@@ -282,7 +303,7 @@ describe('ordinary turns', () => {
       {
         method: 'sendMessageDraft',
         draftId: calls[0]?.draftId,
-        text: expect.stringContaining('preparo il contesto'),
+        text: expect.stringContaining('sto preparando il contesto'),
         draftOptions: { canStop: true },
       },
     ]);
@@ -397,7 +418,7 @@ describe('approval messages', () => {
       expect(approval).toContain('echo ciao');
       expect(approval).toContain('sys.shell.write: consentito');
       expect(approval).not.toContain(partial);
-      expect(approval).not.toContain('preparo il contesto');
+      expect(approval).not.toContain('sto preparando il contesto');
       expect(approval).not.toContain(toolArgs.command);
     }
   });

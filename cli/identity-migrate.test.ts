@@ -171,6 +171,17 @@ describe('muffin rot migrate (identità)', () => {
     expect(resolveIdentityLayers(home).mode).toBe('legacy-home');
   });
 
+  it('senza --apply non riscrive rot/budgets.json, anche se andrebbe riformattato', async () => {
+    const home = freshHome();
+    const budgets = join(paths(home).rot, 'budgets.json');
+    writeFileSync(budgets, '{"schemaVersion":1,"monthlyUsd":80}\n');
+    const before = readFileSync(budgets, 'utf8');
+    const r = await run(home, []);
+    expect(r.code).toBe(0);
+    expect(readFileSync(budgets, 'utf8')).toBe(before);
+    expect(r.text).toMatch(/Niente scritto senza --apply|da scrivere: rot\/budgets\.json/);
+  });
+
   it('--apply sposta le righe e attiva fondazione + user.md', async () => {
     const home = freshHome();
     handEdit(home, '- Riga mia (fixture).\n');

@@ -95,7 +95,7 @@ import { cmdOrientamento, ORIENTAMENTO_USAGE } from './orientamento.js';
 import { promptLine, promptSecret, resolveSecretInput, secretStoreHint } from './prompt.js';
 import { cmdPromptShow, cmdPromptVersion, PROMPT_USAGE } from './prompt-show.js';
 import { runRepl } from './repl.js';
-import { ROT_MIGRATE_USAGE, runRotMigrate } from './rot-migrate.js';
+import { rotMigrateUsage, runRotMigrate } from './rot-migrate.js';
 import { runHeadless } from './run.js';
 import { cmdSearch } from './search-setup.js';
 import { cmdStatus, STATUS_USAGE } from './status.js';
@@ -229,9 +229,6 @@ Per un riassunto di poche righe: muffin status`,
   senza argomenti mostra cosa si può adottare; non copia niente.`,
   backup: BACKUP_USAGE,
   restore: BACKUP_USAGE,
-  rot: `uso:
-  muffin rot verify             confronta rot/ con il manifest (diagnostica, non un incidente)
-${ROT_MIGRATE_USAGE}`,
   uninstall: 'uso: muffin uninstall [--yes]   rimuove la Home dopo conferma',
   memory: MEMORY_USAGE,
   vault: VAULT_USAGE,
@@ -251,6 +248,15 @@ ${ROT_MIGRATE_USAGE}`,
   completion: 'uso: muffin completion <bash|zsh|fish>',
   repl: 'uso: muffin repl [--stream|--no-stream] [--debug]',
 };
+
+function usageFor(command: string, home: string): string | undefined {
+  if (command === 'rot') {
+    return `uso:
+  muffin rot verify             confronta rot/ con il manifest (diagnostica, non un incidente)
+${rotMigrateUsage(home)}`;
+  }
+  return COMMAND_USAGE[command];
+}
 
 async function main(rawArgv: string[]): Promise<number> {
   loadDotenvIfPresent();
@@ -272,7 +278,7 @@ async function main(rawArgv: string[]): Promise<number> {
   // command runs. Several parsed their flags strictly and died on it
   // ("Unknown option '--help'"); one (`adopt`) ignored it and *acted*.
   if (command !== undefined && command !== 'help' && commandSpec(command) && wantsHelp(rest)) {
-    process.stdout.write(commandHelp(command, COMMAND_USAGE[command]) ?? primaryHelp());
+    process.stdout.write(commandHelp(command, usageFor(command, paths().home)) ?? primaryHelp());
     return 0;
   }
   switch (command) {
@@ -414,7 +420,7 @@ async function main(rawArgv: string[]): Promise<number> {
     case 'help': {
       const topic = rest.find((a) => !a.startsWith('-'));
       if (topic !== undefined) {
-        const page = commandHelp(topic, COMMAND_USAGE[canonicalCommand(topic)]);
+        const page = commandHelp(topic, usageFor(canonicalCommand(topic), paths().home));
         if (page === null) {
           process.stderr.write(`comando sconosciuto: ${topic}\n\n${primaryHelp()}`);
           return 78;

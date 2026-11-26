@@ -281,6 +281,20 @@ describe('describeSandboxProbe — the probe said in full during init, not only 
     expect(line.toLowerCase()).toContain('sudo');
     expect(line).toContain('init non lo esegue da solo');
   });
+
+  it('git_hooks_unprotected does not say bubblewrap is unavailable as if the binary were missing', () => {
+    const probe: SandboxProbe = {
+      available: false,
+      mechanism: 'bubblewrap',
+      reason: 'git_hooks_unprotected',
+      detail: 'a contained process installed a hook via hardlink into hooks',
+      remedy: 'render scripts/install/bwrap.apparmor and load it with apparmor_parser -r',
+    };
+    const line = describeSandboxProbe(probe);
+    expect(line).toContain('git_hooks_unprotected');
+    expect(line).toContain('apparmor_parser -r');
+    expect(line).not.toContain('bubblewrap non disponibile');
+  });
 });
 
 describe('probeLocalRuntime — real loopback server, never the network', () => {

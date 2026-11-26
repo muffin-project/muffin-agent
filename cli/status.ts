@@ -100,6 +100,21 @@ export function cmdStatus(home: string, argv: string[], deps: StatusDeps): numbe
     config = loadConfig(home);
   } catch (error) {
     const message = error instanceof ConfigError ? error.message : String(error);
+    if (json) {
+      deps.out(
+        JSON.stringify(
+          {
+            ok: false,
+            error: 'uninitialized',
+            message,
+            hint: 'muffin init',
+          },
+          null,
+          2,
+        ),
+      );
+      return 78;
+    }
     process.stderr.write(`Muffin non è ancora configurato qui (${message}).\n→ muffin init\n`);
     return 78;
   }

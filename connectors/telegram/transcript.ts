@@ -59,7 +59,25 @@ type Segment = {
 
 type TranscriptProgress = TurnEvent | { type: 'preparing_context' };
 
-const PREPARING_CONTEXT_STATUS = 'preparo il contesto';
+/**
+ * Shown in the live draft before the first model tokens. Starts with "sto"
+ * like the later "sto lavorando" / "sto pensando" phrases, never with the
+ * English-looking stub "prep" that Telegram Web typed out of the old
+ * "preparo il contesto" label in the first second of a turn.
+ */
+const PREPARING_CONTEXT_STATUS = 'sto preparando il contesto';
+
+/**
+ * The live status line in a Telegram draft (`thinking` block or legacy text).
+ *
+ * The number and its unit are joined by a non-breaking space so a narrow
+ * bubble or a mid-frame client paint cannot show "7" without "s". The
+ * function always returns a complete line — never a truncated placeholder.
+ */
+export function formatDraftStatus(status: string, elapsedMs: number): string {
+  const seconds = Math.max(0, Math.round(elapsedMs / 1000));
+  return `${status} · ${String(seconds)}\u00a0s`;
+}
 
 export type Transcript = {
   /**
@@ -210,6 +228,8 @@ export function startTranscript(
    * streaming deve scorrere. 1,5 s faceva arrivare il testo a scatti.
    */
   const DRAFT_TICK_MS = 350;
+  /** Status-only drafts tick slower so a client typist can finish "… · Ns". */
+  const STATUS_TICK_MS = 1_000;
   const draftEveryMs =
     Math.max(1, Math.floor(negotiation.draftTtlMs / 3) || DRAFT_TICK_MS) < DRAFT_TICK_MS
       ? Math.max(1, Math.floor(negotiation.draftTtlMs / 3) || DRAFT_TICK_MS)
@@ -232,6 +252,8 @@ export function startTranscript(
    * deve partire subito, nello stack di `report()` — dal rinnovo che coagula.
    */
   let draftPaintedContent = false;
+  /** Last status phrase pushed to the draft, without the timer. */
+  let lastPushedStatus: string | null = null;
   const turnStartedAt = now();
 
   const segments: Segment[] = [];
@@ -522,6 +544,7 @@ export function startTranscript(
       }
       draftText = s;
       draftRich = thinkingRich(s);
+      lastPushedStatus = status;
       if (push) void pushDraft().then(() => scheduleDraft());
       else scheduleDraft();
       return;
@@ -616,8 +639,7 @@ export function startTranscript(
   /** Lo stato del turno, testo semplice: è il contenuto del blocco `thinking`. */
   function draftStatusText(): string {
     if (status === null) return '';
-    const s = Math.max(0, Math.round((now() - turnStartedAt) / 1000));
-    return `${status} · ${s}s`;
+    return formatDraftStatus(status, now() - turnStartedAt);
   }
 
   /**
@@ -629,7 +651,12 @@ export function startTranscript(
   function ensureDraftStatus(): void {
     if (stopped || draftDisabled || !draftEnabled || messaggioDelTurno) return;
     if (segments.some(hasContent)) return;
-    if (draftTimer !== null) return;
+    // A new phrase must paint now; a pending timer is only for the counter.
+    if (draftTimer !== null && status === lastPushedStatus) return;
+    if (draftTimer !== null) {
+      clearTimeout(draftTimer);
+      draftTimer = null;
+    }
     refreshDraft(true);
   }
 
@@ -643,13 +670,16 @@ export function startTranscript(
   function scheduleDraft(): void {
     if (stopped || draftDisabled || messaggioDelTurno || draftTimer !== null) return;
     if (draftText === '' && draftRich === null && status === null) return;
-    draftTimer = setTimeout(() => {
-      draftTimer = null;
-      // Ricalcola, non rimpiazzare: il contatore di un passo che gira deve
-      // avanzare anche se nessun evento lo tocca (era il difetto «· 2s per
-      // quaranta secondi»).
-      refreshDraft(true);
-    }, draftEveryMs);
+    draftTimer = setTimeout(
+      () => {
+        draftTimer = null;
+        // Ricalcola, non rimpiazzare: il contatore di un passo che gira deve
+        // avanzare anche se nessun evento lo tocca (era il difetto «· 2s per
+        // quaranta secondi»).
+        refreshDraft(true);
+      },
+      liveMarkdown === '' ? Math.max(draftEveryMs, STATUS_TICK_MS) : draftEveryMs,
+    );
   }
 
   /**
