@@ -1,6 +1,6 @@
-import type Database from 'better-sqlite3';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type Database from 'better-sqlite3';
 import { tightenPrivateFile } from '../config/private-fs.js';
 
 /**
@@ -40,7 +40,10 @@ const DERIVED_TABLES: readonly { table: string; tenantColumn: string }[] = [
 ] as const;
 
 function hasTable(db: Database.Database, table: string): boolean {
-  return db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table) !== undefined;
+  return (
+    db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table) !==
+    undefined
+  );
 }
 
 function sessionFile(home: string, id: string): string {
@@ -86,10 +89,14 @@ function adoptTranscript(home: string, sourceId: string, targetId = 'owner'): nu
   const merged = [...unique.values()].sort((a, b) => createdAtOf(a).localeCompare(createdAtOf(b)));
 
   const tmp = `${target}.adopting-${process.pid}`;
-  writeFileSync(tmp, merged.map((row) => JSON.stringify(row)).join('\n') + (merged.length > 0 ? '\n' : ''), {
-    encoding: 'utf8',
-    mode: 0o600,
-  });
+  writeFileSync(
+    tmp,
+    merged.map((row) => JSON.stringify(row)).join('\n') + (merged.length > 0 ? '\n' : ''),
+    {
+      encoding: 'utf8',
+      mode: 0o600,
+    },
+  );
   tightenPrivateFile(tmp);
   renameSync(tmp, target);
   tightenPrivateFile(target);
@@ -115,7 +122,10 @@ export function adoptOwnerState(
   connector: string,
   conversationId: string,
 ): OwnerAdoptionReport {
-  const sourceTenants = [`group:${connector}:${conversationId}`, `direct:${connector}:${conversationId}`];
+  const sourceTenants = [
+    `group:${connector}:${conversationId}`,
+    `direct:${connector}:${conversationId}`,
+  ];
   let movedRows = 0;
 
   db.transaction(() => {
@@ -131,16 +141,22 @@ export function adoptOwnerState(
         const dropVector = db.prepare(`DELETE FROM chunks_vec WHERE rowid = ?`);
         for (const row of chunkIds) dropVector.run(BigInt(row.id));
       }
-      movedRows += db.prepare(`DELETE FROM chunks WHERE tenant_id IN (?, ?)`).run(...sourceTenants).changes;
+      movedRows += db
+        .prepare(`DELETE FROM chunks WHERE tenant_id IN (?, ?)`)
+        .run(...sourceTenants).changes;
     }
 
-    // Profiles/digests are reconstructible summaries. Keeping a summary made
-    // while the speaker was unauthenticated would launder framing across the
-    // boundary even if the source rows retain tier 2, so rebuild instead.
+    // `profiles` and `digests` are not created anymore and nothing reads them.
+    // An older database may still hold rows written before pairing. Re-keying
+    // those onto `host` would launder an unauthenticated summary across the
+    // boundary, and there is no consumer to rebuild, so the rows are deleted
+    // when the table exists. A fresh database has neither table: the guard
+    // skips the statement instead of failing the adoption.
     for (const { table, tenantColumn } of DERIVED_TABLES) {
       if (!hasTable(db, table)) continue;
       movedRows += db
-        .prepare(`DELETE FROM ${table} WHERE ${tenantColumn} IN (?, ?)`).run(...sourceTenants).changes;
+        .prepare(`DELETE FROM ${table} WHERE ${tenantColumn} IN (?, ?)`)
+        .run(...sourceTenants).changes;
     }
 
     // Evidence and beliefs keep their ids, provenance, timestamps and trust
@@ -148,8 +164,8 @@ export function adoptOwnerState(
     for (const { table, tenantColumn } of EVIDENCE_TABLES) {
       if (!hasTable(db, table)) continue;
       movedRows += db
-        .prepare(`UPDATE ${table} SET ${tenantColumn} = 'host' WHERE ${tenantColumn} IN (?, ?)`).run(...sourceTenants)
-        .changes;
+        .prepare(`UPDATE ${table} SET ${tenantColumn} = 'host' WHERE ${tenantColumn} IN (?, ?)`)
+        .run(...sourceTenants).changes;
     }
   })();
 

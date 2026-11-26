@@ -80,9 +80,9 @@ Beliefs are interpretations that can be reconstructed, contradicted, hedged and
 superseded without rewriting the source evidence.
 
 The current memory graph separates entities/identities/facts from episodes and
-carries world time, system time, speaker, trust and origin. Profiles, digests,
-embeddings and retrieval indexes are **derived representations**, not the
-identity of the memory system.
+carries world time, system time, speaker, trust and origin. Embeddings and
+retrieval indexes are **derived representations**, not the identity of the
+memory system.
 
 Canonical Beliefs have **one semantic writer**. Extractors, model reasoning,
 future importers, Nodes or sub-agents may all produce candidate beliefs, but they
@@ -506,8 +506,7 @@ Derived/rebuildable state includes things such as:
 
 - embeddings and vector indexes;
 - full-text indexes;
-- generated profiles/digests/summaries;
-- retrieval caches and materialized views;
+- retrieval caches, summaries and materialized views;
 - generated repository maps;
 - worker-local caches and model warm state.
 
