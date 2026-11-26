@@ -5,6 +5,8 @@ import {
 } from '../agent/providers/models-discovery.js';
 import { verifyInferenceRoute } from '../agent/providers/verify.js';
 import { isOpenRouterFreeRoute, priceOf } from '../core/budget/pricing.js';
+import { ownerCommandAuthorization, plan } from '../core/config/actions.js';
+import { commit } from '../core/config/actions-commit.js';
 import { ChatGPTConnection } from '../core/config/chatgpt-oauth.js';
 import {
   type Config,
@@ -842,13 +844,17 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
 
   if (lane === 'embed') {
     if (primo === 'off') {
-      saveConfig(
-        {
-          ...config,
-          embedder: { ...(config.embedder ?? { kind: 'ollama' }), enabled: false },
-        },
-        home,
-      );
+      const ctx = { home, source: 'cli' as const };
+      const planned = plan('embeddings.off', {}, ctx);
+      if (!planned.ok) {
+        out(planned.reason);
+        return 1;
+      }
+      const written = commit(planned.plan, ctx, ownerCommandAuthorization(planned.plan, 'cli'));
+      if (!written.ok) {
+        out(written.reason);
+        return 1;
+      }
       out('Embedding disattivati. La ricerca testuale resta attiva.');
       out('Riavvia il gateway per applicare il cambio a un’istanza in esecuzione.');
       return 0;
@@ -898,7 +904,19 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
     }
     const prima =
       original.embedder?.dimensions ?? (original.embedder === undefined ? 1024 : undefined);
-    saveConfig({ ...latest, embedder: { ...selected, dimensions: dim } }, home);
+    {
+      const ctx = { home, source: 'cli' as const };
+      const planned = plan('embeddings.set', { embedder: { ...selected, dimensions: dim } }, ctx);
+      if (!planned.ok) {
+        out(planned.reason);
+        return 1;
+      }
+      const written = commit(planned.plan, ctx, ownerCommandAuthorization(planned.plan, 'cli'));
+      if (!written.ok) {
+        out(written.reason);
+        return 1;
+      }
+    }
     out(`embed → ${slug} · ${dim} dimensioni, misurate chiamandolo`);
     if (directOpenAIEmbeddings) {
       out('La memoria da indicizzare e le query semantiche saranno inviate all’API OpenAI.');

@@ -1,4 +1,11 @@
-import { ConfigError, ConfigSchema, loadConfig, saveConfig, type Config } from './config.js';
+import {
+  describeSettableKnobs as describeFromRegistry,
+  ownerCommandAuthorization,
+  plan,
+  SETTABLE_CONFIG_KEYS as REGISTRY_KEYS,
+} from './actions.js';
+import { commit } from './actions-commit.js';
+import type { ActionSource } from './actions-types.js';
 
 /**
  * `muffin config set <chiave> <valore>` — la funzione sola dietro le porte.
@@ -51,76 +58,20 @@ import { ConfigError, ConfigSchema, loadConfig, saveConfig, type Config } from '
  */
 
 export type SetKnobOutcome =
-  | { readonly ok: true; readonly key: string; readonly previous: string; readonly next: string; readonly unchanged?: true }
+  | {
+      readonly ok: true;
+      readonly key: string;
+      readonly previous: string;
+      readonly next: string;
+      readonly unchanged?: true;
+    }
   | { readonly ok: false; readonly reason: string };
 
-type Knob = {
-  readonly key: string;
-  /** Una riga, per l'aiuto e per il messaggio di rifiuto quando la chiave non è questa. */
-  readonly describe: string;
-  readonly read: (config: Config) => string;
-  readonly parse: (raw: string) => { readonly ok: true; readonly value: number } | { readonly ok: false; readonly reason: string };
-  /** `null` quando il valore non si può scrivere in questa config così com'è (es. `search` mai configurata). */
-  readonly apply: (config: Config, value: number) => Config | null;
-  /** Perché `apply` ha risposto `null`, quando può succedere. */
-  readonly whenMissing?: string;
-};
-
-function parsePositiveInt(raw: string, max?: number): { ok: true; value: number } | { ok: false; reason: string } {
-  const trimmed = raw.trim();
-  if (!/^[0-9]+$/.test(trimmed)) {
-    return { ok: false, reason: `«${raw}» non è un numero intero` };
-  }
-  const n = Number(trimmed);
-  if (n <= 0) return { ok: false, reason: `${n} non è positivo` };
-  if (max !== undefined && n > max) return { ok: false, reason: `${n} supera il massimo (${max})` };
-  return { ok: true, value: n };
-}
-
-/**
- * L'insieme piccolo e motivato, non tutto `config.json`.
- *
- * Escluse per decisione dell'owner, testuale: **`rot.mode`** (postura di
- * sicurezza — hardened/single-user si cambia leggendo `docs/architecture/SECURITY.md`, non
- * con una riga digitata di corsa), **i provider** (`provider.*`, incluso
- * `provider.routing` — instradamento e `dataCollection` sono scelte che vanno
- * lette una volta, non girate come un termostato) e **i segreti**
- * (`provider.apiKeyRef`, `search.apiKeyRef`, `embedder.apiKeyRef`: quelli
- * restano `muffin secret set`, da stdin, mai da un valore che finisce in un
- * argomento di comando o in una traccia).
- *
- * Escluso anche tutto ciò che ha **già** una funzione dedicata — aggiungerne
- * una seconda qui sarebbe esattamente la divergenza che la casa vieta (`models.*`
- * → `muffin model`/`/model`; `thinking` → `/think`; `surfaces.default` →
- * `muffin surface default`; `prompt.version` → `muffin prompt version`).
- * Questo elenco esiste per le manopole che oggi **non hanno nessuna porta**.
- */
-const KNOBS: readonly Knob[] = [
-  {
-    key: 'traces.retentionDays',
-    describe: 'quanti giorni tenere le tracce dei turni prima che vengano ripulite (intero positivo)',
-    read: (c) => String(c.traces.retentionDays),
-    parse: (raw) => parsePositiveInt(raw),
-    apply: (c, value) => ({ ...c, traces: { retentionDays: value } }),
-  },
-  {
-    key: 'search.maxResults',
-    describe: 'quanti risultati chiedere a ogni ricerca web, da 1 a 20 (tocca solo il numero: motore e chiave restano dove sono)',
-    read: (c) => (c.search ? String(c.search.maxResults ?? '(default del motore)') : '(ricerca non configurata)'),
-    parse: (raw) => parsePositiveInt(raw, 20),
-    apply: (c, value) => (c.search ? { ...c, search: { ...c.search, maxResults: value } } : null),
-    whenMissing:
-      'la ricerca web non è configurata su questa installazione — provider e chiave si impostano a mano in config.json, ' +
-      'questo comando cambia solo il numero di risultati quando la ricerca esiste già',
-  },
-];
-
-/** Le chiavi che questo meccanismo sa scrivere, nell'ordine in cui `--help`/`/config` le mostrano. */
-export const SETTABLE_CONFIG_KEYS: readonly string[] = KNOBS.map((k) => k.key);
+export const SETTABLE_CONFIG_KEYS: readonly string[] = REGISTRY_KEYS;
 
 /** Una riga per chiave, per l'aiuto. */
 export function describeSettableKnobs(): string {
-  return KNOBS.map((k) => `  ${k.key.padEnd(20)} ${k.describe}`).join('\n');
+  return describeFromRegistry();
 }
 
 /**
@@ -128,61 +79,39 @@ export function describeSettableKnobs(): string {
  * stringa già formattata per un terminale: quella la fa ogni porta, perché
  * Telegram e il terminale non condividono un formato, ma condividono questo
  * verdetto (stessa idea di `DeliveryOutcome`, `core/surface/types.ts`).
+ *
+ * Da ADR-0114 questa funzione è un adattatore sottile sul registro unico:
+ * `plan` + `commit`, con l'attestazione `owner-command` (il comando è già
+ * stato digitato dall'owner su una porta autenticata). Nessun `--yes`.
  */
-export function setConfigKnob(home: string, key: string, rawValue: string): SetKnobOutcome {
-  const knob = KNOBS.find((k) => k.key === key);
-  if (!knob) {
+export function setConfigKnob(
+  home: string,
+  key: string,
+  rawValue: string,
+  source: ActionSource = 'cli',
+): SetKnobOutcome {
+  const ctx = { home, source };
+  const planned = plan('config.set', { key, value: rawValue }, ctx);
+  if (!planned.ok) return { ok: false, reason: planned.reason };
+  if (planned.plan.unchanged) {
     return {
-      ok: false,
-      reason:
-        `«${key}» non è un'impostazione modificabile da qui. Quelle che lo sono:\n${describeSettableKnobs()}\n` +
-        `Le altre si leggono con \`muffin config\`; molte hanno un comando dedicato ` +
-        `(\`muffin model\`, \`/think\`, \`muffin surface default\`, \`muffin prompt version\`), ` +
-        `e provider, segreti e \`rot.mode\` non si toccano da qui di proposito.`,
+      ok: true,
+      key,
+      previous: planned.plan.before,
+      next: planned.plan.after,
+      unchanged: true,
     };
   }
-
-  let config: Config;
-  try {
-    config = loadConfig(home);
-  } catch (error) {
-    return { ok: false, reason: error instanceof ConfigError ? error.message : String(error) };
-  }
-
-  const parsed = knob.parse(rawValue);
-  if (!parsed.ok) return { ok: false, reason: `${knob.key}: ${parsed.reason}` };
-
-  const previous = knob.read(config);
-  const next = knob.apply(config, parsed.value);
-  if (next === null) {
-    return { ok: false, reason: `${knob.key}: ${knob.whenMissing ?? 'non applicabile su questa config'}` };
-  }
-
-  // Belt-and-suspenders: nessun `apply` sopra dovrebbe produrre una config che
-  // lo schema rifiuta, ma questa funzione è l'unico cancello fra un comando
-  // digitato e `saveConfig` — vale la riga in più per non fidarsi in silenzio.
-  const revalidated = ConfigSchema.safeParse(next);
-  if (!revalidated.success) {
-    return {
-      ok: false,
-      reason: `scrittura rifiutata: il risultato non è una config valida (${revalidated.error.issues.map((i) => i.message).join('; ')})`,
-    };
-  }
-
-  const nextValue = knob.read(next);
-  if (previous === nextValue) {
-    return { ok: true, key: knob.key, previous, next: nextValue, unchanged: true };
-  }
-  saveConfig(next, home);
-  return { ok: true, key: knob.key, previous, next: nextValue };
+  const written = commit(planned.plan, ctx, ownerCommandAuthorization(planned.plan, source));
+  if (!written.ok) return { ok: false, reason: written.reason };
+  return {
+    ok: true,
+    key,
+    previous: written.plan.before,
+    next: written.plan.after,
+  };
 }
 
-/**
- * Il testo, una volta sola: CLI, REPL e Telegram stampano esattamente questa
- * riga — non una a testa che potrebbe dire cose leggermente diverse per lo
- * stesso verdetto. `cli/config.ts` e `agent/comandi.ts` chiamano questa
- * funzione, mai `String(outcome)` scritto a mano al call site.
- */
 export function formatSetOutcome(outcome: SetKnobOutcome): string {
   if (!outcome.ok) return outcome.reason;
   if (outcome.unchanged) return `${outcome.key} è già ${outcome.next}: config.json non toccata`;
