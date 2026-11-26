@@ -9,6 +9,7 @@ before skipping. Headless `muffin init` still reads the key from stdin.
 muffin auth login openrouter
 muffin auth login openrouter --new work
 muffin auth login openrouter --code
+muffin auth login xai
 muffin auth status
 muffin auth switch openrouter work
 muffin chatgpt login
@@ -24,9 +25,39 @@ lanes that already use that provider.
 
 Anthropic is a Console API key, including Max, Ultra, and Team API credits.
 Muffin does not start a claude.ai or Claude Code login and does not read
-`~/.claude`. xAI/Grok connects with a console.x.ai API key, billed per token
-(`muffin secret set xai_api_key`); a SuperGrok or X Premium subscription login
-is not part of this client (ADR-0110).
+`~/.claude`.
+
+## xAI / Grok
+
+xAI connects with your xAI account (no key to copy) or with a console.x.ai API
+key. Both use the same endpoint, `https://api.x.ai/v1`, and the same models.
+
+```sh
+muffin auth login xai              # browser on this machine; paste fallback
+muffin auth login xai --device     # code to type on any device (default over SSH)
+muffin auth login xai --code       # paste the address the browser lands on
+muffin fallback add xai grok-4.7   # uses the login when there is one
+muffin auth status
+muffin auth logout xai             # removes it here and revokes it at xAI
+```
+
+The login is OAuth 2.0 with PKCE (or the device code grant) against
+`auth.x.ai`. xAI publishes no client registration for third-party agents, so
+Muffin uses the Grok CLI's public client id, like OpenCode and Hermes; xAI can
+restrict it. The session is stored as `secret://xai_oauth` (mode 0600) and
+renewed automatically before it expires; tokens are never printed. Right after
+the login Muffin asks `api.x.ai` whether it accepts it. xAI decides per plan
+which accounts get API access: a 403 there means use a key instead.
+
+The API key still works and is the explicit choice when you name it:
+
+```sh
+muffin secret set xai_api_key
+muffin fallback add xai grok-4.7 --account default
+```
+
+Spend through either credential counts at xAI list prices against the budget
+caps (ADR-0113).
 
 The key is saved before the capability probe. The probe uses the same
 inference check as `muffin doctor --online`. Muffin reports the route as

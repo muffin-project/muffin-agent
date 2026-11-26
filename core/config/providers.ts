@@ -121,10 +121,10 @@ export const PROVIDERS: Readonly<Record<ProviderId, ProviderEntry>> = {
     secretName: 'anthropic_api_key',
   },
   /**
-   * xAI's developer API: OpenAI-compatible Chat Completions, billed per token
-   * from console.x.ai credits. Not the SuperGrok/X Premium subscription: that
-   * one is served by a different host behind a borrowed Grok CLI OAuth client,
-   * and ADR-0110 keeps it out until the owner decides on it.
+   * xAI's developer API: OpenAI-compatible Chat Completions. The credential is
+   * a console.x.ai key (`secret://xai_api_key`) or the xAI login
+   * (`secret://xai_oauth`, `muffin auth login xai`, ADR-0113): same endpoint,
+   * same models, priced at list rates either way.
    */
   xai: {
     id: 'xai',

@@ -892,6 +892,11 @@ async function cmdUninstall(argv: string[]): Promise<number> {
       'Removing local credentials does not revoke ChatGPT access. Disconnect Muffin in ChatGPT Settings, or run `muffin chatgpt logout` before uninstalling.\n',
     );
   }
+  if (existsSync(join(home, 'secrets', 'xai_oauth'))) {
+    process.stderr.write(
+      'Removing local credentials does not revoke the xAI login. Run `muffin auth logout xai` before uninstalling.\n',
+    );
+  }
   // Deleting keys and memory is not something a pipe should trigger by accident.
   if (!values.yes) {
     const answer = await promptLine(
@@ -1309,6 +1314,14 @@ async function cmdSecret(argv: string[]): Promise<number> {
   if (sub !== 'set' || !name) {
     process.stderr.write(
       `usage: muffin secret set NAME  (value on stdin, or interactive prompt on a TTY)\n`,
+    );
+    return 78;
+  }
+  if (name === 'xai_oauth') {
+    // Login sessions have their own writer and refresh lock; a pasted value
+    // here would corrupt them. The API key for xAI is `xai_api_key`.
+    process.stderr.write(
+      'xai_oauth is the xAI login session: use `muffin auth login xai`, or `muffin secret set xai_api_key` for a key\n',
     );
     return 78;
   }

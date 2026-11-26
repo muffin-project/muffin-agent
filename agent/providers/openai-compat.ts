@@ -263,7 +263,12 @@ export class OpenAICompatProvider implements Provider {
   readonly reasoningDialect: ReasoningDialect | undefined;
 
   constructor(
-    apiKey: string,
+    /**
+     * A key, or a getter the SDK calls before every request — the shape an
+     * OAuth access token that refreshes needs (xAI login, ADR-0113). A getter
+     * that throws a `ProviderError` keeps its classification (see `wrap`).
+     */
+    apiKey: string | (() => Promise<string>),
     baseURL?: string,
     headers: Record<string, string> = {},
     opts: {
@@ -1119,6 +1124,10 @@ function providerErrorFromWire(
 
 function wrap(error: unknown, retryFreeRouterNotFound = false): ProviderError {
   if (error instanceof ProviderError) return error;
+  // The SDK wraps whatever the `apiKey` getter throws in an `OpenAIError`; a
+  // credential failure already classified there (re-login, unavailable) must
+  // reach the chain as itself, not as a retryable unknown.
+  if (error instanceof Error && error.cause instanceof ProviderError) return error.cause;
   if (error instanceof OpenAI.APIError) {
     const status = error.status ?? 0;
     const regionalNoEndpoint = isRegionalNoEndpoint404(error);

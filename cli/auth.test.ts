@@ -110,9 +110,10 @@ describe('muffin auth', () => {
     expect(out.join('\n')).not.toContain(CANARY);
   });
 
-  it('does not start OAuth without a terminal or for Anthropic/xAI', async () => {
+  it('does not start OAuth without a terminal or for Anthropic', async () => {
     const { home } = fixture();
     const obtain = vi.fn(async () => CANARY);
+    const obtainXai = vi.fn();
     const out: string[] = [];
     const sink = (line: string) => out.push(line);
     expect(
@@ -121,11 +122,20 @@ describe('muffin auth', () => {
     expect(
       await cmdAuth(home, ['login', 'anthropic'], { out: sink, obtain, stdinIsTTY: true }),
     ).toBe(2);
-    expect(await cmdAuth(home, ['login', 'grok'], { out: sink, obtain, stdinIsTTY: true })).toBe(2);
-    expect(await cmdAuth(home, ['login', 'xai'], { out: sink, obtain, stdinIsTTY: true })).toBe(2);
+    expect(await cmdAuth(home, ['login', 'xai'], { out: sink, obtainXai, stdinIsTTY: false })).toBe(
+      1,
+    );
+    expect(
+      await cmdAuth(home, ['login', 'xai', '--code', '--device'], {
+        out: sink,
+        obtainXai,
+        stdinIsTTY: true,
+      }),
+    ).toBe(2);
     expect(obtain).not.toHaveBeenCalled();
+    expect(obtainXai).not.toHaveBeenCalled();
     expect(out.join('\n')).toMatch(/Console\/API key/);
-    expect(out.join('\n')).toMatch(/xAI\/Grok/);
+    expect(out.join('\n')).toMatch(/xAI login needs a terminal/);
     expect(out.join('\n')).not.toContain(CANARY);
   });
 
@@ -208,5 +218,188 @@ describe('OpenRouter PKCE from the CLI', () => {
     expect(printed).not.toContain(verifier);
     expect(printed).not.toContain(CANARY);
     expect(printed).not.toContain('one-use-code');
+  });
+});
+
+describe('muffin auth login xai (ADR-0113)', () => {
+  const XAI_ACCESS = 'xai-access-canary';
+  const XAI_REFRESH = 'xai-refresh-canary';
+
+  function xaiFetch(modelsStatus = 200) {
+    const urls: string[] = [];
+    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      urls.push(`${request.url} ${request.headers.get('authorization') ?? ''}`);
+      if (request.url.endsWith('/oauth2/userinfo'))
+        return Response.json({ email: 'me@example.com' });
+      if (request.url === 'https://api.x.ai/v1/models') {
+        return modelsStatus === 200
+          ? Response.json({ data: [{ id: 'grok-4.7' }, { id: 'grok-4.6' }] })
+          : new Response('{"error":"The caller does not have permission"}', {
+              status: modelsStatus,
+            });
+      }
+      if (request.url === 'https://auth.x.ai/oauth2/revoke') return new Response(null);
+      throw new Error(`unexpected ${request.url}`);
+    }) as unknown as typeof fetch;
+    return { fetchImpl, urls };
+  }
+
+  const obtainXai = vi.fn(async () => ({
+    token: { accessToken: XAI_ACCESS, refreshToken: XAI_REFRESH, expiresIn: 3600 },
+    method: 'oauth-pkce' as const,
+  }));
+
+  it('saves the login, checks api.x.ai with it, and never prints a token', async () => {
+    const { home } = fixture();
+    const { fetchImpl, urls } = xaiFetch();
+    const out: string[] = [];
+    const code = await cmdAuth(home, ['login', 'xai'], {
+      out: (line) => out.push(line),
+      obtainXai,
+      fetch: fetchImpl,
+      stdinIsTTY: true,
+      ssh: true,
+    });
+    const text = out.join('\n');
+    expect(code).toBe(0);
+    expect(obtainXai).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'device' }));
+    expect(text).toContain('xAI login saved at secret://xai_oauth for me@example.com');
+    expect(text).toContain('muffin fallback add xai grok-4.7');
+    expect(text).toContain('api.x.ai accepts this login (2 models visible)');
+    expect(text).not.toMatch(/canary/);
+    expect(urls).toContain(`https://api.x.ai/v1/models Bearer ${XAI_ACCESS}`);
+    const stored = JSON.parse(readFileSync(join(home, 'secrets', 'xai_oauth'), 'utf8'));
+    expect(stored).toMatchObject({ accessToken: XAI_ACCESS, refreshToken: XAI_REFRESH });
+    // The main lane is untouched: the login is chosen per chain link.
+    expect(loadConfig(home).provider.kind).toBe('anthropic');
+
+    out.length = 0;
+    expect(await cmdAuth(home, ['status'], { out: (line) => out.push(line) })).toBe(0);
+    expect(out.join('\n')).toContain(
+      'xai login oauth-pkce secret://xai_oauth inactive ok me@example.com',
+    );
+    expect(out.join('\n')).not.toMatch(/canary/);
+  });
+
+  it('points xAI links that name a missing default key at the login', async () => {
+    const { home } = fixture();
+    const config = loadConfig(home);
+    saveConfig(
+      {
+        ...config,
+        fallbacks: {
+          main: [
+            {
+              provider: {
+                kind: 'openai-compat',
+                baseUrl: 'https://api.x.ai/v1',
+                apiKeyRef: 'secret://xai_api_key',
+              },
+              model: 'grok-4.7',
+            },
+            {
+              provider: {
+                kind: 'openai-compat',
+                baseUrl: 'https://api.x.ai/v1',
+                apiKeyRef: 'secret://xai_api_key_work',
+              },
+              model: 'grok-4.6',
+            },
+          ],
+        },
+      },
+      home,
+    );
+    const out: string[] = [];
+    await cmdAuth(home, ['login', 'xai', '--browser'], {
+      out: (line) => out.push(line),
+      obtainXai,
+      fetch: xaiFetch().fetchImpl,
+      stdinIsTTY: true,
+    });
+    const links = loadConfig(home).fallbacks?.main ?? [];
+    expect(links.map((link) => link.provider.apiKeyRef)).toEqual([
+      'secret://xai_oauth',
+      'secret://xai_api_key_work',
+    ]);
+    expect(out.join('\n')).toContain('now use the login: main 2');
+    expect(out.join('\n')).toContain('Used by: main 2');
+  });
+
+  it('leaves a link with a stored key alone', async () => {
+    const { home } = fixture();
+    writeSecret('xai_api_key', 'xai-key-canary', home, 'persistent');
+    const config = loadConfig(home);
+    const link = {
+      provider: {
+        kind: 'openai-compat' as const,
+        baseUrl: 'https://api.x.ai/v1',
+        apiKeyRef: 'secret://xai_api_key',
+      },
+      model: 'grok-4.7',
+    };
+    saveConfig({ ...config, fallbacks: { main: [link] } }, home);
+    await cmdAuth(home, ['login', 'xai'], {
+      out: () => {},
+      obtainXai,
+      fetch: xaiFetch().fetchImpl,
+      stdinIsTTY: true,
+    });
+    expect(loadConfig(home).fallbacks?.main?.[0]?.provider.apiKeyRef).toBe('secret://xai_api_key');
+  });
+
+  it('reports a 403 from api.x.ai as plan gating with the API-key way out', async () => {
+    const { home } = fixture();
+    const out: string[] = [];
+    const code = await cmdAuth(home, ['login', 'xai'], {
+      out: (line) => out.push(line),
+      obtainXai,
+      fetch: xaiFetch(403).fetchImpl,
+      stdinIsTTY: true,
+    });
+    expect(code).toBe(1);
+    expect(out.join('\n')).toContain('api.x.ai refused this login (HTTP 403)');
+    expect(out.join('\n')).toContain('muffin secret set xai_api_key');
+    expect(out.join('\n')).not.toContain('caller does not have permission');
+  });
+
+  it('logout revokes and names the links still using the login', async () => {
+    const { home } = fixture();
+    const { fetchImpl } = xaiFetch();
+    await cmdAuth(home, ['login', 'xai'], {
+      out: () => {},
+      obtainXai,
+      fetch: fetchImpl,
+      stdinIsTTY: true,
+    });
+    const config = loadConfig(home);
+    saveConfig(
+      {
+        ...config,
+        fallbacks: {
+          light: [
+            {
+              provider: {
+                kind: 'openai-compat',
+                baseUrl: 'https://api.x.ai/v1',
+                apiKeyRef: 'secret://xai_oauth',
+              },
+              model: 'grok-4.7',
+            },
+          ],
+        },
+      },
+      home,
+    );
+    const out: string[] = [];
+    const { XaiOAuthConnection } = await import('../core/config/xai-oauth.js');
+    const xai = new XaiOAuthConnection(home, { fetch: fetchImpl });
+    expect(await cmdAuth(home, ['logout', 'xai'], { out: (line) => out.push(line), xai })).toBe(0);
+    expect(out.join('\n')).toContain('the renewable session was revoked');
+    expect(out.join('\n')).toContain('Still configured to use it: light 2');
+    out.length = 0;
+    expect(await cmdAuth(home, ['logout', 'xai'], { out: (line) => out.push(line), xai })).toBe(0);
+    expect(out.join('\n')).toContain('xAI is not logged in.');
   });
 });

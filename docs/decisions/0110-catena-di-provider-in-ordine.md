@@ -7,6 +7,10 @@ ripiego esiste, ma solo **esplicito**, scritto dall'owner. Amenda ADR-0105 per
 la sola voce xAI: una chiave API xAI diventa un profilo come le altre; il login
 con l'abbonamento SuperGrok/X Premium resta fuori.
 
+**Amendata da [ADR-0113](0113-login-xai-con-oauth.md) il 2026-11-26:** l'owner
+ha deciso per il login xAI con OAuth (`muffin auth login xai`), accanto alla
+chiave API; la voce «Login con l'abbonamento» qui sotto resta come contesto.
+
 ## Problema
 
 Il 2026-11-25 il piano ChatGPT dell'owner ha esaurito la quota

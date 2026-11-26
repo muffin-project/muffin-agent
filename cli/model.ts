@@ -22,6 +22,7 @@ import { buildEndpointsUrl, parseEndpointTags } from '../core/config/endpoints.j
 import { type EndpointEvidence, resolveModelSwitch } from '../core/config/model-resolve.js';
 import { clearChainPauses, linkLabel } from '../core/config/provider-chain.js';
 import { PROVIDERS, type ProviderEntry, providerFor } from '../core/config/providers.js';
+import { XAI_OAUTH_REF, XaiOAuthConnection } from '../core/config/xai-oauth.js';
 import { askGateway } from '../core/gateway/control-socket.js';
 import { makeEmbedder, OllamaEmbedder } from '../core/memory/embed.js';
 import { openChatGPTBrowser } from './chatgpt-browser.js';
@@ -1193,6 +1194,9 @@ export function keyForEndpoints(
   home: string,
 ): string | undefined {
   try {
+    // The xAI login is a session, not a key: its current access token, if fresh.
+    if (provider.apiKeyRef === XAI_OAUTH_REF)
+      return new XaiOAuthConnection(home).cachedAccessToken();
     return readSecret(provider.apiKeyRef, home);
   } catch {
     return undefined;

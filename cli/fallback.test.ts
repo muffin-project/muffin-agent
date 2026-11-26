@@ -1,10 +1,11 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { configuredProvider } from '../agent/providers/configured.js';
 import { inferenceChain, loadConfig, writeAuthoritativeSecret } from '../core/config/config.js';
 import { linkId, readChainState, writeLaneChainState } from '../core/config/provider-chain.js';
+import { XaiOAuthConnection } from '../core/config/xai-oauth.js';
 import { cmdFallback, describeChain } from './fallback.js';
 import { runInit } from './init.js';
 
@@ -33,7 +34,9 @@ describe('muffin fallback', () => {
     ]);
     expect(config.fallbacks?.main?.[0]?.provider.apiKeyRef).toBe('secret://xai_api_key');
     expect(config.fallbacks?.light).toHaveLength(1);
-    expect(lines.join('\n')).toContain('manca la credenziale: muffin secret set xai_api_key');
+    expect(lines.join('\n')).toContain(
+      'manca la credenziale: muffin auth login xai (oppure muffin secret set xai_api_key)',
+    );
     expect(lines.join('\n')).toContain('la spesa conta nei tetti di budget');
   });
 
@@ -53,7 +56,7 @@ describe('muffin fallback', () => {
     const text = lines.join('\n');
     expect(text).toMatch(/main:\n {2}1\. .* — principale/);
     expect(text).toContain(
-      '2. xAI API · grok-4.7 — credenziale mancante → muffin secret set xai_api_key',
+      '2. xAI API · grok-4.7 — credenziale mancante → muffin auth login xai (oppure muffin secret set xai_api_key)',
     );
   });
 
@@ -135,5 +138,79 @@ describe('muffin fallback', () => {
     expect(readChainState(home).lanes.main?.cooldowns).toEqual({});
     expect(describeChain(loadConfig(home), 'main', home).degraded).toBe(false);
     vi.unstubAllEnvs();
+  });
+});
+
+describe('muffin fallback add xai with the xAI login (ADR-0113)', () => {
+  async function loggedIn(home: string) {
+    await new XaiOAuthConnection(home).save(
+      { accessToken: 'xai-access-canary', refreshToken: 'xai-refresh-canary', expiresIn: 3600 },
+      'oauth-device',
+    );
+  }
+
+  it('uses the login when there is one, the key when --account names it', async () => {
+    const { home, lines, run } = fresh();
+    await loggedIn(home);
+    expect(run('add', 'xai', 'grok-4.7')).toBe(0);
+    expect(run('add', 'xai', 'grok-4.6', '--account', 'default')).toBe(0);
+    const refs = loadConfig(home).fallbacks?.main?.map((l) => l.provider.apiKeyRef);
+    expect(refs).toEqual(['secret://xai_oauth', 'secret://xai_api_key']);
+    const text = lines.join('\n');
+    expect(text).toContain('credenziale: il tuo login xAI (secret://xai_oauth)');
+    expect(text).not.toContain('manca la credenziale: muffin auth login xai\n');
+    expect(text).not.toMatch(/canary/);
+    lines.length = 0;
+    run();
+    expect(lines.join('\n')).toContain('2. xAI API (xai_oauth) · grok-4.7');
+    expect(lines.join('\n')).not.toMatch(/xai_oauth\) · grok-4.7 — .*credenziale mancante/);
+  });
+
+  it('a login xAI refused to refresh counts as a missing credential', async () => {
+    const { home, lines, run } = fresh();
+    await loggedIn(home);
+    run('add', 'xai', 'grok-4.7');
+    const file = join(home, 'secrets', 'xai_oauth');
+    const store = JSON.parse(readFileSync(file, 'utf8'));
+    writeFileSync(file, JSON.stringify({ ...store, lastRefresh: { at: 1, outcome: 'reauth' } }), {
+      mode: 0o600,
+    });
+    lines.length = 0;
+    run();
+    expect(lines.join('\n')).toContain(
+      '2. xAI API (xai_oauth) · grok-4.7 — credenziale mancante → muffin auth login xai',
+    );
+  });
+
+  it('the chain sends the login access token as the bearer to api.x.ai', async () => {
+    const { home, run } = fresh();
+    await loggedIn(home);
+    run('add', 'xai', 'grok-4.7');
+    const config = loadConfig(home);
+    // Make the primary fail with an account error so the chain reaches xAI.
+    const seen: string[] = [];
+    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      seen.push(`${request.url} ${request.headers.get('authorization')}`);
+      if (!request.url.startsWith('https://api.x.ai/')) {
+        return new Response('{"error":{"message":"no credit"}}', { status: 402 });
+      }
+      return Response.json({
+        id: 'r',
+        model: 'grok-4.7',
+        choices: [{ message: { content: 'ciao' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      });
+    }) as unknown as typeof globalThis.fetch;
+    const provider = configuredProvider(config, home, fetch, 'main');
+    const result = await provider.chat({
+      model: config.models.main,
+      system: [{ type: 'text', text: 's' }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      maxOutputTokens: 8,
+      stream: false,
+    });
+    expect(result.text).toBe('ciao');
+    expect(seen.at(-1)).toBe('https://api.x.ai/v1/chat/completions Bearer xai-access-canary');
   });
 });

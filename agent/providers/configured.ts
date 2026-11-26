@@ -14,11 +14,17 @@ import {
   readChainState,
   writeLaneChainState,
 } from '../../core/config/provider-chain.js';
+import { providerFor } from '../../core/config/providers.js';
+import {
+  XAI_OAUTH_REF,
+  XaiOAuthConnection,
+  XaiReauthenticationRequired,
+} from '../../core/config/xai-oauth.js';
 import { AnthropicProvider } from './anthropic.js';
 import { type ChainEvent, type ChainLink, providerChain } from './chain.js';
 import { OpenAIChatGPTProvider } from './openai-chatgpt.js';
 import { OpenAICompatProvider } from './openai-compat.js';
-import type { Provider } from './types.js';
+import { type Provider, ProviderError } from './types.js';
 
 /** One authenticated adapter for one connection — the only place adapters are chosen. */
 export function connectionProvider(
@@ -32,8 +38,11 @@ export function connectionProvider(
       fetch ? { fetch } : {},
     );
   }
-  const key = readSecret(selected.apiKeyRef, home);
+  const key = isXaiLogin(selected)
+    ? xaiLoginToken(home, fetch)
+    : readSecret(selected.apiKeyRef, home);
   if (selected.kind === 'anthropic') {
+    if (typeof key !== 'string') throw new Error('secret://xai_oauth is not an Anthropic key');
     return new AnthropicProvider(key, selected.baseUrl, fetch ? { fetch } : {});
   }
   return new OpenAICompatProvider(
@@ -46,6 +55,42 @@ export function connectionProvider(
       ...(fetch ? { fetch, metadataFetch: fetch } : {}),
     },
   );
+}
+
+/** An xAI connection that authenticates with the xAI login instead of a key (ADR-0113). */
+export function isXaiLogin(selected: InferenceProviderConfig): boolean {
+  return selected.apiKeyRef === XAI_OAUTH_REF && providerFor(selected)?.id === 'xai';
+}
+
+/**
+ * The per-request bearer for an xAI login: refreshed before expiry, shared by
+ * every request of this adapter. Failures are classified here so the chain
+ * (ADR-0110) treats them as an account problem and moves on.
+ */
+function xaiLoginToken(home: string, fetch?: typeof globalThis.fetch): () => Promise<string> {
+  const connection = new XaiOAuthConnection(home, fetch ? { fetch } : {});
+  // Fail at construction, like a missing key file: no login, no adapter.
+  if (!connection.status().connected) throw new Error('xAI login missing: muffin auth login xai');
+  return async () => {
+    try {
+      return await connection.accessToken();
+    } catch (error) {
+      if (error instanceof XaiReauthenticationRequired) {
+        throw new ProviderError(error.message, false, undefined, 'transport', undefined, false, {
+          reauthentication: 'xai',
+        });
+      }
+      throw new ProviderError(
+        'xAI access token unavailable',
+        false,
+        undefined,
+        'transport',
+        undefined,
+        false,
+        { credentials: 'unavailable' },
+      );
+    }
+  };
 }
 
 export type ConfiguredProviderOptions = {

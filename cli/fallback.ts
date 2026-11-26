@@ -17,6 +17,7 @@ import {
   readChainState,
 } from '../core/config/provider-chain.js';
 import { PROVIDERS, providerFor } from '../core/config/providers.js';
+import { XAI_OAUTH_REF, XAI_OAUTH_SECRET, XaiOAuthConnection } from '../core/config/xai-oauth.js';
 
 /**
  * `muffin fallback` — the owner's whole interface to provider chains (ADR-0110).
@@ -60,11 +61,26 @@ export function credentialRemedy(link: FallbackLink): string {
   if (link.provider.kind === 'openai-chatgpt') return 'muffin chatgpt login';
   const name = link.provider.apiKeyRef.replace(/^secret:\/\//, '');
   if (entry?.id === 'openrouter') return 'muffin auth login openrouter';
+  if (entry?.id === 'xai' && link.provider.apiKeyRef === XAI_OAUTH_REF)
+    return 'muffin auth login xai';
+  if (entry?.id === 'xai' && name === PROVIDERS.xai.secretName)
+    return `muffin auth login xai (oppure muffin secret set ${name})`;
   return `muffin secret set ${name}`;
+}
+
+/** The xAI login is present and xAI has not refused its refresh token. */
+export function xaiLoginUsable(home: string): boolean {
+  try {
+    const status = new XaiOAuthConnection(home).status();
+    return status.connected && !status.needsLogin;
+  } catch {
+    return false;
+  }
 }
 
 function credentialPresent(link: FallbackLink, home: string): boolean {
   try {
+    if (link.provider.apiKeyRef === XAI_OAUTH_REF) return xaiLoginUsable(home);
     return locateSecret(link.provider.apiKeyRef, home) !== null;
   } catch {
     return false;
@@ -177,6 +193,11 @@ export function cmdFallback(home: string, argv: string[], deps: FallbackDeps): n
       return 2;
     }
     let secretName: string | undefined;
+    // xAI without --account: the login when there is one (ADR-0113), otherwise
+    // the default key. `--account default` names the key explicitly.
+    if (providerId === 'xai' && flags.account === undefined && xaiLoginUsable(home)) {
+      secretName = XAI_OAUTH_SECRET;
+    }
     if (flags.account !== undefined) {
       if (providerId !== 'openrouter' && providerId !== 'anthropic' && providerId !== 'xai') {
         deps.out(`--account vale per i provider a chiave, non per ${providerId}`);
@@ -209,6 +230,9 @@ export function cmdFallback(home: string, argv: string[], deps: FallbackDeps): n
     };
     saveConfig(next, home);
     deps.out(`aggiunto alla catena ${lane}: ${linkLabel(link)}`);
+    if (link.provider.apiKeyRef === XAI_OAUTH_REF) {
+      deps.out('credenziale: il tuo login xAI (secret://xai_oauth), rinnovato da solo');
+    }
     if (!credentialPresent(link, home)) {
       deps.out(`manca la credenziale: ${credentialRemedy(link)}`);
     }
