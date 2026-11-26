@@ -1,11 +1,28 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { paths } from './config.js';
 import { sha256 } from '../rot/verify.js';
-import { diagnoseDefaultsDrift, isShippedDefault, readDefaultsRegistry, recordCopied, type Git } from './defaults-drift.js';
+import { paths } from './config.js';
+import {
+  diagnoseDefaultsDrift,
+  type Git,
+  isShippedDefault,
+  readDefaultsRegistry,
+  recordCopied,
+  recordSeeded,
+} from './defaults-drift.js';
 
 /**
  * The property that matters most (the task brief's own words): a file the
@@ -25,7 +42,8 @@ import { diagnoseDefaultsDrift, isShippedDefault, readDefaultsRegistry, recordCo
 
 function sh(cmd: string, args: string[], cwd: string): string {
   const r = spawnSync(cmd, args, { cwd, encoding: 'utf8' });
-  if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} in ${cwd} failed:\n${r.stderr || r.stdout}`);
+  if (r.status !== 0)
+    throw new Error(`${cmd} ${args.join(' ')} in ${cwd} failed:\n${r.stderr || r.stdout}`);
   return r.stdout;
 }
 
@@ -85,7 +103,9 @@ describe('diagnoseDefaultsDrift — adoptable (rule 1: the registry recorded at 
 
     const d = findPersona(diagnoseDefaultsDrift(h, checkout));
     expect(d?.status).toBe('adoptable');
-    expect(d?.adoptCommand).toBe(`cp ${join(checkout, 'defaults', 'persona.md')} ${join(h, 'persona.md')}`);
+    expect(d?.adoptCommand).toBe(
+      `cp ${join(checkout, 'defaults', 'persona.md')} ${join(h, 'persona.md')}`,
+    );
     expect(d?.detail).toContain('registrato');
     rmSync(checkout, { recursive: true, force: true });
     rmSync(h, { recursive: true, force: true });
@@ -129,7 +149,7 @@ describe('diagnoseDefaultsDrift — owner-modified must never read as adoptable'
     commit(checkout, 'persona.md', 'v2\n', 'persona v2');
     commit(checkout, 'persona.md', 'v3\n', 'persona v3');
     const h = home();
-    writeFileSync(join(h, 'persona.md'), 'testo mai spedito, scritto dall\'owner\n');
+    writeFileSync(join(h, 'persona.md'), "testo mai spedito, scritto dall'owner\n");
     // No recordCopied at all: this simulates an installation that predates
     // the registry — the owner's own machine in the research doc.
 
@@ -150,7 +170,9 @@ describe('diagnoseDefaultsDrift — owner-modified must never read as adoptable'
     const d = findPersona(diagnoseDefaultsDrift(h, checkout));
     expect(d?.status).toBe('adoptable');
     expect(d?.detail).toContain(v2sha.slice(0, 7));
-    expect(d?.adoptCommand).toBe(`cp ${join(checkout, 'defaults', 'persona.md')} ${join(h, 'persona.md')}`);
+    expect(d?.adoptCommand).toBe(
+      `cp ${join(checkout, 'defaults', 'persona.md')} ${join(h, 'persona.md')}`,
+    );
     rmSync(checkout, { recursive: true, force: true });
     rmSync(h, { recursive: true, force: true });
   });
@@ -369,7 +391,9 @@ describe('un incidente su un file costa una riga, non il rapporto', () => {
     expect(findPersona(diagnoseDefaultsDrift(h, checkout))?.status).toBe('owner-modified');
 
     // Ora si corrompe una voce che non c'entra niente con persona.md.
-    const registry = JSON.parse(readFileSync(paths(h).defaultsManifest, 'utf8')) as { files: unknown[] };
+    const registry = JSON.parse(readFileSync(paths(h).defaultsManifest, 'utf8')) as {
+      files: unknown[];
+    };
     registry.files.push({ path: 'un-altro-file.md' }); // manca `sha256`
     writeFileSync(paths(h).defaultsManifest, `${JSON.stringify(registry)}\n`);
 
@@ -441,7 +465,10 @@ describe('un incidente su un file costa una riga, non il rapporto', () => {
     // symlink, quindi uno rotto lancia durante l'elenco. Stessa famiglia di
     // un checkout che un deploy sta ancora scrivendo mentre `doctor` legge.
     const checkout = makeCheckout();
-    symlinkSync(join(checkout, 'defaults', 'non-esiste.md'), join(checkout, 'defaults', 'penzola.md'));
+    symlinkSync(
+      join(checkout, 'defaults', 'non-esiste.md'),
+      join(checkout, 'defaults', 'penzola.md'),
+    );
     const h = home();
     writeFileSync(join(h, 'persona.md'), 'v1\n');
     writeFileSync(join(h, 'voice.md'), 'v1 voice\n');
@@ -469,11 +496,17 @@ describe('un incidente su un file costa una riga, non il rapporto', () => {
     );
     recordCopied(h, [{ path: 'persona.md', content: Buffer.from('v1\n') }]);
 
-    const onDisk = JSON.parse(readFileSync(paths(h).defaultsManifest, 'utf8')) as { files: unknown[] };
+    const onDisk = JSON.parse(readFileSync(paths(h).defaultsManifest, 'utf8')) as {
+      files: unknown[];
+    };
     expect(onDisk.files).toContainEqual({ path: 'bad.md' });
     // E la voce illeggibile non è diventata leggibile per finta: chi legge
     // continua a scartarla, come prima.
-    expect(readDefaultsRegistry(h)?.files.map((f) => f.path).sort()).toEqual(['persona.md', 'voice.md']);
+    expect(
+      readDefaultsRegistry(h)
+        ?.files.map((f) => f.path)
+        .sort(),
+    ).toEqual(['persona.md', 'voice.md']);
     rmSync(h, { recursive: true, force: true });
   });
 
@@ -560,5 +593,50 @@ describe('defaults/ non spedisce spazzatura', () => {
     expect(isShippedDefault('rot/.DS_Store')).toBe(false);
     expect(isShippedDefault('persona.md~')).toBe(false);
     expect(isShippedDefault('.persona.md.swp')).toBe(false);
+  });
+});
+
+describe('diagnoseDefaultsDrift — a file init itself personalised (recordSeeded)', () => {
+  it('names init, not the owner, and still never offers the cp that would undo it', () => {
+    const checkout = makeCheckout();
+    commit(checkout, 'persona.md', 'v2\n', 'persona v2');
+    const h = home();
+    writeFileSync(join(h, 'persona.md'), 'v1 + seeded\n');
+    recordCopied(h, [{ path: 'persona.md', content: Buffer.from('v1\n') }]);
+    recordSeeded(h, 'persona.md', Buffer.from('v1 + seeded\n'), 'fuso orario');
+
+    const d = findPersona(diagnoseDefaultsDrift(h, checkout));
+    expect(d?.status).toBe('owner-modified');
+    expect(d?.adoptCommand).toBeUndefined();
+    expect(d?.detail).toContain('personalizzato da `muffin init` (fuso orario)');
+    expect(d?.detail).not.toContain("modificato dall'owner");
+    // The shipped hash is what rule 1 still compares against.
+    expect(readDefaultsRegistry(h)?.files.find((f) => f.path === 'persona.md')?.sha256).toBe(
+      sha256(Buffer.from('v1\n')),
+    );
+    rmSync(checkout, { recursive: true, force: true });
+    rmSync(h, { recursive: true, force: true });
+  });
+
+  it('an owner edit after the seed is the owner again', () => {
+    const checkout = makeCheckout();
+    const h = home();
+    writeFileSync(join(h, 'persona.md'), 'edited by hand\n');
+    recordCopied(h, [{ path: 'persona.md', content: Buffer.from('v1\n') }]);
+    recordSeeded(h, 'persona.md', Buffer.from('v1 + seeded\n'), 'fuso orario');
+
+    const d = findPersona(diagnoseDefaultsDrift(h, checkout));
+    expect(d?.status).toBe('owner-modified');
+    expect(d?.detail).toContain("modificato dall'owner");
+    rmSync(checkout, { recursive: true, force: true });
+    rmSync(h, { recursive: true, force: true });
+  });
+
+  it('is a no-op for a path the registry never recorded', () => {
+    const h = home();
+    recordCopied(h, [{ path: 'persona.md', content: Buffer.from('v1\n') }]);
+    recordSeeded(h, 'voice.md', Buffer.from('x\n'), 'fuso orario');
+    expect(readDefaultsRegistry(h)?.files.map((f) => f.path)).toEqual(['persona.md']);
+    rmSync(h, { recursive: true, force: true });
   });
 });

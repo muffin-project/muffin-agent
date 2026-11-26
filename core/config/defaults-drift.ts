@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { sha256 } from '../rot/verify.js';
 import { paths } from './config.js';
@@ -46,7 +46,21 @@ import { ensurePrivateDir, tightenPrivateFile } from './private-fs.js';
  *     declared, never in silence).
  */
 
-type RegistryEntry = { path: string; sha256: string };
+type RegistryEntry = {
+  path: string;
+  /** The shipped bytes, as copied. */
+  sha256: string;
+  /**
+   * The bytes right after `init` itself personalised the copy (today: the
+   * owner's timezone in `rot/budgets.json`). Set only by `recordSeeded`.
+   * `sha256` stays the shipped hash on purpose — so the file is never
+   * offered as an adoptable `cp`, which would reset the timezone to UTC —
+   * while this one lets `doctor` say *who* changed it: `init`, not the owner.
+   */
+  seededSha256?: string;
+  /** What `init` wrote, in a few words, for that sentence. */
+  seededBy?: string;
+};
 
 export type DefaultsRegistry = {
   schemaVersion: 1;
@@ -74,12 +88,15 @@ export function readDefaultsRegistry(home: string): DefaultsRegistry | null {
  * untouched: dropping an entry from a report is reversible the moment the
  * file becomes readable again, dropping it from the file on disk is not.
  */
-function readRegistryPartitioned(home: string): { registry: DefaultsRegistry; unparsed: unknown[] } | null {
+function readRegistryPartitioned(
+  home: string,
+): { registry: DefaultsRegistry; unparsed: unknown[] } | null {
   const file = paths(home).defaultsManifest;
   if (!existsSync(file)) return null;
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<DefaultsRegistry>;
-    if (parsed.schemaVersion !== REGISTRY_SCHEMA_VERSION || !Array.isArray(parsed.files)) return null;
+    if (parsed.schemaVersion !== REGISTRY_SCHEMA_VERSION || !Array.isArray(parsed.files))
+      return null;
     // Each entry, not just the array around them — a `files` holding a `null`
     // (partial corruption, an interrupted write, a hand edit) used to pass
     // this check and throw three functions later on `null.path`.
@@ -149,12 +166,36 @@ export function recordCopied(home: string, entries: { path: string; content: Buf
   const registry = {
     schemaVersion: REGISTRY_SCHEMA_VERSION,
     installedAt: read?.registry.installedAt ?? new Date().toISOString(),
-    files: [...[...byPath.values()].sort((a, b) => a.path.localeCompare(b.path)), ...(read?.unparsed ?? [])],
+    files: [
+      ...[...byPath.values()].sort((a, b) => a.path.localeCompare(b.path)),
+      ...(read?.unparsed ?? []),
+    ],
   };
   const file = paths(home).defaultsManifest;
   if (!ensurePrivateDir(home)) {
-    throw new Error(`non posso scrivere ${file}: la directory privata non è stata stabilita (symlink sulla catena)`);
+    throw new Error(
+      `non posso scrivere ${file}: la directory privata non è stata stabilita (symlink sulla catena)`,
+    );
   }
+  writeFileSync(file, `${JSON.stringify(registry, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  tightenPrivateFile(file);
+}
+
+/**
+ * Records that `init` itself just personalised a file it copied (see
+ * `RegistryEntry.seededSha256`). Leaves the shipped hash alone; a no-op for a
+ * path the registry does not know (only a file this run copied is stamped).
+ */
+export function recordSeeded(home: string, path: string, content: Buffer, by: string): void {
+  const read = readRegistryPartitioned(home);
+  if (read === null) return;
+  const entry = read.registry.files.find((f) => f.path === path);
+  if (entry === undefined) return;
+  const files = read.registry.files.map((f) =>
+    f.path === path ? { ...f, seededSha256: sha256(content), seededBy: by } : f,
+  );
+  const registry = { ...read.registry, files: [...files, ...read.unparsed] };
+  const file = paths(home).defaultsManifest;
   writeFileSync(file, `${JSON.stringify(registry, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   tightenPrivateFile(file);
 }
@@ -236,7 +277,10 @@ function listDefaultsTree(defaultsDir: string): TreeEntry[] {
       // travelling. Every level below it stops here, because above it there
       // is nothing better — only the siblings this would otherwise erase.
       if (prefix === '') throw error;
-      out.push({ path: `${prefix}/`, failure: `non ho potuto elencarla: ${(error as Error).message}` });
+      out.push({
+        path: `${prefix}/`,
+        failure: `non ho potuto elencarla: ${(error as Error).message}`,
+      });
       return;
     }
     for (const entry of entries) {
@@ -308,7 +352,9 @@ export type DefaultDrift = {
   adoptCommand?: string;
 };
 
-type GitLogResult = { ok: true; commits: { sha: string; date: string }[] } | { ok: false; why: string };
+type GitLogResult =
+  | { ok: true; commits: { sha: string; date: string }[] }
+  | { ok: false; why: string };
 
 /** The two git operations this module needs — injectable so a test can break "git itself" without a broken repo. */
 export type Git = {
@@ -336,8 +382,12 @@ export const REAL_GIT: Git = {
     return r.status !== 0 || r.stdout.trim() !== 'false';
   },
   log(cwd, relPath) {
-    const r = spawnSync('git', ['log', '--format=%H^%ad', '--date=short', '--', relPath], { cwd, encoding: 'utf8' });
-    if (r.status !== 0) return { ok: false, why: r.stderr.trim() || `git log fallito (exit ${String(r.status)})` };
+    const r = spawnSync('git', ['log', '--format=%H^%ad', '--date=short', '--', relPath], {
+      cwd,
+      encoding: 'utf8',
+    });
+    if (r.status !== 0)
+      return { ok: false, why: r.stderr.trim() || `git log fallito (exit ${String(r.status)})` };
     const commits = r.stdout
       .split('\n')
       .filter((line) => line.length > 0)
@@ -360,7 +410,12 @@ export const REAL_GIT: Git = {
 };
 
 /** Every commit on this checkout's own HEAD ancestry that ever gave `defaults/<relPath>` this exact content — first match wins, `git log` is newest-first. */
-function findInHistory(checkoutRoot: string, relPath: string, wantHash: string, git: Git): { sha: string; date: string } | null | 'error' {
+function findInHistory(
+  checkoutRoot: string,
+  relPath: string,
+  wantHash: string,
+  git: Git,
+): { sha: string; date: string } | null | 'error' {
   const shippedRelPath = `defaults/${relPath}`;
   // Before searching: a shallow checkout cannot answer this question, and
   // answering it anyway from the sliver it has is the failure this guard exists
@@ -375,7 +430,13 @@ function findInHistory(checkoutRoot: string, relPath: string, wantHash: string, 
   return null;
 }
 
-function diagnoseOne(home: string, checkoutRoot: string | null, registry: DefaultsRegistry | null, relPath: string, git: Git): DefaultDrift {
+function diagnoseOne(
+  home: string,
+  checkoutRoot: string | null,
+  registry: DefaultsRegistry | null,
+  relPath: string,
+  git: Git,
+): DefaultDrift {
   const sealed = relPath.startsWith('rot/');
   const installedPath = installedPathOf(home, relPath);
 
@@ -390,20 +451,33 @@ function diagnoseOne(home: string, checkoutRoot: string | null, registry: Defaul
   const installedHash = sha256(readFileSync(installedPath));
 
   const shippedPath = checkoutRoot !== null ? shippedPathOf(checkoutRoot, relPath) : null;
-  const shippedHash = shippedPath !== null && existsSync(shippedPath) ? sha256(readFileSync(shippedPath)) : null;
+  const shippedHash =
+    shippedPath !== null && existsSync(shippedPath) ? sha256(readFileSync(shippedPath)) : null;
 
   if (shippedHash !== null && installedHash === shippedHash) {
     return { path: relPath, sealed, status: 'up-to-date', detail: 'allineato a HEAD' };
   }
 
-  const registryHash = registry?.files.find((f) => f.path === relPath)?.sha256 ?? null;
+  const registryEntry = registry?.files.find((f) => f.path === relPath);
+  const registryHash = registryEntry?.sha256 ?? null;
   if (registryHash !== null) {
+    if (installedHash !== registryHash && registryEntry?.seededSha256 === installedHash) {
+      return {
+        path: relPath,
+        sealed,
+        status: 'owner-modified',
+        detail:
+          `personalizzato da \`muffin init\` (${registryEntry.seededBy ?? 'alla copia'}) e da allora non toccato — ` +
+          'non è un default da ricopiare: i campi nuovi li porta `muffin rot migrate`',
+      };
+    }
     if (installedHash !== registryHash) {
       return {
         path: relPath,
         sealed,
         status: 'owner-modified',
-        detail: "diverge dall'hash registrato da `muffin init` alla copia — modificato dall'owner, non toccato",
+        detail:
+          "diverge dall'hash registrato da `muffin init` alla copia — modificato dall'owner, non toccato",
       };
     }
     // Unchanged since the copy `init` made (rule 1). Whether that copy is
@@ -414,14 +488,16 @@ function diagnoseOne(home: string, checkoutRoot: string | null, registry: Defaul
         path: relPath,
         sealed,
         status: 'unknown',
-        detail: "invariato dalla copia di `muffin init`, ma nessun checkout Git leggibile per sapere se HEAD è andato avanti da allora",
+        detail:
+          'invariato dalla copia di `muffin init`, ma nessun checkout Git leggibile per sapere se HEAD è andato avanti da allora',
       };
     }
     return {
       path: relPath,
       sealed,
       status: 'adoptable',
-      detail: "invariato dalla copia di `muffin init` — HEAD è andato avanti da allora (hash registrato alla copia, rule 1)",
+      detail:
+        'invariato dalla copia di `muffin init` — HEAD è andato avanti da allora (hash registrato alla copia, rule 1)',
       adoptCommand: `cp ${shippedPath} ${installedPath}`,
     };
   }
@@ -436,7 +512,8 @@ function diagnoseOne(home: string, checkoutRoot: string | null, registry: Defaul
         path: relPath,
         sealed,
         status: 'unknown',
-        detail: "nessun registro d'installazione e la storia Git non è leggibile — non so dire se è stato modificato dall'owner",
+        detail:
+          "nessun registro d'installazione e la storia Git non è leggibile — non so dire se è stato modificato dall'owner",
       };
     }
     if (found !== null) {
@@ -452,7 +529,8 @@ function diagnoseOne(home: string, checkoutRoot: string | null, registry: Defaul
       path: relPath,
       sealed,
       status: 'owner-modified',
-      detail: "non corrisponde a nessuna versione mai spedita in defaults/ — modificato dall'owner, non toccato",
+      detail:
+        "non corrisponde a nessuna versione mai spedita in defaults/ — modificato dall'owner, non toccato",
     };
   }
 
@@ -460,7 +538,8 @@ function diagnoseOne(home: string, checkoutRoot: string | null, registry: Defaul
     path: relPath,
     sealed,
     status: 'unknown',
-    detail: "nessun registro d'installazione e nessun checkout Git leggibile — non so dire se è stato modificato dall'owner",
+    detail:
+      "nessun registro d'installazione e nessun checkout Git leggibile — non so dire se è stato modificato dall'owner",
   };
 }
 
@@ -475,9 +554,14 @@ function diagnoseOne(home: string, checkoutRoot: string | null, registry: Defaul
  * is the one that turns that into a single declared "I cannot tell" line
  * rather than N silent ones.
  */
-export function diagnoseDefaultsDrift(home: string, checkoutRoot: string | null, git: Git = REAL_GIT): DefaultDrift[] {
+export function diagnoseDefaultsDrift(
+  home: string,
+  checkoutRoot: string | null,
+  git: Git = REAL_GIT,
+): DefaultDrift[] {
   const registry = readDefaultsRegistry(home);
-  const fromRegistry = (): TreeEntry[] => (registry?.files ?? []).map((f) => ({ path: f.path, failure: null }));
+  const fromRegistry = (): TreeEntry[] =>
+    (registry?.files ?? []).map((f) => ({ path: f.path, failure: null }));
 
   // What to diagnose. The checkout is the real answer; the registry is a
   // fallback that only knows the files `init` happened to copy.
@@ -494,7 +578,9 @@ export function diagnoseDefaultsDrift(home: string, checkoutRoot: string | null,
   let listingFailure: DefaultDrift | null = null;
   try {
     entries =
-      checkoutRoot !== null && existsSync(join(checkoutRoot, 'defaults')) ? listDefaultsTree(join(checkoutRoot, 'defaults')) : fromRegistry();
+      checkoutRoot !== null && existsSync(join(checkoutRoot, 'defaults'))
+        ? listDefaultsTree(join(checkoutRoot, 'defaults'))
+        : fromRegistry();
   } catch (error) {
     entries = fromRegistry();
     listingFailure = undiagnosable(

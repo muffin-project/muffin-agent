@@ -24,7 +24,7 @@ import {
  * diversa da questa.
  */
 
-const USAGE = `usage: muffin judgments report [--match-above 0.7] [--danger-below 0.2] [--recovery-above 0.5] [--db <path>]
+export const JUDGMENTS_USAGE = `usage: muffin judgments report [--match-above 0.7] [--danger-below 0.2] [--recovery-above 0.5] [--db <path>]
   cosa avrebbe fatto /auto sugli ask gia' avvenuti, con le soglie dette:
   false-safe, escalation inutili, accordo — per domanda e per categoria.
   --match-above     soglia delle domande di corrispondenza (default 0.7)
@@ -53,7 +53,9 @@ export function cmdJudgments(argv: string[]): number {
       allowPositionals: true,
     }) as { values: typeof values; positionals: string[] });
   } catch (error) {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n${USAGE}`);
+    process.stderr.write(
+      `${error instanceof Error ? error.message : String(error)}\n${JUDGMENTS_USAGE}`,
+    );
     return 78;
   }
 
@@ -61,11 +63,11 @@ export function cmdJudgments(argv: string[]): number {
     // `muffin judgments` senza sottocomando: oggi il report è l'unica cosa
     // che questa famiglia sa fare, e `report` è sottocomando per lasciare al
     // verbo lo spazio per ciò che la fase 3 porterà (le classi, la busta).
-    process.stderr.write(`usage: muffin judgments <report>\n${USAGE}`);
+    process.stderr.write(`usage: muffin judgments <report>\n${JUDGMENTS_USAGE}`);
     return 78;
   }
   if (positionals.length > 1 || positionals[0] !== 'report') {
-    process.stderr.write(`sottocomando sconosciuto: ${positionals.join(' ')}\n${USAGE}`);
+    process.stderr.write(`sottocomando sconosciuto: ${positionals.join(' ')}\n${JUDGMENTS_USAGE}`);
     return 78;
   }
 
@@ -73,7 +75,9 @@ export function cmdJudgments(argv: string[]): number {
     if (testo === undefined) return defaultV;
     const v = Number(testo);
     if (!Number.isFinite(v) || v < 0 || v > 1) {
-      process.stderr.write(`${nome} deve essere un numero fra 0 e 1, non «${testo}»\n${USAGE}`);
+      process.stderr.write(
+        `${nome} deve essere un numero fra 0 e 1, non «${testo}»\n${JUDGMENTS_USAGE}`,
+      );
       return null;
     }
     return v;

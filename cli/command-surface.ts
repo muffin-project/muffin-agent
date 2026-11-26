@@ -81,6 +81,12 @@ export const COMMANDS: readonly CommandSpec[] = [
     primary: true,
   },
   {
+    name: 'status',
+    summary: 'in breve: versione, gateway, modelli, identità, ricerca, memoria',
+    audience: 'owner',
+    primary: true,
+  },
+  {
     name: 'doctor',
     summary: 'diagnostica dettagliata quando qualcosa non torna',
     audience: 'owner',
@@ -192,6 +198,50 @@ export function canonicalCommand(input: string): string {
     COMMANDS.find((command) => command.name === input || command.aliases?.includes(input))?.name ??
     input
   );
+}
+
+/** The spec for a dispatchable name (canonical or alias), or `undefined`. */
+export function commandSpec(input: string): CommandSpec | undefined {
+  const name = canonicalCommand(input);
+  return COMMANDS.find((command) => command.name === name);
+}
+
+/**
+ * `--help` / `-h` anywhere among a command's own arguments, before a `--`
+ * terminator (POSIX: what follows `--` is an operand, never an option).
+ *
+ * Asked once, in `main`, before any command runs: a command that does not
+ * parse `--help` itself must still answer it, and must never *act* on a line
+ * that only asked how to use it (`muffin adopt --help` used to adopt).
+ */
+export function wantsHelp(args: readonly string[]): boolean {
+  for (const arg of args) {
+    if (arg === '--') return false;
+    if (arg === '--help' || arg === '-h') return true;
+  }
+  return false;
+}
+
+/**
+ * The help page for one command, projected from the same vocabulary as the
+ * rest: summary and aliases from `COMMANDS`, then the command's own usage
+ * text when it has one, else a usage line built from its subcommands.
+ */
+export function commandHelp(input: string, usage?: string): string | null {
+  const spec = commandSpec(input);
+  if (spec === undefined) return null;
+  const lines = [`muffin ${spec.name} — ${spec.summary}`];
+  if (spec.aliases?.length) lines.push(`alias: ${spec.aliases.join(', ')}`);
+  lines.push('');
+  if (usage !== undefined && usage.trim() !== '') {
+    lines.push(usage.trimEnd());
+  } else if (spec.subcommands?.length) {
+    lines.push(`uso: muffin ${spec.name} <${spec.subcommands.join('|')}>`);
+  } else {
+    lines.push(`uso: muffin ${spec.name}`);
+  }
+  lines.push('', 'Tutti i comandi: muffin help --all');
+  return `${lines.join('\n')}\n`;
 }
 
 export function primaryHelp(): string {
