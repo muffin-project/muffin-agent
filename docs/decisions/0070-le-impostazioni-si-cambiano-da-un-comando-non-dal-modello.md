@@ -1,6 +1,7 @@
 # ADR-0070 — Le impostazioni si cambiano da un comando, mai dal modello
 
-**Stato:** accettato · 2026-09-04 · direzione owner
+**Stato:** accettato · 2026-09-04 · direzione owner.
+Emendato da ADR-0114 (2026-11-26): il modello può *proporre* un cambio, non eseguirlo. Il testo sotto resta; l'emendamento è in coda.
 
 ## Contesto
 
@@ -196,3 +197,27 @@ dice già che non è quell'obiettivo.
 - `muffin gateway restart` sul binario compilato, in una home usa-e-getta
   senza supervisore installato: esce diverso da zero e nomina il rimedio
   (`muffin gateway install`), mai un tentativo silenzioso di riavviare niente.
+
+## Emendamento — ADR-0114 (2026-11-26)
+
+L'owner ha chiesto che Muffin possa regolare le impostazioni anche
+conversando, e che ogni azione di configurazione sia la stessa funzione
+chiamata da terminale, da Telegram e dalla chat. Il testo sopra non è
+stato riscritto.
+
+**Cosa resta.** Il modello non esegue mai una scrittura di impostazioni.
+Non c'è un tool `config.set` che committi. `setConfigKnob` e le porte
+comando (CLI, REPL, Telegram intercettati prima del turno, solo owner)
+restano. `config.*` resta in `MAI_CONCEDIBILI`. La riga `config` della
+matrice resta `asksForIrreversible: true`.
+
+**Cosa cambia.** Quella porta che questa ADR lasciava intenzionalmente
+aperta — *«il giorno in cui l'owner vorrà "Muffin regola le impostazioni
+conversando", quella riga della matrice è già lì»* — si usa adesso, in
+forma stretta. Il modello può invocare solo `propose_setting_change`:
+un `actionId` del registro unico (ADR-0114) e parametri validati
+dall'host. Conferma ed esecuzione sono dell'host, fuori dal controllo
+del modello, legate alla chiamata esatta come ADR-0109 (`actionId`,
+digest dei parametri, consumo monouso). Un «sì» in testo libero, yolo
+o una delega non eseguono. Il dettaglio, le categorie e le porte stanno
+in ADR-0114.
