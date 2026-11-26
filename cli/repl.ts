@@ -241,6 +241,10 @@ export function formatProgressLine(event: TurnEvent, verbosity: Verbosity): stri
         return `· ${event.name} ${event.isError ? 'fallito' : 'fatto'} (${event.ms}ms)`;
       case 'ask':
         return `· ${event.name} in attesa di approvazione`;
+      case 'interim':
+        // Already on stdout via onDelta (preamble) or a prior write
+        // (work_message is Telegram-only). Never print a technical log line.
+        return null;
       default:
         return assertNever(event);
     }
@@ -281,6 +285,8 @@ export function formatProgressLine(event: TurnEvent, verbosity: Verbosity): stri
     // riga dice soltanto perché il lavoro si è fermato lì.
     case 'ask':
       return `  ⏸ ${toolPhrase(event.name)}: aspetto la tua approvazione`;
+    case 'interim':
+      return null;
     default:
       return assertNever(event);
   }

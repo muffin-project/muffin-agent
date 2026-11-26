@@ -276,7 +276,11 @@ describe('the owner-class prompt does not move', () => {
     // rimette i pavimenti minimi («la memoria non è consenso», le decisioni
     // restano sue) e la regola delle preferenze. Cold-start deliberato.
     // Pin precedente: `ff3e02e84c4d4081029e0157a799d965de0012e7d834ba25d1180ea78fb59959`.
-    '1c76b3e287fe7a7e07edf699828142b11325968f410be472641253db8a43af27';
+    // Ri-fissato 2026-11-26 (ADR-0111 emendamento): la riga di WORK_RULES sul
+    // parlato breve tra i passi del loop («Ok, vado a guardare») sostituisce
+    // «dì in una riga cosa stai per fare». Cold-start deliberato.
+    // Pin precedente: `1c76b3e287fe7a7e07edf699828142b11325968f410be472641253db8a43af27`.
+    'a27de80854d61d1aa939f62aa7453b96e7940f75b85105b155940cb91dbe9bcd';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un
@@ -396,7 +400,10 @@ describe('the owner-class prompt does not move', () => {
   // Ri-fissato 2026-11-20 insieme al pin owner, per la stessa riga di
   // `WORK_RULES` (il modello sta in «Questo turno», non in `sys_inspect`).
   // Pin precedente: `1784c4f457d158fd0aedcfa173c811cc1bee4edd7caf43dbcd36d4dbe0076235`.
-  const GROUP_PROMPT_SHA_V1 = '3cc53182dde58fdf05d4ed3953da2015991159c43147d546c3b8c6dfbb52ae17';
+  // Ri-fissato 2026-11-26 (ADR-0111 emendamento) insieme al pin owner, per la
+  // stessa riga di parlato breve tra i passi del loop. Pin precedente:
+  // `3cc53182dde58fdf05d4ed3953da2015991159c43147d546c3b8c6dfbb52ae17`.
+  const GROUP_PROMPT_SHA_V1 = '92053651e4661c0ea9c7901a3dce26c3ddaf932b1962d891c9778e6557621b7f';
 
   /**
    * Ri-fissato 2026-10-10: la regola sull'esposizione progressiva chiarisce
@@ -680,7 +687,11 @@ describe('what a group turn is allowed to be told', () => {
       // The three rules added on 26/08 are about the turn too, so they belong
       // to both classes — `WORK_RULES` is one constant in both lists, and this
       // pins that it stays that way rather than being forked per class.
-      for (const rule of ['lo chiede il kernel', 'chiediti cosa è cambiato', 'prima di partire']) {
+      for (const rule of [
+        'lo chiede il kernel',
+        'chiediti cosa è cambiato',
+        'Ok, vado a guardare',
+      ]) {
         expect(group).toContain(rule);
         expect(owner).toContain(rule);
       }

@@ -563,3 +563,38 @@ describe('approval messages', () => {
     expect(calls).toHaveLength(afterStop);
   });
 });
+
+describe('afterDurableInterim restarts the DM status draft', () => {
+  it('abandons the current draft_id and reopens sto lavorando on a fresh id', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    t.report({ type: 'round', n: 1 });
+    t.live('Ok, vado a guardare');
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    const before = calls.filter(isDraft);
+    expect(before.length).toBeGreaterThan(0);
+    const firstId = before.at(-1)?.draftId;
+    expect(firstId).toBeGreaterThan(0);
+
+    const pending = t.afterDurableInterim();
+    // The first paint is on the wire when the promise settles — no timer
+    // advance. A later model call (and a binding revoke) can then observe
+    // a stable sent() snapshot.
+    await pending;
+    const afterImmediate = calls.filter(isDraft).slice(before.length);
+    expect(afterImmediate.length).toBeGreaterThan(0);
+
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+
+    const after = calls.filter(isDraft).slice(before.length);
+    expect(after.length).toBeGreaterThan(0);
+    for (const call of after) {
+      expect(call.draftId).not.toBe(firstId);
+      expect(call.draftId).toBeGreaterThan(0);
+      expect(visibleText(call)).toMatch(/sto lavorando/);
+      expect(visibleText(call)).not.toContain('Ok, vado a guardare');
+    }
+    await t.stop();
+    expect(t.handoff()).toBeNull();
+  });
+});

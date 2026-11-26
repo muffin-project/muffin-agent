@@ -993,3 +993,16 @@ describe('closingLine', () => {
     expect(l).not.toContain('cache');
   });
 });
+
+describe('formatProgressLine — interim events stay off the technical log', () => {
+  it('returns null in both verbosities so the preamble is not printed twice', () => {
+    const event = {
+      type: 'interim' as const,
+      text: 'Ok, vado a guardare',
+      source: 'preamble' as const,
+    };
+    expect(formatProgressLine(event, 'debug')).toBeNull();
+    expect(formatProgressLine(event, 'normale')).toBeNull();
+    expect(statusFor(event)).toBeNull();
+  });
+});

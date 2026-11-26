@@ -42,7 +42,7 @@ function message(chatId: number, threadId?: number): Update {
   };
 }
 
-function gatedProvider(withTool = false) {
+function gatedProvider(withTool: boolean | 'unqualified' = false) {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -58,12 +58,13 @@ function gatedProvider(withTool = false) {
     },
     async *chatStream(): AsyncIterable<StreamEvent> {
       if (withTool && round++ === 0) {
-        yield { type: 'text_delta', text: PREAMBLE };
+        const opener = withTool === 'unqualified' ? PREFIX : PREAMBLE;
+        yield { type: 'text_delta', text: opener };
         yield { type: 'tool_call_delta', index: 0, id: 'c1', name: TOOL };
         yield {
           type: 'done',
           result: {
-            text: PREAMBLE,
+            text: opener,
             toolCalls: [{ id: 'c1', name: TOOL, args: { query: QUERY } }],
             stopReason: 'tool_use',
             usage: USAGE,
@@ -95,6 +96,7 @@ type Recorded = {
   method: string;
   chatId: number;
   threadId?: number | undefined;
+  draftId?: number | undefined;
   action?: string | undefined;
   text?: string;
   rich?: OutboundRich;
@@ -145,12 +147,12 @@ function recordingApi(): { api: TelegramApiLike; calls: Recorded[] } {
       calls.push({ method: 'sendChatAction', chatId, action, threadId });
       return true;
     },
-    sendMessageDraft: async (chatId, _draftId, text, draftOptions) => {
-      calls.push({ method: 'sendMessageDraft', chatId, text, draftOptions });
+    sendMessageDraft: async (chatId, draftId, text, draftOptions) => {
+      calls.push({ method: 'sendMessageDraft', chatId, draftId, text, draftOptions });
       return true;
     },
-    sendRichMessageDraft: async (chatId, _draftId, rich, draftOptions) => {
-      calls.push({ method: 'sendRichMessageDraft', chatId, rich, draftOptions });
+    sendRichMessageDraft: async (chatId, draftId, rich, draftOptions) => {
+      calls.push({ method: 'sendRichMessageDraft', chatId, draftId, rich, draftOptions });
       return true;
     },
     fileUrl: async () => 'https://example.test/file',
@@ -184,14 +186,44 @@ function expectOnlyAnswer(calls: Recorded[], chatId: number, threadId?: number):
   expect(JSON.stringify(messages)).not.toMatch(/"type":"details"|Processo/);
 }
 
+function expectInterimThenAnswer(calls: Recorded[], chatId: number, threadId?: number): void {
+  const messages = calls.filter(durable);
+  expect(messages).toMatchObject([
+    { method: expect.stringMatching(/^send(Rich)?Message$/), chatId, threadId },
+    { method: expect.stringMatching(/^send(Rich)?Message$/), chatId, threadId },
+  ]);
+  expect(messages.map(textOf)).toEqual([PREAMBLE, FINAL]);
+  expect(JSON.stringify(calls)).not.toMatch(/"type":"details"|Processo/);
+  for (const detail of [TOOL, QUERY, 'Processo']) {
+    expect(JSON.stringify(messages)).not.toContain(detail);
+  }
+  // The final answer is a new message, never an edit of the interim.
+  expect(calls.filter((c) => c.method.startsWith('editMessage')).length).toBe(0);
+}
+
+function expectDraftRestartedAfterInterim(calls: Recorded[]): void {
+  const interimAt = calls.findIndex((c) => durable(c) && textOf(c) === PREAMBLE);
+  expect(interimAt).toBeGreaterThanOrEqual(0);
+  const draftsBefore = calls.slice(0, interimAt).filter(draft);
+  const draftsAfter = calls.slice(interimAt + 1).filter(draft);
+  expect(draftsBefore.length).toBeGreaterThan(0);
+  expect(draftsAfter.length).toBeGreaterThan(0);
+  const beforeId = draftsBefore.at(-1)?.draftId;
+  const afterIds = new Set(draftsAfter.map((c) => c.draftId));
+  expect(beforeId).toBeGreaterThan(0);
+  expect(afterIds.size).toBeGreaterThan(0);
+  expect(afterIds.has(beforeId)).toBe(false);
+}
+
 function harness(provider: Provider, api: TelegramApiLike) {
   const home = mkdtempSync(join(tmpdir(), 'muffin-tgstream-'));
   const workspace = mkdtempSync(join(tmpdir(), 'muffin-tgstream-ws-'));
   runInit({ home, apiKey: 'sk-tgstream-never-called' });
   const runtime = buildRuntime(home, workspace);
   const inbox = new UpdateInbox(runtime.db);
+  const loop = { ...runtime.deps, provider };
   const connector = new TelegramConnector({
-    loop: { ...runtime.deps, provider },
+    loop,
     sessions: runtime.deps.sessions,
     lane: new ModelLane(),
     inbox,
@@ -199,6 +231,7 @@ function harness(provider: Provider, api: TelegramApiLike) {
     api,
     config: { token: 't', ownerUserId: OWNER, ownerChatId: OWNER },
   });
+  loop.sendInterimMessage = connector.sendInterimMessage;
   // drain() bypasses connect() and its getMe() call.
   (connector as unknown as { meUsername: string }).meUsername = 'MuffinBot';
   return {
@@ -214,68 +247,34 @@ describe('ordinary Telegram replies', () => {
   it.each([
     { name: 'a group', threadId: undefined },
     { name: 'a forum topic', threadId: TOPIC },
-  ])('shows only typing in $name until the finished answer is sent once', async ({ threadId }) => {
-    const { provider, release, atFinalPrefix } = gatedProvider(true);
-    const { api, calls } = recordingApi();
-    const h = harness(provider, api);
-    const draining = h.deliver(message(GROUP, threadId));
-
-    try {
-      await vi.waitFor(() => expect(atFinalPrefix).toHaveBeenCalledOnce(), { timeout: 3_000 });
-      expect(calls.length).toBeGreaterThan(0);
-      for (const c of calls)
-        expect(c).toMatchObject({
-          method: 'sendChatAction',
-          action: 'typing',
-          chatId: GROUP,
-          threadId,
-        });
-
-      release();
-      await draining;
-
-      expect(calls.filter(draft)).toEqual([]);
-      expectOnlyAnswer(calls, GROUP, threadId);
-    } finally {
-      release();
-      await draining.catch(() => {});
-      h.runtime.close();
-    }
-  });
-
-  it.each([
-    { round: 'a single round', withTool: false },
-    { round: 'a tool round', withTool: true },
   ])(
-    'streams provisional text in DM and lands just the answer after $round',
-    async ({ withTool }) => {
-      const { provider, release } = gatedProvider(withTool);
+    'sends a qualified preamble in $name, keeps typing, then lands the answer as a new message',
+    async ({ threadId }) => {
+      const { provider, release, atFinalPrefix } = gatedProvider(true);
       const { api, calls } = recordingApi();
       const h = harness(provider, api);
-      const draining = h.deliver(message(OWNER));
+      const draining = h.deliver(message(GROUP, threadId));
 
       try {
-        // No final token or `done` has been released. An earlier preamble may
-        // have previewed provisionally, but it cannot be in the new draft.
-        await vi.waitFor(
-          () => {
-            const latest = calls.filter(draft).at(-1);
-            expect(latest && textOf(latest)).toBe(PREFIX);
-          },
-          { timeout: 3_000 },
-        );
-        expect(calls.filter(durable)).toEqual([]);
+        await vi.waitFor(() => expect(atFinalPrefix).toHaveBeenCalledOnce(), { timeout: 3_000 });
+        expect(calls.length).toBeGreaterThan(0);
+        expect(calls.filter(durable).map(textOf)).toEqual([PREAMBLE]);
+        for (const c of calls.filter(typing)) {
+          expect(c).toMatchObject({
+            method: 'sendChatAction',
+            action: 'typing',
+            chatId: GROUP,
+            threadId,
+          });
+        }
+        expect(calls.filter(draft)).toEqual([]);
 
         release();
         await draining;
 
-        for (const c of calls.filter(draft)) {
-          expect(c.draftOptions?.canStop).toBe(true);
-          expect(c.draftOptions?.keepOnStop).not.toBe(true);
-        }
-        const wire = JSON.stringify(calls);
-        for (const detail of [TOOL, QUERY, 'Processo']) expect(wire).not.toContain(detail);
-        expectOnlyAnswer(calls, OWNER);
+        expect(calls.filter(draft)).toEqual([]);
+        expectInterimThenAnswer(calls, GROUP, threadId);
+        expect(calls.filter(typing).length).toBeGreaterThan(0);
       } finally {
         release();
         await draining.catch(() => {});
@@ -284,8 +283,142 @@ describe('ordinary Telegram replies', () => {
     },
   );
 
-  it('still sends only the answer when Telegram rejects the DM preview and rich final', async () => {
+  it.each([
+    { name: 'a group', threadId: undefined },
+    { name: 'a forum topic', threadId: TOPIC },
+  ])(
+    'keeps an unqualified preamble ephemeral in $name and sends only the finished answer',
+    async ({ threadId }) => {
+      const { provider, release, atFinalPrefix } = gatedProvider('unqualified');
+      const { api, calls } = recordingApi();
+      const h = harness(provider, api);
+      const draining = h.deliver(message(GROUP, threadId));
+
+      try {
+        await vi.waitFor(() => expect(atFinalPrefix).toHaveBeenCalledOnce(), { timeout: 3_000 });
+        expect(calls.filter(durable)).toEqual([]);
+        for (const c of calls) {
+          expect(c).toMatchObject({
+            method: 'sendChatAction',
+            action: 'typing',
+            chatId: GROUP,
+            threadId,
+          });
+        }
+
+        release();
+        await draining;
+
+        expect(calls.filter(draft)).toEqual([]);
+        expectOnlyAnswer(calls, GROUP, threadId);
+      } finally {
+        release();
+        await draining.catch(() => {});
+        h.runtime.close();
+      }
+    },
+  );
+
+  it('streams provisional text in DM and lands just the answer after a single round', async () => {
+    const { provider, release } = gatedProvider(false);
+    const { api, calls } = recordingApi();
+    const h = harness(provider, api);
+    const draining = h.deliver(message(OWNER));
+
+    try {
+      await vi.waitFor(
+        () => {
+          const latest = calls.filter(draft).at(-1);
+          expect(latest && textOf(latest)).toBe(PREFIX);
+        },
+        { timeout: 3_000 },
+      );
+      expect(calls.filter(durable)).toEqual([]);
+
+      release();
+      await draining;
+
+      for (const c of calls.filter(draft)) {
+        expect(c.draftOptions?.canStop).toBe(true);
+        expect(c.draftOptions?.keepOnStop).not.toBe(true);
+      }
+      const wire = JSON.stringify(calls);
+      for (const detail of [TOOL, QUERY, 'Processo']) expect(wire).not.toContain(detail);
+      expectOnlyAnswer(calls, OWNER);
+    } finally {
+      release();
+      await draining.catch(() => {});
+      h.runtime.close();
+    }
+  });
+
+  it('promotes a qualified DM preamble, restarts the status draft, then sends the answer as a new message', async () => {
     const { provider, release } = gatedProvider(true);
+    const { api, calls } = recordingApi();
+    const h = harness(provider, api);
+    const draining = h.deliver(message(OWNER));
+
+    try {
+      await vi.waitFor(
+        () => {
+          expect(calls.filter(durable).map(textOf)).toEqual([PREAMBLE]);
+          const latest = calls.filter(draft).at(-1);
+          expect(latest && textOf(latest)).toBe(PREFIX);
+        },
+        { timeout: 3_000 },
+      );
+
+      release();
+      await draining;
+
+      for (const c of calls.filter(draft)) {
+        expect(c.draftOptions?.canStop).toBe(true);
+        expect(c.draftOptions?.keepOnStop).not.toBe(true);
+      }
+      const wire = JSON.stringify(calls);
+      for (const detail of [TOOL, QUERY, 'Processo']) expect(wire).not.toContain(detail);
+      expectInterimThenAnswer(calls, OWNER);
+      expectDraftRestartedAfterInterim(calls);
+    } finally {
+      release();
+      await draining.catch(() => {});
+      h.runtime.close();
+    }
+  });
+
+  it('leaves an unqualified DM preamble in the draft only and still sends just the answer', async () => {
+    const { provider, release } = gatedProvider('unqualified');
+    const { api, calls } = recordingApi();
+    const h = harness(provider, api);
+    const draining = h.deliver(message(OWNER));
+
+    try {
+      await vi.waitFor(
+        () => {
+          const latest = calls.filter(draft).at(-1);
+          expect(latest && textOf(latest)).toBe(PREFIX);
+        },
+        { timeout: 3_000 },
+      );
+      expect(calls.filter(durable)).toEqual([]);
+
+      release();
+      await draining;
+
+      for (const detail of [TOOL, QUERY, 'Processo', PREFIX]) {
+        if (detail === PREFIX) continue;
+        expect(JSON.stringify(calls.filter(durable))).not.toContain(detail);
+      }
+      expectOnlyAnswer(calls, OWNER);
+    } finally {
+      release();
+      await draining.catch(() => {});
+      h.runtime.close();
+    }
+  });
+
+  it('still sends only the answer when Telegram rejects the DM preview and rich final', async () => {
+    const { provider, release } = gatedProvider(false);
     const { api, calls } = recordingApi();
     // Explicit refusals: no draft or rich send was accepted. The legacy
     // final must still succeed and must not reconstruct a tool transcript.
@@ -315,6 +448,37 @@ describe('ordinary Telegram replies', () => {
       expect(sendRichMessage).toHaveBeenCalledOnce();
       expect(calls.filter(durable)).toMatchObject([{ method: 'sendMessage', text: FINAL }]);
       expectOnlyAnswer(calls, OWNER);
+    } finally {
+      h.runtime.close();
+    }
+  });
+
+  it('sends a qualified preamble even if the DM preview and rich transport are refused', async () => {
+    const { provider, release } = gatedProvider(true);
+    const { api, calls } = recordingApi();
+    const refusal = () => new TelegramError(400, 'Bad Request: RICH_MESSAGE_INVALID');
+    const sendRichMessageDraft = vi.fn(async () => {
+      throw refusal();
+    });
+    const sendMessageDraft = vi.fn(async () => {
+      throw new TelegramError(400, 'Bad Request: draft refused');
+    });
+    const sendRichMessage = vi.fn(async () => {
+      throw refusal();
+    });
+    const h = harness(provider, {
+      ...api,
+      sendRichMessageDraft,
+      sendMessageDraft,
+      sendRichMessage,
+    });
+
+    try {
+      release();
+      await h.deliver(message(OWNER));
+
+      expect(calls.filter(durable).map((c) => c.method)).toEqual(['sendMessage', 'sendMessage']);
+      expect(calls.filter(durable).map(textOf)).toEqual([PREAMBLE, FINAL]);
     } finally {
       h.runtime.close();
     }

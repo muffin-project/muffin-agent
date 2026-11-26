@@ -33,6 +33,13 @@ export type SessionMessage = {
   /** Ties the message to the span that produced it — "why did it do that" is a join. */
   traceId?: string;
   /**
+   * Set when this row is a mid-turn conversational interim that was actually
+   * delivered (ADR-0111 amendment 2026-11-26). The final answer of the same
+   * turn is a later assistant row with no `interim` field. Long-term memory
+   * still stores only the final answer.
+   */
+  interim?: 'preamble' | 'work_message';
+  /**
    * The trust tier of this message's content, at the moment it was written.
    *
    * Additive (ADR-0044 §Revisione — "la history non lava la provenienza"): a
