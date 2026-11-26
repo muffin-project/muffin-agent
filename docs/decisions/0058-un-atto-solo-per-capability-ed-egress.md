@@ -1,6 +1,7 @@
 # ADR-0058 — Un atto solo: accendere una capability di rete accende anche l'egress
 
-**Stato:** accettato · 2026-09-03
+**Stato:** accettato · 2026-09-03.
+Emendato da ADR-0114 (2026-11-26): la parola dell'owner per un allargamento di egress può arrivare anche da un pulsante monouso autenticato, non solo da un TTY. Il testo sotto resta; l'emendamento è in coda.
 
 ## Contesto, misurato prima di decidere
 
@@ -320,3 +321,26 @@ che il terzo giudice ha già accettato, non una revisione della decisione.
   in `@anthropic-ai/sandbox-runtime` che facesse vincere l'allow esplicito sul
   deny — la barriera vera di questa ADR sparirebbe e andrebbe ricostruita,
   non solo ri-testata.
+
+## Emendamento — ADR-0114 (2026-11-26)
+
+L'owner ha deciso la parità totale fra terminale e Telegram: tutto ciò
+che si fa da un lato deve potersi fare dall'altro. Il testo sopra non
+è stato riscritto.
+
+**Cosa resta.** `widenEgressForCapability` è ancora la funzione sola.
+Il modello non ha una strada verso il reseal. `sys.shell` non ne
+guadagna una. Senza conferma autenticata dell'owner l'allargamento non
+avviene; il ramo non-interattivo che stampa il comando e non risigilla
+resta per gli script senza TTY e senza un sì esplicito (`--yes` o
+equivalente).
+
+**Cosa cambia.** La frase *«solo l'owner a un terminale vero può far
+scattare un allargamento di `rot/egress.json` seguito da un reseal»*
+si legge adesso così: la parola dell'owner è una **conferma
+autenticata dell'host** — il prompt TTY già descritto, oppure un
+pulsante monouso nella chat privata dell'owner, legato all'azione
+esatta (stesso disegno di ADR-0109 e del registro di ADR-0114). Non è
+il modello, non è yolo, non è una delega, non è un «sì» digitato in
+chat. Cambia chi può *fornire* il consenso, non il fatto che il
+consenso debba esserci.
