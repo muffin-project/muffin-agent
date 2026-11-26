@@ -1,6 +1,6 @@
 # ADR-0035 — Muffin è un processo che vive, non un comando che invochi
 
-**Contesto.** Emendato da ADR-0106 (2026-11-14), Emendamento №7 in coda. Il risveglio oltre l'orizzonte duro, se nessun altro tiene la riga, non è più un'uscita; il gateway è un ruolo, non solo un servizio. Il testo sotto resta. ADR-0022 aveva già deciso la forma: *"un processo OS per il runtime (**gateway**, loop, memoria, scheduler)"*, con systemd a riavviarlo. Quello che è stato costruito è `setInterval(() => scheduler.tick(), 30_000)` **dentro `cli/repl.ts`**: chiudi la finestra e non gira più niente. Nessun servizio, nessun launchd, nessun `daemon` — verificato. È l'undicesima istanza della famiglia "dichiarato e non connesso" e la più grossa, perché non è un file senza lettore: è la **forma del runtime**.
+**Contesto.** Emendato da ADR-0106 (2026-11-14), Emendamento №7 in coda; e da ADR-0114 (2026-11-26), Emendamento №8 in coda. Il risveglio oltre l'orizzonte duro, se nessun altro tiene la riga, non è più un'uscita; il gateway è un ruolo, non solo un servizio. Il testo sotto resta. ADR-0022 aveva già deciso la forma: *"un processo OS per il runtime (**gateway**, loop, memoria, scheduler)"*, con systemd a riavviarlo. Quello che è stato costruito è `setInterval(() => scheduler.tick(), 30_000)` **dentro `cli/repl.ts`**: chiudi la finestra e non gira più niente. Nessun servizio, nessun launchd, nessun `daemon` — verificato. È l'undicesima istanza della famiglia "dichiarato e non connesso" e la più grossa, perché non è un file senza lettore: è la **forma del runtime**.
 
 Le conseguenze non sono teoriche, sono misurate. `ingestPending` ha un solo chiamante manuale, quindi la memoria non si riempie: **414 fatti nel vecchio contro 0 nel nuovo** (`research/inventario-vecchio-nuovo.md`). Due clausole della DoD di M5 sono non soddisfatte — il trigger a soglia sul consolidamento, e `observe` che nessuno schedula. E la diagnosi generale sta nei verbi, non nelle intenzioni: **31 dei 95 comandi di Hermes presuppongono un processo che gira** (`heartbeat`, `queue`, `steer`, `pause`, `restart`, `undo`, `handoff`, `compress`); i nostri quattordici sono tutti "fai questo adesso ed esci". Un sistema è continuo se il suo vocabolario lo assume.
 
@@ -342,3 +342,34 @@ l'uscita 2. L'età di parete che l'Emendamento №3 lascia a `heldBy` è il buco
 già in `durable.ts`. La correzione di radice è l'opzione E, l'emendamento
 CRITICAL di ADR-0094 nominato nel rimando dell'Emendamento №3, dopo le slice
 1–3 di ADR-0106 e prima della slice 4. Il testo non è questa PR.
+
+## Emendamento №8 — ADR-0114 (2026-11-26)
+
+ADR-0114 formalizza un'eccezione stretta al vincolo 1 (*«Nessun
+listener di rete»*). Il testo sopra non è stato riscritto.
+
+**Cosa resta.** Il gateway non è un servizio di rete. Il piano di
+controllo resta il socket Unix nella home, con i permessi del
+filesystem. Nessun bind su `0.0.0.0`. Nessun pannello web di
+impostazioni in questa decisione (quel pannello, se arriverà, è #863
+e sta dopo un periodo d'uso reale). Tailscale Funnel, o qualsiasi
+tunnel pubblico verso il processo, è fuori ambito.
+
+**Cosa cambia, e perché non è una novità silenziosa.** Il vincolo 1
+esisteva per non aprire una superficie d'attacco senza un utente che
+la giustificasse. Due flussi owner-only ascoltano già oggi
+**solo su `127.0.0.1`**, per il tempo di un callback OAuth:
+`beginLocalOpenRouterOAuth` e il login ChatGPT
+(`core/config/openrouter-oauth.ts`, `core/config/chatgpt-oauth.ts`).
+ADR-0114 riconosce quella classe e ci aggiunge un terzo caso, della
+stessa strettezza: un listener HTTP on-demand, solo `127.0.0.1`, solo
+il percorso `/s/<token>`, acceso per la durata di una raccolta segreti
+mascherata e spento a token consumato o scaduto. Non è un listener di
+control plane, non è un `/settings` nel browser, non sopravvive a
+un intake chiuso.
+
+Se un dispositivo dell'owner sulla rete privata (Tailscale Serve verso
+quel loopback, mai Funnel) deve raggiungere lo stesso form, lo fa da
+proxy verso `127.0.0.1`, senza aprire la porta al mondo. Il dettaglio
+dei canali e dei divieti (`sendData`, incolla in chat) sta in
+ADR-0114.
