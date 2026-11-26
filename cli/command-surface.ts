@@ -23,7 +23,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   },
   {
     name: 'auth',
-    summary: 'collega OpenRouter e sceglie l’account attivo',
+    summary: 'collega OpenRouter, ChatGPT e xAI e sceglie l’account attivo',
     audience: 'owner',
     primary: true,
     subcommands: ['login', 'status', 'list', 'switch'],
