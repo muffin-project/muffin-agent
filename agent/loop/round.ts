@@ -22,6 +22,11 @@ import {
   ProviderError,
   ProviderStreamError,
 } from '../providers/types.js';
+import {
+  isWorkQuestion,
+  parseWorkMessageArgs,
+  WORK_MESSAGE_TOOL_NAME,
+} from '../tools/work-message.js';
 import { ownedOpenRows } from './completion-gate.js';
 import { resolveConversationId } from './conversation.js';
 import {
@@ -37,6 +42,7 @@ import type {
   ModelCallLease,
   ModelCallTelemetry,
 } from './execution-budget.js';
+import { promoteQualifiedPreamble, recordDeliveredInterim } from './interim-deliver.js';
 import {
   harnessMessage,
   isHarnessMessage,
@@ -1435,6 +1441,18 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     // that stops a tool call already in flight from completing.
     if (!checkpoint(scope)) return finish(scope, 'error', '');
 
+    await promoteQualifiedPreamble({
+      deps,
+      turnInput: input,
+      turnId: record.id,
+      traceId: turn.traceId,
+      text: result.text,
+      sensitiveResourceEchoes: run.sensitiveResourceEchoes,
+      toolCalls,
+      tier: snapshot.intrinsicTaint(),
+      now: now(),
+    });
+
     const results: ContentBlock[] = [];
     for (const [index, call_] of toolCalls.entries()) {
       // Checked between tools, not only before the next model call: a Ctrl+C
@@ -1473,6 +1491,24 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
         });
         results.push(outcome);
         noteSensitiveResourceEcho(call_, outcome);
+        if (
+          call_.name === WORK_MESSAGE_TOOL_NAME &&
+          outcome.type === 'tool_result' &&
+          !outcome.isError &&
+          !isWorkQuestion(call_.args)
+        ) {
+          const args = parseWorkMessageArgs(call_.args);
+          const text = args?.text.trim() ?? '';
+          if (text !== '') {
+            await recordDeliveredInterim(deps, input, {
+              text,
+              source: 'work_message',
+              traceId: turn.traceId,
+              tier: snapshot.intrinsicTaint(),
+              createdAt: now().toISOString(),
+            });
+          }
+        }
       } catch (error) {
         if (error instanceof ApprovalRequired) {
           turn.setAttributes({ 'muffin.policy.approval': 'unavailable' });

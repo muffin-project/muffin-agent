@@ -22,3 +22,28 @@ ordinarie, preservando l'approvazione concreta di ADR-0093.
 
 Questa scelta riguarda la presentazione. Il routing, la policy, la consegna
 journaled, il formato dei piani congelati e la ripresa restano gli stessi.
+
+## Emendamento — 26 novembre 2026 (Europe/Rome)
+
+Il parlato conversazionale breve, già scritto dal modello accanto a una
+chiamata tool, può diventare un messaggio durevole. Non è un ritorno del
+registro «Processo»: zero log tecnico, zero blocchi di ragionamento, zero
+frasi sintetizzate dal runtime. Si promuove al più un preambolo qualificato
+per turno (frase breve e completa, dopo redazione, tetto e filtro
+conservativo), oppure un `work_message` già previsto, su DM dell'owner, nei
+gruppi, nei topic (stesso `message_thread_id` d'origine) e nel REPL
+interattivo. I job e i prompt `minimal` restano esclusi.
+
+Dopo un interim durevole in DM la bozza `"sto lavorando · Ns"` si abbandona e
+si riapre con un nuovo `draft_id`. L'esito finale è sempre un messaggio
+nuovo: non edita mai un interim. Nei gruppi e nei topic l'interim entra
+nella stanza, la digitazione resta attiva mentre girano i tool, e l'esito
+arriva dopo come messaggio nuovo. In memoria a lungo termine resta solo
+l'esito.
+
+Falsificatore: un giro multi-tool mostra al più un acknowledgment breve (se
+il modello lo ha scritto e passa il filtro) e/o `work_message` entro cap,
+mai nomi tool o query, poi un esito su un messaggio nuovo; un preambolo
+«inizio di risposta» come «Ecco cosa ho trovato» non si sdoppia; uno scrub
+di segreto tiene l'interim omesso; un restart non duplica l'interim
+journaled; la bozza di stato non resta stantia.

@@ -1426,6 +1426,7 @@ function connectTelegram(ctx: PortConnectContext): PortConnection | null {
   });
   if (gatewayAtBoot === null && onWork !== undefined) {
     runtime.deps.sendWorkMessage = connector.sendWorkMessage;
+    runtime.deps.sendInterimMessage = connector.sendInterimMessage;
   }
 
   // Same process, background. A crash of the surface is reported and does not

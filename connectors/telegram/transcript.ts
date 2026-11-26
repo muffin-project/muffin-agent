@@ -12,12 +12,15 @@ import {
 } from './rich.js';
 
 /**
- * Live Telegram presentation (ADR-0111). DMs use a stoppable draft for
- * activity and provisional text; ordinary groups and topics use typing via
- * `presence.ts`. Tools and preambles never accumulate in a chat transcript.
- * Only a concrete approval can open a persistent message here. Its ID and
- * receipt can be passed to the result writer; the delivery journal owns the
- * final message.
+ * Live Telegram presentation (ADR-0111, amended 2026-11-26). DMs use a
+ * stoppable draft for activity and provisional text; ordinary groups and
+ * topics use typing via `presence.ts`. Technical tool logs never accumulate
+ * in a chat transcript. A short qualified conversational preamble (or a
+ * `work_message`) may be delivered as a durable mid-turn message; the final
+ * answer is always a new message and never an edit of that interim. Only a
+ * concrete approval can open a persistent message here. Its ID and receipt
+ * can be passed to the result writer; the delivery journal owns both the
+ * interim and the final message.
  */
 
 /** How long `stop()` waits for the final edit before letting the answer go out anyway. */
@@ -87,8 +90,20 @@ export type Transcript = {
    * `'tool-call'` is a round that went straight to tools: nothing to show.
    */
   spoke(text: string, reason: 'tool-call' | 'superseded'): void;
-  /** Surface preparation or one fact from `TurnInput.onProgress`. */
-  report(event: TranscriptProgress): void;
+  /**
+   * A durable mid-turn message (qualified preamble or `work_message`) has
+   * just been sent on this chat. Abandon the current draft, if any, and
+   * reopen the status bubble with a fresh `draft_id`. Groups have no draft:
+   * this is then a no-op on presentation (typing is renewed by presence).
+   * Never edits the interim; the final answer is a later new message.
+   */
+  afterDurableInterim(): Promise<void>;
+  /**
+   * Surface preparation or one fact from `TurnInput.onProgress`.
+   * `interim` returns a promise that settles after the fresh DM draft
+   * (if any) has been pushed; other events return void.
+   */
+  report(event: TranscriptProgress): void | Promise<void>;
   /**
    * The wait `report`'s `'ask'` case opened is over — the owner answered.
    *
@@ -234,7 +249,7 @@ export function startTranscript(
     Math.max(1, Math.floor(negotiation.draftTtlMs / 3) || DRAFT_TICK_MS) < DRAFT_TICK_MS
       ? Math.max(1, Math.floor(negotiation.draftTtlMs / 3) || DRAFT_TICK_MS)
       : DRAFT_TICK_MS;
-  const draftId = prossimoDraftId++;
+  let draftId = prossimoDraftId++;
   let draftText = '';
   /**
    * La bozza costruita come **gli stessi blocchi** del messaggio finale
@@ -254,6 +269,8 @@ export function startTranscript(
   let draftPaintedContent = false;
   /** Last status phrase pushed to the draft, without the timer. */
   let lastPushedStatus: string | null = null;
+  /** In-flight `pushDraft`, so a mid-turn restart can wait for the first paint. */
+  let draftPush: Promise<void> | null = null;
   const turnStartedAt = now();
 
   const segments: Segment[] = [];
@@ -545,7 +562,7 @@ export function startTranscript(
       draftText = s;
       draftRich = thinkingRich(s);
       lastPushedStatus = status;
-      if (push) void pushDraft().then(() => scheduleDraft());
+      if (push) enqueueDraftPush();
       else scheduleDraft();
       return;
     }
@@ -579,8 +596,18 @@ export function startTranscript(
       draftText = legacy;
       draftRich = null;
     }
-    if (push || firstContent) void pushDraft().then(() => scheduleDraft());
+    if (push || firstContent) enqueueDraftPush();
     else scheduleDraft();
+  }
+
+  function enqueueDraftPush(): void {
+    const mine = pushDraft().then(() => {
+      scheduleDraft();
+    });
+    draftPush = mine;
+    void mine.finally(() => {
+      if (draftPush === mine) draftPush = null;
+    });
   }
 
   /**
@@ -787,6 +814,25 @@ export function startTranscript(
    * is set and it edits. Failure disables the turn exactly like
    * `sendSegment`'s own failure — this IS the first send, not an extra one.
    */
+  /**
+   * After a journaled mid-turn sendMessage, the current preview is gone on
+   * the client. Reusing the same `draft_id` would resurrect it uncleanly.
+   */
+  async function afterDurableInterim(): Promise<void> {
+    if (stopped || disabled) return;
+    liveText = '';
+    liveMarkdown = '';
+    status = 'sto lavorando';
+    if (!draftEnabled || messaggioDelTurno) return;
+    abbandonaDraft();
+    draftRich = null;
+    draftPaintedContent = false;
+    lastPushedStatus = null;
+    draftId = prossimoDraftId++;
+    ensureDraftStatus();
+    if (draftPush !== null) await draftPush;
+  }
+
   return {
     spoke(_text, reason) {
       if (stopped || disabled) return;
@@ -796,7 +842,9 @@ export function startTranscript(
       scheduleSoon();
     },
 
-    report(event) {
+    afterDurableInterim,
+
+    report(event): void | Promise<void> {
       if (stopped || disabled) return;
       switch (event.type) {
         case 'preparing_context':
@@ -837,6 +885,8 @@ export function startTranscript(
           abbandonaDraft();
           status = null;
           return;
+        case 'interim':
+          return afterDurableInterim();
         default:
           return assertNever(event);
       }

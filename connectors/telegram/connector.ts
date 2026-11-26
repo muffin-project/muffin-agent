@@ -1279,6 +1279,81 @@ export class TelegramConnector {
     );
   };
 
+  private interimAddress(
+    turn: TurnRecord,
+  ): { chatId: number; threadId: number | null; replyTo: number | null } | null {
+    if (turn.surface !== 'telegram' || turn.jobId !== null) return null;
+    const chatId = turn.replyTo?.chatId;
+    if (typeof chatId !== 'number' || !Number.isSafeInteger(chatId)) return null;
+    const threadId = typeof turn.replyTo?.threadId === 'number' ? turn.replyTo.threadId : null;
+    const replyTo =
+      !isDirectChat(chatId) && typeof turn.replyTo?.messageId === 'number'
+        ? turn.replyTo.messageId
+        : null;
+    return { chatId, threadId, replyTo };
+  }
+
+  private canSendInterim(turn: TurnRecord, chatId: number): boolean {
+    const address = this.interimAddress(turn);
+    return (
+      !this.stopping &&
+      address !== null &&
+      address.chatId === chatId &&
+      this.deps.loop.decide({
+        principal: turn.principal,
+        tenant: turn.tenant,
+        capability: replyCapability.id,
+        resource: { kind: 'none' },
+        args: {},
+        taint: turn.taint,
+      }).effect === 'allow'
+    );
+  }
+
+  /**
+   * Journaled Pattern-A preamble. Uses the turn's own `replyTo`, so a group
+   * or topic receives the bubble in the originating thread. Separate from
+   * `sendWorkMessage`, which stays owner-DM-only for the `work_message` tool.
+   */
+  sendInterimMessage = async (
+    turnId: string,
+    id: string,
+    text: string,
+  ): Promise<TelegramDeliveryOutcome> => {
+    if (this.stopping || !/^[a-f0-9]{64}$/.test(id)) return 'deferred';
+    const turn = this.deps.loop.turns.get(turnId);
+    if (turn === null) return 'deferred';
+    const address = this.interimAddress(turn);
+    if (address === null) return 'deferred';
+    const html = escapeHtml(redactText(text));
+    if (html === '' || html.length > 4096) return 'deferred';
+    return deliverTelegram(
+      this.deps.delivery,
+      this.deps.api,
+      `work:preamble:${turnId}:${id}`,
+      [
+        {
+          operation: 'send',
+          chatId: address.chatId,
+          threadId: address.threadId,
+          replyTo: address.replyTo,
+          editMessageId: null,
+          html,
+        },
+      ],
+      () => this.now(),
+      0,
+      (part) => {
+        const current = this.deps.loop.turns.get(turnId);
+        return (
+          part.chatId === address.chatId &&
+          current !== null &&
+          this.canSendInterim(current, address.chatId)
+        );
+      },
+    );
+  };
+
   private questionText(question: { id: string; question: string }): string {
     // Telegram includes the original bot message on a native reply. The
     // reference distinguishes identical questions if the send receipt was lost.
@@ -2004,8 +2079,13 @@ export class TelegramConnector {
       // expiring preview — see that file's docstring.
       transcript.live(deltaText);
     };
-    const onProgress = (event: TurnEvent): void => {
-      transcript.report(event);
+    const onProgress = (event: TurnEvent): void | Promise<void> => {
+      const reported = transcript.report(event);
+      if (event.type === 'interim') {
+        return Promise.resolve(reported).then(() =>
+          presencePromise.then((presence) => presence.refresh()),
+        );
+      }
     };
 
     // ADR-0054's stessa leva di `handle()`, per un turno che la corsia sta
@@ -3044,8 +3124,11 @@ export class TelegramConnector {
       // DAY-1 requirement B13: the sibling sink, same shape — this closure
       // only forwards, `transcript.ts`'s own `report` owns the rate limit, the
       // coalescing and the create-vs-edit choice.
-      onProgress: (event: TurnEvent): void => {
-        transcript.report(event);
+      onProgress: (event: TurnEvent): void | Promise<void> => {
+        const reported = transcript.report(event);
+        if (event.type === 'interim') {
+          return Promise.resolve(reported).then(() => presence.refresh());
+        }
       },
       ran: async (result) => {
         // B13: the heartbeat has nothing left to say once this attempt is over

@@ -546,6 +546,19 @@ export type LoopDeps = {
         text: string,
       ) => Promise<'sent' | 'possibly_sent' | 'deferred'>)
     | undefined;
+  /**
+   * Journaled delivery of a qualified Pattern-A preamble (ADR-0111 amendment
+   * 2026-11-26). Same outcomes as `sendWorkMessage`, but the address is the
+   * turn's own `replyTo` — owner DM, a group, or a forum topic — not only
+   * the owner DM used by the `work_message` tool.
+   */
+  sendInterimMessage?:
+    | ((
+        turnId: string,
+        messageId: string,
+        text: string,
+      ) => Promise<'sent' | 'possibly_sent' | 'deferred'>)
+    | undefined;
   /** Read the effective owner binding on demand, including a newly paired owner. */
   workMessageOwner?: (() => { userId?: number; chatId?: number }) | undefined;
   /** Refresh persisted main-model settings immediately before a turn enters execution. */
@@ -946,6 +959,12 @@ export type TurnInput = {
    * Absent on a resume for the same reason `onDelta` is (see `drive`'s
    * `options.onDelta` docstring): no live surface is holding the previous
    * attempt.
+   *
+   * `interim` is awaited so the surface can finish side effects (a fresh
+   * DM draft after a durable mid-turn send) before the next model call.
+   * Other events stay fire-and-forget. The type stays `void` so existing
+   * listeners (including test `array.push` bindings) remain assignable;
+   * a surface may still return a Promise, per TypeScript's void-callback rule.
    */
   onProgress?: ((event: TurnEvent) => void) | undefined;
   /**
@@ -1057,7 +1076,15 @@ export type TurnEvent =
    * partire (2 = il primo ritentativo).
    */
   | { type: 'tool_retry'; name: string; attempt: number; inMs: number; why: string; args?: unknown }
-  | { type: 'tool_end'; name: string; ms: number; isError: boolean; args?: unknown };
+  | { type: 'tool_end'; name: string; ms: number; isError: boolean; args?: unknown }
+  /**
+   * A conversational mid-turn message was actually delivered (or, on the
+   * REPL, already left on screen). `text` is already redacted and qualified.
+   * Surfaces must not treat this as a second send of a `work_message` they
+   * already posted — `source` says which channel produced it, and the event
+   * exists so a live draft can be abandoned and reopened, not to reprint.
+   */
+  | { type: 'interim'; text: string; source: 'preamble' | 'work_message' };
 
 export type TurnResult = {
   text: string;

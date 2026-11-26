@@ -35,6 +35,12 @@ const ACTION_RENEW_MS = 4_000;
 
 export type Presence = {
   /**
+   * Renews `typing` immediately. A durable interim `sendMessage` cancels
+   * Telegram's action indicator, and the next interval tick can be up to
+   * four seconds away — this closes that gap while tools still run.
+   */
+  refresh(): Promise<void>;
+  /**
    * Cancels the heartbeat. **Idempotent** — the caller invokes it once
    * explicitly, right before finalising the turn's real answer, and once
    * more from its own `finally` as a safety net for every path that never
@@ -55,7 +61,11 @@ export type Presence = {
  * behaves identically in a private chat and a group, so there is nothing left
  * here for a chat kind to change.
  */
-export async function startPresence(api: TelegramApiLike, chatId: number, threadId?: number): Promise<Presence> {
+export async function startPresence(
+  api: TelegramApiLike,
+  chatId: number,
+  threadId?: number,
+): Promise<Presence> {
   let stopped = false;
 
   const safely = async (work: () => Promise<unknown>): Promise<void> => {
@@ -75,6 +85,9 @@ export async function startPresence(api: TelegramApiLike, chatId: number, thread
   );
 
   return {
+    async refresh() {
+      await safely(() => api.sendChatAction(chatId, 'typing', threadId));
+    },
     async stop() {
       if (stopped) return;
       stopped = true;

@@ -37,8 +37,8 @@ export function makeWorkMessageTool(): RegisteredTool {
       name: WORK_MESSAGE_TOOL_NAME,
       description:
         'Send an optional short message to the owner in the chat where this work started. ' +
-        'Use it when a brief acknowledgment would help before long work, or when something material changes. ' +
-        'If blocked on a decision or missing information, ask one focused question with wait_for_reply=true, alone in its tool batch. ' +
+        'A brief acknowledgment before the first tools should usually be a short complete sentence in the same reply (for example "Ok, vado a guardare"), not a call to this tool. ' +
+        'Use it when something material changes later in the turn, or to ask one focused question with wait_for_reply=true, alone in its tool batch. ' +
         'Not for routine turn narration or final results. Reply with the final result normally; it is delivered automatically.',
       inputSchema: {
         type: 'object',
