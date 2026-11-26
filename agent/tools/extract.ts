@@ -1,5 +1,5 @@
-import { parseHTML } from 'linkedom';
 import { Defuddle } from 'defuddle/node';
+import { parseHTML } from 'linkedom';
 
 /**
  * Local article extraction, in front of `clipBody` (agent/tools/http.ts).
@@ -53,6 +53,36 @@ export function isHtmlContentType(contentType: string | null): boolean {
 }
 
 /**
+ * The page's HTML title, preferred in this order: Defuddle's own title,
+ * then `<title>`. Empty or whitespace-only values are ignored.
+ */
+export function pageTitleFromHtml(
+  document: { querySelector: (selector: string) => { textContent: string | null } | null },
+  extractedTitle: string | undefined,
+): string | null {
+  for (const raw of [extractedTitle, document.querySelector('title')?.textContent]) {
+    const title = raw?.trim() ?? '';
+    if (title !== '') return title;
+  }
+  return null;
+}
+
+/**
+ * Put the HTML title at the top of the extracted Markdown when the body
+ * does not already open with it. Defuddle keeps `title` as metadata and
+ * often drops both `<title>` and the first `<h1>` from `content` — measured
+ * live on `https://example.com` (`<title>` and `<h1>` are "Example Domain",
+ * the extracted body was only the paragraph).
+ */
+export function withPageTitle(title: string | null, content: string): string {
+  if (title === null) return content;
+  const body = content.trimStart();
+  const leading = /^#+\s*([^\n]+)/.exec(body) ?? /^([^\n]+)/.exec(body);
+  if (leading?.[1]?.trim() === title) return content;
+  return `# ${title}\n\n${content}`;
+}
+
+/**
  * Returns the page's main content as Markdown, or `null` when extraction is
  * not worth preferring over the raw body. Never throws: a page we cannot
  * parse must still be readable, so every failure mode here — Defuddle
@@ -69,10 +99,14 @@ export async function extractMainContent(html: string, url: string): Promise<str
     const result = await Defuddle(document, url, { markdown: true });
     const content = result?.content?.trim() ?? '';
     if (content.length === 0) return null;
-    if (html.length > PLAUSIBILITY_CHECK_FLOOR_RAW_CHARS && content.length < MIN_PLAUSIBLE_EXTRACTED_CHARS) {
+    if (
+      html.length > PLAUSIBILITY_CHECK_FLOOR_RAW_CHARS &&
+      content.length < MIN_PLAUSIBLE_EXTRACTED_CHARS
+    ) {
       return null;
     }
-    return content;
+    const title = pageTitleFromHtml(document, result?.title);
+    return withPageTitle(title, content);
   } catch {
     return null;
   }

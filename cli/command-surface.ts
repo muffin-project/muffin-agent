@@ -26,7 +26,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     summary: 'collega OpenRouter, ChatGPT e xAI e sceglie l’account attivo',
     audience: 'owner',
     primary: true,
-    subcommands: ['login', 'status', 'list', 'switch'],
+    subcommands: ['login', 'status', 'list', 'switch', 'logout'],
   },
   {
     name: 'chatgpt',

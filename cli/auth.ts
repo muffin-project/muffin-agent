@@ -39,12 +39,15 @@ import {
 } from './openrouter-connect.js';
 import { obtainXaiAuthorization, xaiAuthMode } from './xai-connect.js';
 
-export const AUTH_USAGE = `usage:
+export const AUTH_USAGE = `uso:
   muffin auth status
   muffin auth list
   muffin auth login openrouter [--new [id]] [--code|--browser]
   muffin auth login chatgpt [profile-id | --new]
   muffin auth login xai [--browser|--code|--device]
+      --browser  apre il browser sul computer (loopback 127.0.0.1)
+      --code     incolla il codice di ritorno
+      --device   avvio con device flow, adatto a una sessione SSH
   muffin auth logout <xai|chatgpt>
   muffin auth switch <openrouter|anthropic|xai|chatgpt> <profile-id>
 `;

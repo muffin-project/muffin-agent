@@ -1,5 +1,5 @@
 import { assessBubblewrapVersionString, readBubblewrapVersion } from './bubblewrap-version.js';
-import type { SandboxProbe } from './probe.js';
+import { describeSandboxProbeFailure, type SandboxProbe } from './probe.js';
 
 /**
  * The one gate that decides whether `shell_run`/`shell_run_write` exist (#642).
@@ -49,7 +49,7 @@ export function assessShellBoundary(
       usable: false,
       behavioral: probe,
       patch: 'not-applicable',
-      reason: `${probe.mechanism} non disponibile (${probe.reason}): ${probe.detail}`,
+      reason: describeSandboxProbeFailure(probe),
       remedy: probe.remedy,
     };
   }

@@ -27,12 +27,12 @@ export { credentialRemedy, describeChain, xaiLoginUsable };
  * catalog, so nothing provider-specific is typed or hardcoded here.
  */
 
-export const FALLBACK_USAGE = `usage:
-  muffin fallback                                   show the chains and which link is serving
+export const FALLBACK_USAGE = `uso:
+  muffin fallback                                   mostra le catene e quale anello sta servendo
   muffin fallback add <provider> <model> [--light] [--account <id>]
-  muffin fallback remove <provider|position> [--light]
-  muffin fallback reset [--light|--main]            clear every pause now (account fixed)
-providers: ${Object.keys(PROVIDERS).join(', ')}`;
+  muffin fallback remove <provider|posizione> [--light]
+  muffin fallback reset [--light|--main]            toglie ogni pausa ora (account invariato)
+provider: ${Object.keys(PROVIDERS).join(', ')}`;
 
 export type FallbackDeps = { out: (line: string) => void };
 

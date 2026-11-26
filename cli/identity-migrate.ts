@@ -10,6 +10,7 @@ import { estimateTokens } from '../agent/context/tokens.js';
 import { paths } from '../core/config/config.js';
 import { tightenPrivateFile } from '../core/config/private-fs.js';
 import { backupOwnerConfigFile } from '../core/rot/backup.js';
+import { displayInHome } from './home-display.js';
 
 /**
  * The assisted cut-over of ADR-0112 (amendment of 26/11/2026): from a
@@ -122,7 +123,10 @@ export function planIdentityMigration(home: string, opts: PlanOptions = {}): Ide
     return { kind: 'not-needed', reason: 'la fondazione arriva già dal prodotto' };
   }
   if (layers.mode === 'foundation+user') {
-    return { kind: 'not-needed', reason: '~/.muffin/user.md esiste già: non lo sovrascrivo' };
+    return {
+      kind: 'not-needed',
+      reason: `${displayInHome(home, 'user.md')} esiste già: non lo sovrascrivo`,
+    };
   }
   if (layers.foundationMissing) {
     return {

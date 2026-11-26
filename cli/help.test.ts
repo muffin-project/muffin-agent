@@ -3,7 +3,10 @@ import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { COMMANDS, commandHelp, wantsHelp } from './command-surface.js';
+import { AUTH_USAGE } from './auth.js';
+import { COMMANDS, commandHelp, commandSpec, wantsHelp } from './command-surface.js';
+import { FALLBACK_USAGE } from './fallback.js';
+import { rotMigrateUsage } from './rot-migrate.js';
 
 /**
  * `muffin <command> --help` answers for every command, exits 0, and never
@@ -36,6 +39,24 @@ describe('commandHelp', () => {
   });
   it('is null for an unknown command', () => {
     expect(commandHelp('nonesiste')).toBeNull();
+  });
+
+  it('auth help documents xAI login flags and lists logout', () => {
+    const page = commandHelp('auth', AUTH_USAGE);
+    expect(page).toContain('muffin auth login xai [--browser|--code|--device]');
+    expect(page).toContain('--browser');
+    expect(page).toContain('--code');
+    expect(page).toContain('--device');
+    expect(page).toContain('muffin auth logout');
+    expect(commandSpec('auth')?.subcommands).toContain('logout');
+  });
+
+  it('fallback help is Italian and uses uso:', () => {
+    const page = commandHelp('fallback', FALLBACK_USAGE);
+    expect(page).toMatch(/^muffin fallback/m);
+    expect(page).toContain('uso:');
+    expect(page).not.toContain('usage:');
+    expect(page).toContain('mostra le catene');
   });
 });
 
@@ -131,4 +152,37 @@ describe('muffin <command> --help', () => {
     expect(viaHelp.out).toBe(viaFlag.out);
     expect(unknown.code).toBe(78);
   }, 120_000);
+
+  it('muffin auth login xai --help documents --browser, --code and --device', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'muffin-help-xai-'));
+    dirs.push(root);
+    const cwd = mkdtempSync(join(process.cwd(), 'muffin-test-cwd-'));
+    dirs.push(cwd);
+    const r = await run(
+      ['auth', 'login', 'xai', '--help'],
+      join(root, 'home'),
+      join(root, 'xdg'),
+      cwd,
+    );
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('--browser');
+    expect(r.out).toContain('--code');
+    expect(r.out).toContain('--device');
+    expect(r.out).toContain('logout');
+  }, 60_000);
+
+  it('muffin rot --help names a customized MUFFIN_HOME, not ~/.muffin/user.md', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'muffin-help-rot-'));
+    dirs.push(root);
+    const cwd = mkdtempSync(join(process.cwd(), 'muffin-test-cwd-'));
+    dirs.push(cwd);
+    const home = join(root, 'custom-muffin-home');
+    const r = await run(['rot', '--help'], home, join(root, 'xdg'), cwd);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain(home);
+    expect(r.out).toContain('user.md');
+    expect(r.out).not.toContain('~/.muffin/user.md');
+    expect(rotMigrateUsage(home)).toContain(join(home, 'user.md'));
+    expect(rotMigrateUsage(home)).not.toContain('chiede comunque prima di scrivere');
+  }, 60_000);
 });

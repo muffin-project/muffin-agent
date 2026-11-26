@@ -41,7 +41,8 @@ describe('assessShellBoundary — the shared shell gate (#642)', () => {
     expect(b.patch).toBe('not-applicable');
     expect(v.calls()).toBe(0);
     expect(b.reason).toContain('userns_denied');
-    expect(b.reason).toContain('non disponibile');
+    expect(b.reason).toContain('namespace');
+    expect(b.reason).not.toContain('non disponibile');
     expect(b.remedy).toContain('AppArmor');
   });
 
@@ -78,5 +79,21 @@ describe('assessShellBoundary — the shared shell gate (#642)', () => {
     expect(b.usable).toBe(false);
     expect(b.patch).toBe('unverified');
     expect(b.reason).toMatch(/unreadable|CVE-2026-87766/);
+  });
+
+  it('git_hooks_unprotected does not say bubblewrap is missing', () => {
+    const probe: SandboxProbe = {
+      available: false,
+      mechanism: 'bubblewrap',
+      reason: 'git_hooks_unprotected',
+      detail: 'a contained process installed a hook',
+      remedy: 'load the AppArmor profile for bwrap',
+    };
+    const b = assessShellBoundary(probe, () => 'bubblewrap 0.12.0');
+    expect(b.usable).toBe(false);
+    expect(b.reason).toContain('git_hooks_unprotected');
+    expect(b.reason).toContain('AppArmor');
+    expect(b.reason).not.toContain('bubblewrap non disponibile');
+    expect(b.reason).not.toMatch(/bubblewrap non disponibile/);
   });
 });

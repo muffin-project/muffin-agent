@@ -388,7 +388,7 @@ function visibleText(c: Chiamata): string {
 const processLog =
   /\b(?:Processo|leggo un file|eseguo un comando|cerco in memoria|fs_read|shell_run_write)\b/i;
 const statusText =
-  /\b(?:preparo il contesto|aspetto il modello|sto pensando|sto lavorando|sto (?:ricevendo|scrivendo) la risposta)\b/i;
+  /\b(?:sto preparando il contesto|preparo il contesto|aspetto il modello|sto pensando|sto lavorando|sto (?:ricevendo|scrivendo) la risposta)\b/i;
 
 function checkNoProcess(scene: string, calls: Chiamata[]): void {
   const leaks = calls.filter(

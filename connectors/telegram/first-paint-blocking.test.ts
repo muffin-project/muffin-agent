@@ -179,7 +179,7 @@ describe('DM status before the first answer', () => {
       draining = (connector as unknown as { drain: () => Promise<void> }).drain();
       await vi.waitFor(() => expect(recallSearch).toHaveBeenCalledOnce());
       expect(n).toBe(0);
-      expect(payload(drafts()[0])).toContain('preparo il contesto');
+      expect(payload(drafts()[0])).toContain('sto preparando il contesto');
       expect(durableCalls()).toEqual([]);
       releaseRecall();
       await vi.waitFor(() => expect(payload(drafts().at(-1))).toContain('sto lavorando'));

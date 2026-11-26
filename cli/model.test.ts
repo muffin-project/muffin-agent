@@ -767,6 +767,28 @@ describe('muffin model', () => {
     }
   });
 
+  it('does not tell the owner to restart a gateway that is not running', async () => {
+    const h = home();
+    const { sink, out } = raccogli();
+    expect(
+      await cmdModel(h, ['embed', 'off'], { out: sink, gatewayStatus: async () => null }),
+    ).toBe(0);
+    expect(out.join('\n')).toContain('Embedding disattivati');
+    expect(out.join('\n')).not.toContain('Riavvia il gateway');
+  });
+
+  it('asks to restart the gateway only when one is actually running', async () => {
+    const h = home();
+    const { sink, out } = raccogli();
+    expect(
+      await cmdModel(h, ['embed', 'off'], {
+        out: sink,
+        gatewayStatus: async () => ({ pid: 4242 }),
+      }),
+    ).toBe(0);
+    expect(out.join('\n')).toContain('Riavvia il gateway');
+  });
+
   it('turns embedding off without a probe and restores the saved route on demand', async () => {
     const h = home();
     const endpoint = await embeddingEndpoint(4);
