@@ -6,11 +6,11 @@ import {
   type PortableAgentTool,
 } from 'mcp-event-intelligence/embedded';
 import type { EventIntelligenceObservabilitySink } from 'mcp-event-intelligence/observability';
-import { dispatchRuntimeEvent, type RuntimeEvent } from './automation.js';
 import { fence } from '../core/memory/spotlight.js';
 import type { CapabilityDecl, Principal } from '../core/policy/types.js';
 import type { SessionRef } from '../core/session/store.js';
 import type { TurnRecord } from '../core/turns/store.js';
+import { dispatchRuntimeEvent, type RuntimeEvent } from './automation.js';
 import {
   enqueueTurn,
   type LoopDeps,
@@ -91,7 +91,8 @@ export type EventWakePort = {
   source(turnId: string): EventWakeSource | null;
   has(workId: string): boolean;
   openSession(sessionId: string): SessionRef;
-  enqueue(input: TurnInput): string;
+  // Optional host-visible EI wake identity; do not confuse it with the Turn receipt ID.
+  enqueue(input: TurnInput, wakeId?: string): string;
 };
 
 function renderWakeText(activation: EventActivation): string {
@@ -189,19 +190,22 @@ function activationDelivery(port: EventWakePort, wakeOwners: WakeOwnerBindings) 
       dispatchRuntimeEvent(activationEvent(activation, receiptId), [], {
         mode: 'agent',
         run: () => {
-          const runtimeReceiptId = port.enqueue({
-            id: receiptId,
-            // A matched trigger is autonomous system work, never owner speech
-            // and never owner authority. The normal kernel rechecks every tool.
-            principal: { kind: 'system', source: 'automation' },
-            tenant: target.tenant,
-            surface: target.surface,
-            session: port.openSession(target.sessionId),
-            text: renderWakeText(activation),
-            contentTaint: EXTERNAL,
-            inputOrigin: 'external',
-            ...(target.replyTo === null ? {} : { replyTo: target.replyTo }),
-          });
+          const runtimeReceiptId = port.enqueue(
+            {
+              id: receiptId,
+              // A matched trigger is autonomous system work, never owner speech
+              // and never owner authority. The normal kernel rechecks every tool.
+              principal: { kind: 'system', source: 'automation' },
+              tenant: target.tenant,
+              surface: target.surface,
+              session: port.openSession(target.sessionId),
+              text: renderWakeText(activation),
+              contentTaint: EXTERNAL,
+              inputOrigin: 'external',
+              ...(target.replyTo === null ? {} : { replyTo: target.replyTo }),
+            },
+            activation.wake.wakeId,
+          );
           // Preserve only explanatory read scope for the wake. Mutations below
           // still require the real owner principal.
           wakeOwners.remember(runtimeReceiptId, triggerOwner(target.principal, target.tenant));

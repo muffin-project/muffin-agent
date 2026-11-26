@@ -14,7 +14,7 @@ function requiredTurnId(input: TurnInput): string {
 }
 
 describe('Muffin Event Intelligence host conformance', () => {
-  it('passes the public EI v0.11 management host contract through Muffin tools', async () => {
+  it('passes the public EI v1.0 management host contract through Muffin tools', async () => {
     const adapter = {
       name: 'muffin-agent',
 
@@ -90,7 +90,8 @@ describe('Muffin Event Intelligence host conformance', () => {
             id: sessionId,
             file: join(home, `${sessionId.replaceAll(':', '_')}.jsonl`),
           }),
-          enqueue: (input) => {
+          enqueue: (input, wakeId) => {
+            if (!wakeId) throw new Error('EI conformance delivery missing canonical wake ID');
             const runtimeReceiptId = requiredTurnId(input);
             persistedReceipts.add(runtimeReceiptId);
             const replyTo = input.replyTo;
@@ -104,7 +105,8 @@ describe('Muffin Event Intelligence host conformance', () => {
             }
             deliveries.push({
               triggerId: replyTo.conformanceTriggerId,
-              wakeId: runtimeReceiptId,
+              // EI's durable wake ID differs from Muffin's persisted Turn/receipt ID.
+              wakeId,
               runtimeReceiptId,
             });
             return runtimeReceiptId;
@@ -216,6 +218,17 @@ describe('Muffin Event Intelligence host conformance', () => {
             return [...deliveries];
           },
 
+          async readWakeReceipt(wakeId: string) {
+            // The v3 contract reads EI's durable store after reopening it;
+            // the in-process delivery observer is not evidence of persistence.
+            const current = embedded;
+            if (!current) throw new Error('Event Intelligence conformance host is closed');
+            const stored = await current.host.store.getWakeDelivery(wakeId);
+            return stored
+              ? { status: stored.status, runtimeReceiptId: stored.runtimeReceiptId ?? null }
+              : null;
+          },
+
           async restart() {
             await embedded?.close();
             embedded = null;
@@ -295,6 +308,10 @@ describe('Muffin Event Intelligence host conformance', () => {
 
     const report = await runHostConformance(adapter, { profile: 'management' });
     expect(report.passed, JSON.stringify(report, null, 2)).toBe(true);
+    expect(report.schema).toBe('event-intelligence.host-conformance.v3');
+    expect(report.results).toContainEqual(
+      expect.objectContaining({ id: 'core.restart-after-delivery-replay', status: 'pass' }),
+    );
     expect(report.adapter).toBe('muffin-agent');
     expect(report.profile).toBe('management');
     expect(report.summary.failed).toBe(0);

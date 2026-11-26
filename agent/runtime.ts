@@ -1693,6 +1693,26 @@ export async function attachMcp(runtime: Runtime, home = paths().home): Promise<
       const { attachEventIntelligence } = await import('./event-intelligence.js');
       report.push(...(await attachEventIntelligence(runtime, attachment.eventConnections, home)));
     } catch (error) {
+      // Upgrading an existing 0.11 Home can fail the v1 Pattern signature
+      // check before any watch is hydrated. Never treat that as a recoverable
+      // optional integration failure: chat could continue while old watches
+      // silently stop waking the owner. The old Home remains untouched.
+      const code = error && typeof error === 'object'
+        ? Object.getOwnPropertyDescriptor(error, 'code')?.value
+        : undefined;
+      if (code === 'EVENT_INTELLIGENCE_PATTERN_V2_SIGNATURE_INCOMPATIBLE') {
+        try {
+          await attachment.close();
+        } catch {
+          // The original compatibility blocker remains authoritative.
+        }
+        throw new Error(
+          'Event Intelligence upgrade blocked: stored watches require an ' +
+            'explicit offline migration or rollback to the previous SDK and ' +
+            'unaltered Home. No existing watch was activated.',
+          { cause: error },
+        );
+      }
       report.push(
         `event-intelligence — unavailable: ${error instanceof Error ? error.message : String(error)}`,
       );
