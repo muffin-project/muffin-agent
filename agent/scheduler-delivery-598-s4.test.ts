@@ -11,7 +11,12 @@ import type { CapabilityDecl } from '../core/policy/types.js';
 import { Delega } from '../core/runtime/delega.js';
 import { JobFireStore } from '../core/scheduler/job-fires.js';
 import { type Job, JobStore } from '../core/scheduler/jobs.js';
-import { type JobOutcome, Scheduler, type SchedulerEvent } from '../core/scheduler/scheduler.js';
+import {
+  type Deliver,
+  type JobOutcome,
+  Scheduler,
+  type SchedulerEvent,
+} from '../core/scheduler/scheduler.js';
 import { SessionStore } from '../core/session/store.js';
 import { DELIVERED } from '../core/surface/types.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
@@ -91,7 +96,7 @@ function drive(
   w: ReturnType<typeof stubWorld>,
   runJob: (job: Job) => Promise<JobOutcome>,
   events: SchedulerEvent[],
-  deliver: ReturnType<typeof vi.fn>,
+  deliver: Deliver,
   recorded: Array<[string, string]>,
 ) {
   // Lo stub rivendica l'occorrenza come `makeJobRunner` fa in produzione

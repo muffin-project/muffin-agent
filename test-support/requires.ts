@@ -34,9 +34,9 @@ export function capability(name: CapabilityName): Capability {
 
 /**
  * Il nome del test con l'etichetta della capacità, sempre: `[richiede sandbox]`
- * quando gira, `[richiede sandbox — saltato: motivo]` quando salta. Con Vitest 2
- * (niente `tags`) il nome è l'unico posto in cui un'etichetta e un motivo
- * arrivano al report JSON, ed è da lì che `scripts/test-capability-report.ts`
+ * quando gira, `[richiede sandbox — saltato: motivo]` quando salta. Il nome è
+ * l'unico posto in cui un'etichetta e un motivo arrivano al report JSON
+ * (misurato su vitest 2.1.9 e 5.1.2), ed è da lì che `scripts/test-capability-report.ts`
  * conta quanti test marcati hanno girato davvero. Un `describe` etichettato
  * marca tutti i test che contiene.
  */
