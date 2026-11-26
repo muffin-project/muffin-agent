@@ -28,6 +28,15 @@ it.each([
   { label: 'a short unrelated request', text: work, first: 'fs_edit' },
   { label: 'a missing reader', text: request, first: 'fs_edit', missing: true },
   { label: 'a denied reader', text: request, first: 'fs_edit', safeMode: true },
+  // Eligible (budget_exhausted is not an eligibility code), but the
+  // availability probe denies it for a reason other than the URL: the reader
+  // must not be prioritized (agent/loop/engine.ts, #1039).
+  {
+    label: 'an eligible reader denied by its availability probe',
+    text: request,
+    first: 'fs_edit',
+    unavailable: true,
+  },
   { label: 'an invalid URL-shaped token', text: `https://? ${work}`, first: 'fs_edit' },
   {
     label: 'a Markdown link with a port',
@@ -90,6 +99,13 @@ it.each([
         decide(decision) {
           if ('safeMode' in scene && decision.capability === 'sys.http') {
             return { effect: 'deny', code: 'safe_mode' };
+          }
+          if (
+            'unavailable' in scene &&
+            decision.capability === 'sys.http' &&
+            decision.resource.kind === 'none'
+          ) {
+            return { effect: 'deny', code: 'budget_exhausted', detail: 'fixture restriction' };
           }
           if (
             denyCall &&

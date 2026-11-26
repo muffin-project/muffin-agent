@@ -383,8 +383,16 @@ jobs:
       # the job crossed `timeout-minutes` with every step green — GitHub marks
       # that `cancelled`, on `dev` too, and a green report in the log was the
       # only way to tell a timeout from a failure.
+      #
+      # `MUFFIN_REQUIRE_CAPABILITIES`: la gamba Linux di A10 (`systemd-analyze
+      # verify` sulla unit generata da `muffin gateway install`) chiede al
+      # registro delle capacità se può girare. Questo runner è il Linux che sta
+      # al posto della VPS: se il parser mancasse, il globalSetup ferma la run
+      # invece di lasciare che lo scenario salti quella gamba in silenzio (#1038).
       - if: steps.scope.outputs.run != 'false'
         name: suite di accettazione
+        env:
+          MUFFIN_REQUIRE_CAPABILITIES: 'systemd-analyze'
         run: npx vitest run --config vitest.acceptance.config.ts --reporter=dot --reporter=json --outputFile.json=${{ runner.temp }}/accettazione.json
 
       # Secondo gate, e non un log informativo. Senza `|| true`: fallisce anche

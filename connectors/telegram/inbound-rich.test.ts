@@ -1,7 +1,7 @@
 import type { Update } from '@grammyjs/types';
 import { describe, expect, it } from 'vitest';
 import { composeTurnText, parseUpdate } from './connector.js';
-import { unknownRichPlaceholder } from './rich.js';
+import { RICH_MAX_MEDIA, unknownRichPlaceholder } from './rich.js';
 
 /**
  * Bot API 10.1+ inbound `Message.rich_message` (`rich.ts#normalizeInboundRich`
@@ -57,7 +57,11 @@ const forwardedRich = (id: number): Update =>
           type: 'list',
           items: [
             { blocks: [{ type: 'paragraph', text: 'da fare' }], has_checkbox: true },
-            { blocks: [{ type: 'paragraph', text: 'fatto' }], has_checkbox: true, is_checked: true },
+            {
+              blocks: [{ type: 'paragraph', text: 'fatto' }],
+              has_checkbox: true,
+              is_checked: true,
+            },
           ],
         },
         { type: 'blockquote', blocks: [{ type: 'paragraph', text: 'parole citate' }] },
@@ -157,6 +161,35 @@ describe('inbound rich · received rich messages do not disappear', () => {
     expect(incoming!.text).toContain('[messaggio vocale]');
   });
 
+  it('a rich message at the media limit still reaches the turn', () => {
+    const blocks = Array.from({ length: RICH_MAX_MEDIA }, (_, i) => ({
+      type: 'photo',
+      caption: { text: `scatto ${i}` },
+    }));
+    const incoming = parseUpdate(base(40, { rich_message: { blocks } }));
+    expect(incoming).not.toBeNull();
+    expect(incoming!.text).toContain('[foto: scatto 0]');
+    expect(incoming!.text).toContain(`[foto: scatto ${RICH_MAX_MEDIA - 1}]`);
+    expect(incoming!.text).not.toContain('oltre il limite');
+  });
+
+  it('a rich message over the media limit is refused, and its payload does not reach the turn', () => {
+    const blocks = [
+      { type: 'paragraph', text: 'segreto da non leggere' },
+      ...Array.from({ length: RICH_MAX_MEDIA + 1 }, (_, i) => ({
+        type: 'document',
+        caption: { text: `allegato ${i}` },
+      })),
+    ];
+    const incoming = parseUpdate(base(41, { rich_message: { blocks } }));
+    expect(incoming).not.toBeNull();
+    expect(incoming!.text).toBe(
+      `[rich: ${RICH_MAX_MEDIA + 1} allegati, oltre il limite di ${RICH_MAX_MEDIA} — messaggio non letto]`,
+    );
+    expect(incoming!.text).not.toContain('segreto');
+    expect(incoming!.text).not.toContain('allegato');
+  });
+
   it('an empty rich message (no blocks) stays contentless, like empty text', () => {
     expect(parseUpdate(base(5, { rich_message: { blocks: [] } }))).toBeNull();
   });
@@ -172,7 +205,11 @@ describe('inbound rich · unsupported blocks are named, not dropped', () => {
     const incoming = parseUpdate(
       base(8, {
         rich_message: {
-          blocks: [{ type: 'paragraph', text: 'prima' }, { type: 'teletrasporto', frobnicate: 'x'.repeat(5000) }, { type: 'paragraph', text: 'dopo' }],
+          blocks: [
+            { type: 'paragraph', text: 'prima' },
+            { type: 'teletrasporto', frobnicate: 'x'.repeat(5000) },
+            { type: 'paragraph', text: 'dopo' },
+          ],
         },
       }),
     );

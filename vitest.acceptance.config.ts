@@ -24,7 +24,10 @@ export default defineConfig({
     // Una run che scrive nella home dell owner fallisce, invece di lasciare
     // il file lì. Vedi `core/config/home-guard.ts` per le due volte in cui è
     // successo davvero.
-    globalSetup: ['./vitest.git-env.ts', './vitest.home-guard.ts'],
+    // `vitest.capabilities.ts`: le capacità d'ambiente misurate una volta per
+    // run, come nella suite unit; `MUFFIN_REQUIRE_CAPABILITIES` ferma la run se
+    // ne manca una pretesa (il job `accettazione` pretende `systemd-analyze`).
+    globalSetup: ['./vitest.git-env.ts', './vitest.home-guard.ts', './vitest.capabilities.ts'],
     // Never run Git fixtures against the caller's repository (vitest.git-env.ts).
     setupFiles: ['./vitest.git-env.ts'],
     include: ['evals/acceptance/**/*.accept.ts'],

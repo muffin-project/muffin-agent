@@ -5,6 +5,7 @@ import { basename, dirname, join } from 'node:path';
 import { describe } from 'vitest';
 import { EXIT_STOPPED } from '../../../core/gateway/service.js';
 import { planUnit, systemdDiagnosticsForUnit } from '../../../core/gateway/unit.js';
+import { capability } from '../../../test-support/requires.js';
 import { install, until } from '../harness.js';
 import { shellNonDisponibileQui } from '../sandbox-host.js';
 import { scenario } from '../scenario.js';
@@ -360,45 +361,36 @@ describe('acceptance · A10 · il giro dell owner, dalla macchina pulita alla ri
           }
         }
 
-        const requireSystemd = process.env['MUFFIN_REQUIRE_SYSTEMD'] === '1';
+        // Il registro delle capacità (`test-support/capabilities.ts`) decide se
+        // la gamba Linux può girare qui, con la stessa sonda che usa la suite
+        // unit. Se la CI la pretende (`MUFFIN_REQUIRE_CAPABILITIES` contiene
+        // `systemd-analyze`) e manca, il globalSetup ferma la run prima di
+        // questo scenario: qui un `ok: false` è sempre un salto dichiarato.
+        const systemd = capability('systemd-analyze');
         let linuxLegWhy = '';
-        if (process.platform === 'linux' || requireSystemd) {
-          const probe = spawnSync('systemd-analyze', ['--version'], { encoding: 'utf8' });
-          const haveParser = probe.error === undefined && probe.status === 0;
-          if (!haveParser) {
-            if (requireSystemd) {
-              throw new Error(
-                `MUFFIN_REQUIRE_SYSTEMD=1 ma systemd-analyze non è eseguibile qui (${probe.error?.message ?? `exit ${String(probe.status)}`}): la unit di produzione resterebbe non verificata`,
-              );
-            }
-            linuxLegWhy = 'systemd-analyze non è eseguibile su questo runner Linux';
-          } else {
-            const file = join(scratchHomeDir, 'muffin-gateway.service');
-            writeFileSync(file, systemdPlan.text);
-            const verify = spawnSync('systemd-analyze', ['verify', file], { encoding: 'utf8' });
-            // Host units that systemd walks are not this file. Ubuntu 26.04
-            // warns that CPUAccounting= was removed from xfs_scrub; those
-            // lines do not say the generated unit was rejected. A non-zero
-            // status still fails: install's verify on this image exits 0.
-            const relevant = systemdDiagnosticsForUnit(
-              file,
-              `${verify.stdout ?? ''}${verify.stderr ?? ''}`,
+        if (systemd.ok) {
+          const file = join(scratchHomeDir, 'muffin-gateway.service');
+          writeFileSync(file, systemdPlan.text);
+          const verify = spawnSync('systemd-analyze', ['verify', file], { encoding: 'utf8' });
+          // Host units that systemd walks are not this file. Ubuntu 26.04
+          // warns that CPUAccounting= was removed from xfs_scrub; those
+          // lines do not say the generated unit was rejected. A non-zero
+          // status still fails: install's verify on this image exits 0.
+          const relevant = systemdDiagnosticsForUnit(
+            file,
+            `${verify.stdout ?? ''}${verify.stderr ?? ''}`,
+          );
+          if (relevant !== '' || verify.status !== 0) {
+            throw new Error(
+              `systemd-analyze verify rifiuta la unit generata:\n${relevant}\nexit ${String(verify.status)}`,
             );
-            if (relevant !== '' || verify.status !== 0) {
-              throw new Error(
-                `systemd-analyze verify rifiuta la unit generata:\n${relevant}\nexit ${String(verify.status)}`,
-              );
-            }
-            linuxLegWhy = 'eseguita: systemd-analyze verify ha accettato la unit generata';
           }
+          linuxLegWhy = 'eseguita: systemd-analyze verify ha accettato la unit generata';
         } else {
           // Declared, not silently skipped: this is the leg that matters —
-          // Linux is where Muffin actually lives (AGENTS.md) — and it is not
-          // running on this machine.
-          console.warn(
-            `[A10] gamba Linux (systemd-analyze verify) SALTATA: piattaforma corrente è ${process.platform}, non linux`,
-          );
-          linuxLegWhy = `saltata: piattaforma corrente è ${process.platform}, non linux (imposta MUFFIN_REQUIRE_SYSTEMD=1 su un runner Linux per forzarla)`;
+          // Linux is where Muffin actually lives (AGENTS.md).
+          linuxLegWhy = `saltata: ${systemd.reason} (MUFFIN_REQUIRE_CAPABILITIES=systemd-analyze la rende obbligatoria)`;
+          console.warn(`[A10] gamba Linux (systemd-analyze verify) ${linuxLegWhy}`);
         }
         if (linuxLegWhy === '')
           throw new Error('la gamba Linux non ha dichiarato perché è stata eseguita o saltata');
