@@ -1,4 +1,9 @@
 import type { ApprovalRequest, Approver } from '../../agent/loop.js';
+import {
+  allowLabelFor,
+  formatApprovalCard,
+  renderApprovalCardPlain,
+} from '../../core/approvals/card.js';
 import { type InlineButton, type TelegramApi, type TelegramApiLike, TelegramError } from './api.js';
 import { present, presentationOfHtml } from './present.js';
 import { escapeHtml } from './render.js';
@@ -16,10 +21,9 @@ import { escapeHtml } from './render.js';
  *
  * Questo file è il vocabolario condiviso fra le due strade:
  *
- * - `askHtml`/`askPlain`: cosa mostra la domanda (il testo del kernel riportato
- *   com'è, la frase del modello su cosa fa il comando, il comando intero, il
- *   taint). Le stesse parole sia sul messaggio del turno sia, in ripiego, sul
- *   messaggio autonomo.
+ * - `askHtml`/`askPlain`: cosa mostra la domanda, in italiano chiaro, dal
+ *   formatore condiviso in `core/approvals/card.ts`. Le stesse parole sia sul
+ *   messaggio del turno sia, in ripiego, sul messaggio autonomo.
  * - `askKeyboard`: i due pulsanti, con l'id già scritto nel registro.
  * - `approvatoreTelegram`: la strada di ripiego — un messaggio autonomo —
  *   usata quando nessuna trascrizione viva può ospitare la domanda (processo
@@ -34,12 +38,13 @@ import { escapeHtml } from './render.js';
  * sopravvive a un riavvio: tenere aperta una promessa in memoria vorrebbe dire
  * che spegnere il gateway perde la domanda e il lavoro dietro.
  *
- * **Cosa mostra.** L'azione concreta e il taint del turno — i due fatti che
- * DAY-1 requirement D12 chiede per non fare teatro: «approvi sys.shell?» non è una
- * domanda a cui qualcuno possa rispondere. Il testo del kernel è riportato
- * com'è: parafrasarlo è l'occasione di far sembrare la richiesta più piccola di
- * quello che è. Dal 03/09 anche la frase del modello su *cosa fa* il comando
- * (`ApprovalRequest.description`), **sopra** il comando e mai al suo posto.
+ * **Cosa mostra.** Cosa vuole fare, perché lo chiede quando c'è una ragione
+ * vera, e l'oggetto intero dell'azione (URL o comando, mai tagliato). D12
+ * resta: «approvi sys.shell?» non è una domanda a cui qualcuno possa
+ * rispondere. Il gergo del kernel (`taint`, `sys.http`, «parametri scelti dal
+ * contenuto») resta nei log e nel registro, non sulla card. Dal 03/09 anche
+ * la frase del modello su *cosa fa* il comando (`ApprovalRequest.description`),
+ * **sopra** il comando e mai al suo posto.
  *
  * **Intera, sempre.** L'owner ha ricevuto un comando lungo tagliato nel
  * messaggio stesso che gli chiedeva se eseguirlo (`summarizeCallArgs` tagliava
@@ -48,54 +53,30 @@ import { escapeHtml } from './render.js';
  * sull'ultimo — la domanda è sempre l'ultima cosa che si legge.
  */
 
-/** Le stesse quattro etichette di `cli/surface.ts` (e del messaggio autonomo). */
-const ETICHETTA_TAINT = [
-  '',
-  'contatto noto',
-  'gruppo/sconosciuto',
-  'contenuto esterno (web o tool)',
-];
-
-/** La domanda in HTML, intera: prompt, descrizione, comando, taint. */
+/**
+ * Owner-facing wording comes from `core/approvals/card.ts`, shared with the
+ * CLI. The kernel prompt and the taint number stay in the request (and in
+ * the registry); they are not rendered here.
+ */
 export function askHtml(request: ApprovalRequest): string {
-  const righe = [`⚠ <b>${escapeHtml(request.prompt)}</b>`];
-  if (request.description !== undefined && request.description !== '') {
-    righe.push(`<i>${escapeHtml(request.description)}</i>`);
-  }
-  if (request.resource !== undefined && request.resource !== '') {
-    righe.push(`<pre><code>${escapeHtml(request.resource)}</code></pre>`);
-  }
-  if (request.taint > 0) {
-    const etichetta = ETICHETTA_TAINT[request.taint];
-    righe.push(
-      `contesto: turno a taint ${request.taint}${etichetta ? ` — ${etichetta}` : ''} ` +
-        `(contenuto non tuo è già entrato in questo turno)`,
-    );
-  }
+  const card = formatApprovalCard(request);
+  const righe = [`⚠ <b>${escapeHtml(card.what)}</b>`];
+  if (card.why !== null) righe.push(escapeHtml(card.why));
+  if (card.description !== null) righe.push(`<i>${escapeHtml(card.description)}</i>`);
+  if (card.object !== null) righe.push(`<pre><code>${escapeHtml(card.object)}</code></pre>`);
   return righe.join('\n\n');
 }
 
 /** La stessa domanda senza markup, per il rendering a blocchi del rich. */
 export function askPlain(request: ApprovalRequest): string {
-  const righe = [`⚠ ${request.prompt}`];
-  if (request.description !== undefined && request.description !== '')
-    righe.push(request.description);
-  if (request.resource !== undefined && request.resource !== '') righe.push(request.resource);
-  if (request.taint > 0) {
-    const etichetta = ETICHETTA_TAINT[request.taint];
-    righe.push(
-      `contesto: turno a taint ${request.taint}${etichetta ? ` — ${etichetta}` : ''} ` +
-        `(contenuto non tuo è già entrato in questo turno)`,
-    );
-  }
-  return righe.join('\n\n');
+  return renderApprovalCardPlain(request);
 }
 
 /** I due pulsanti della domanda, con l'id già scritto nel registro. */
 export function askKeyboard(capability: string, approvalId: string): InlineButton[][] {
   return [
     [
-      { text: `Consenti "${capability}"`, callback_data: `ok:${approvalId}`, style: 'success' },
+      { text: allowLabelFor(capability), callback_data: `ok:${approvalId}`, style: 'success' },
       { text: 'Rifiuta', callback_data: `no:${approvalId}`, style: 'danger' },
     ],
   ];

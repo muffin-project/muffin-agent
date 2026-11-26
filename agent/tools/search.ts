@@ -383,7 +383,9 @@ export function makeSearchTool(backend: SearchBackend): RegisteredTool {
         // validata sopra, e quel ramo (`invalid arguments`) resta non
         // riprovabile perche' rifarlo darebbe lo stesso errore.
         return {
-          content: `ricerca fallita (${backend.id}): ${detail}`,
+          content:
+            `ricerca fallita (${backend.id}): ${detail}. ` +
+            'Dillo in una riga e, se serve, chiedi un URL: non inventare un indirizzo e non usare http_get al suo posto.',
           isError: true,
           retryable: !(error instanceof ProviderError) || error.retryable,
           tier: 0,

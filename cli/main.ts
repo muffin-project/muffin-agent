@@ -63,6 +63,7 @@ import {
   cmdMemoryExtract,
   cmdMemoryPin,
   cmdMemoryProposals,
+  cmdMemoryRepairTaint,
   cmdMemoryReview,
   cmdMemoryReviewKeep,
   cmdMemorySearch,
@@ -1174,6 +1175,14 @@ async function cmdMemory(argv: string[]): Promise<number> {
       return 78;
     }
     return sub === 'pin' ? cmdMemoryPin(home, id) : cmdMemoryUnpin(home, id);
+  }
+
+  if (sub === 'repair-taint') {
+    const { values } = parseArgs({
+      args: rest,
+      options: { apply: { type: 'boolean' }, 'dry-run': { type: 'boolean' } },
+    });
+    return cmdMemoryRepairTaint(home, values.apply === true);
   }
 
   if (sub === 'search') {

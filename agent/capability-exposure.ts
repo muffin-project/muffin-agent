@@ -23,6 +23,11 @@ export const DEFAULT_CORE_TOOL_NAMES = [
   'fs_search',
   'memory_search',
   'skill_read',
+  // Visible whenever search is actually in the eligible catalogue, including
+  // when inference has failed over to another provider. Omitting it from the
+  // core is how a "cerca sul web…" turn silently reaches for composed
+  // `http_get` instead.
+  'web_search',
 ] as const;
 
 type CapabilityTool = {

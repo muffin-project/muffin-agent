@@ -86,13 +86,16 @@ function recordingApi(refuseRich = false) {
 }
 
 describe('askHtml / askPlain · le stesse parole, due rese', () => {
-  it('porta prompt, descrizione, comando e taint — in quest’ordine', () => {
+  it('porta domanda, motivo, descrizione e comando — in quest’ordine, senza gergo', () => {
     const html = askHtml(request);
-    expect(html).toContain('non si torna indietro');
+    expect(html).toContain('Vuoi che esegua questo comando?');
+    expect(html).toContain('Questo comando non si può annullare');
     expect(html).toContain('stampa la parola ciao');
     expect(html).toContain('echo ciao');
-    expect(html).toContain('taint 2');
-    expect(html.indexOf('non si torna indietro')).toBeLessThan(
+    expect(html).not.toMatch(/taint/i);
+    expect(html).not.toContain('sys.shell');
+    expect(html).not.toContain('livello 3');
+    expect(html.indexOf('Vuoi che esegua questo comando?')).toBeLessThan(
       html.indexOf('stampa la parola ciao'),
     );
     expect(html.indexOf('stampa la parola ciao')).toBeLessThan(html.indexOf('echo ciao'));
@@ -100,17 +103,19 @@ describe('askHtml / askPlain · le stesse parole, due rese', () => {
 
   it('il gemello in testo semplice dice le stesse cose, senza markup', () => {
     const plain = askPlain(request);
-    expect(plain).toContain('non si torna indietro');
+    expect(plain).toContain('Vuoi che esegua questo comando?');
     expect(plain).toContain('stampa la parola ciao');
     expect(plain).toContain('echo ciao');
-    expect(plain).toContain('taint 2');
+    expect(plain).not.toMatch(/taint/i);
+    expect(plain).not.toContain('sys.shell');
     expect(plain).not.toContain('<b>');
     expect(plain).not.toContain('<pre>');
   });
 
-  it('la tastiera porta l’id dentro i due pulsanti, verbatim', () => {
+  it('la tastiera porta l’id dentro i due pulsanti, e il consenso nomina l’azione', () => {
     const keyboard = askKeyboard('sys.shell.write', 'aabbccdd');
     expect(keyboard.flat().map((b) => b.callback_data)).toEqual(['ok:aabbccdd', 'no:aabbccdd']);
+    expect(keyboard.flat().map((b) => b.text)).toEqual(['Consenti il comando', 'Rifiuta']);
   });
 });
 
@@ -154,8 +159,9 @@ describe('approvatoreTelegram · il ripiego, quando nessuna trascrizione può os
     // La lane è quella ricca: la politica fuori-turno non è un `sendMessage`
     // ad hoc che per caso manda le stesse parole.
     expect(calls[0]!.method).toBe('sendRichMessage');
-    expect(calls[0]!.text).toContain('non si torna indietro');
+    expect(calls[0]!.text).toContain('Vuoi che esegua questo comando?');
     expect(calls[0]!.text).toContain('echo ciao');
+    expect(calls[0]!.text).not.toMatch(/taint/i);
     expect(calls[0]!.keyboard).toBeDefined();
   });
 

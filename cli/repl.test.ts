@@ -585,14 +585,16 @@ describe("un'approvazione rientra nel vocabolario dei passi (§4.1/§5 della mem
         // più una frase che non dice nulla — ed è diventata il testo del
         // kernel, che dice cosa non si può annullare. Il terminale buttava via
         // `ApprovalRequest.prompt`; Telegram lo mostrava già.
-        expect(testo).toContain(
-          '⏸ non si torna indietro: cambia questa macchina — sys.shell.write',
-        );
+        expect(testo).toContain('⏸ Vuoi che esegua questo comando?');
+        expect(testo).toContain('Questo comando non si può annullare.');
+        expect(testo).not.toContain('sys.shell');
+        expect(testo).not.toContain('taint');
+        expect(testo).not.toContain('livello 3');
 
-        const rigaVerdetto = righe.findIndex((r) => r.includes('sys.shell.write: consentito'));
+        const rigaVerdetto = righe.findIndex((r) => r.includes('comando: consentito'));
         expect(rigaVerdetto).toBeGreaterThan(-1);
-        // Non «rifiutato»: l'unica riga che porta «sys.shell» dopo il verdetto è
-        // quella del tool che ne è seguito — l'owner ha detto sì una volta sola.
+        // Non «rifiutato»: dopo il verdetto arriva solo la riga del tool
+        // eseguito — l'owner ha detto sì una volta sola.
         const dopo = righe.slice(rigaVerdetto + 1).find((r) => r.trim() !== '');
         const indiceDopo = righe.findIndex((r, i) => i > rigaVerdetto && r.trim() !== '');
         // Nessuna riga vuota fra il verdetto e il passo che segue.
@@ -632,12 +634,14 @@ describe("un'approvazione rientra nel vocabolario dei passi (§4.1/§5 della mem
           .righe.map((r) => r.trimEnd())
           .join('\n');
         expect(testo).not.toContain('⚠');
-        expect(testo).toContain('✗ sys.shell.write: rifiutato');
+        expect(testo).toContain('✗ comando: rifiutato');
+        expect(testo).not.toContain('sys.shell');
+        expect(testo).not.toContain('taint');
         // Il rifiuto arriva al tool come un `tool_result` d'errore — non un
         // secondo canale — quindi la riga del passo segue comunque, con `✗`:
         // stesso alfabeto, mai un `✓` per un comando mai eseguito davvero.
         const righe = testo.split('\n').map((r) => r.trimEnd());
-        const rigaVerdetto = righe.findIndex((r) => r.includes('sys.shell.write: rifiutato'));
+        const rigaVerdetto = righe.findIndex((r) => r.includes('comando: rifiutato'));
         const indiceDopo = righe.findIndex((r, i) => i > rigaVerdetto && r.trim() !== '');
         expect(indiceDopo).toBe(rigaVerdetto + 1);
         expect(righe[indiceDopo]).toContain('✗ eseguo un comando: rm -rf /tmp/x');

@@ -124,7 +124,17 @@ export const COMMANDS: readonly CommandSpec[] = [
     summary: 'ispezione e manutenzione della memoria',
     audience: 'inspection',
     aliases: ['memoria'],
-    subcommands: ['why', 'search', 'extract', 'stats', 'check', 'review', 'pin', 'unpin'],
+    subcommands: [
+      'why',
+      'search',
+      'extract',
+      'stats',
+      'check',
+      'review',
+      'pin',
+      'unpin',
+      'repair-taint',
+    ],
   },
   {
     name: 'vault',

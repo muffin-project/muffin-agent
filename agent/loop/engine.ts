@@ -1,5 +1,6 @@
 import { speakerAttributedContent } from '../../core/memory/authorship.js';
-import { recall, recallTaint, renderForPrompt } from '../../core/memory/recall.js';
+import { recall, renderForPrompt } from '../../core/memory/recall.js';
+import { recallTaintOrigin, recallUntrustedTaint } from '../../core/memory/recall-taint.js';
 import { memoryWriteCapability, replyCapability } from '../../core/policy/doors.js';
 import type { CapabilityId, Decision, DecisionRequest } from '../../core/policy/types.js';
 import type { SessionRef } from '../../core/session/store.js';
@@ -668,12 +669,16 @@ async function runClaimedTurn(
           // riga che il lineage non ce l ha.
           ...(currentEpisodeId !== undefined ? { excludeEpisodeId: currentEpisodeId } : {}),
         });
-        const inherited = recallTaint(result);
-        // Il nome accanto al numero (ADR-0075 punto 4): un fatto che uno
-        // sconosciuto ha piantato mesi fa alza questo turno esattamente come se
-        // avesse appena parlato, e il prompt di un `ask` successivo deve poterlo
-        // dire invece di mostrare solo un livello.
-        snapshot.raiseTaint(inherited, 'la memoria richiamata');
+        // Only untrusted memories (group/web/tool) raise the *policy* taint
+        // of this turn, and they do it with `raiseCeiling`: a greeting that
+        // fishes out a year-old web note is not a summary of that page, and
+        // must not stamp its own reply as tier 3. `raiseTaint` stays for
+        // what *this* turn itself observes (a tool result, a group message).
+        // Owner and known-contact memories do not, by themselves, paint the
+        // turn as "contenuto esterno (web o tool)".
+        const inherited = recallUntrustedTaint(result);
+        const origin = recallTaintOrigin(result);
+        if (inherited > 0) snapshot.raiseCeiling(inherited, origin ?? 'un ricordo non fidato');
         recallSpan.setAttributes({
           'muffin.memory.items': result.items.length,
           'muffin.memory.strategies': result.strategies.join(','),

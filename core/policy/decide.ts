@@ -1,5 +1,5 @@
-import { denyListCovers, grantedTo, type PolicyMatrix } from './matrix.js';
 import { DOORS } from './doors.js';
+import { denyListCovers, grantedTo, type PolicyMatrix } from './matrix.js';
 import type {
   CapabilityDecl,
   CapabilityId,
@@ -136,7 +136,11 @@ export function createDecide(ctx: PolicyContext): Decide {
 
     const decl = ctx.capabilities.get(capability) ?? doors.get(capability);
     if (!decl) {
-      return { effect: 'deny', code: 'no_capability', detail: `undeclared capability: ${capability}` };
+      return {
+        effect: 'deny',
+        code: 'no_capability',
+        detail: `undeclared capability: ${capability}`,
+      };
     }
 
     // Before anything else that could allow: a diverged root of trust means the
@@ -197,12 +201,20 @@ export function createDecide(ctx: PolicyContext): Decide {
      * `core/policy/solo-irreversibile.test.ts (describe «una stanza con grant»)` lo dice con il nome della
      * capability.
      */
-    if (decl.hostOnly && principal.kind === 'member' && !grantedTo(ctx.matrix, tenant, capability)) {
+    if (
+      decl.hostOnly &&
+      principal.kind === 'member' &&
+      !grantedTo(ctx.matrix, tenant, capability)
+    ) {
       return { effect: 'deny', code: 'principal_forbidden', detail: 'host-only capability' };
     }
 
     if (principal.kind === 'system' && denyListCovers(ctx.matrix.forbiddenForSystem, capability)) {
-      return { effect: 'deny', code: 'principal_forbidden', detail: 'not available to autonomous principals' };
+      return {
+        effect: 'deny',
+        code: 'principal_forbidden',
+        detail: 'not available to autonomous principals',
+      };
     }
 
     // The ceiling comes from the capability's **effect row** — where the bytes
@@ -314,34 +326,36 @@ export function createDecide(ctx: PolicyContext): Decide {
       // and nothing here noticed (audit 2026-08-16, P04-1). A clean
       // destination is not the same claim as a clean request: the model chose
       // everything after it.
-      // Lane #624 + #641 (2026-09-22) closed the two halves that were left:
-      // the pathname was never inspected at all (an explicitly declared open
-      // hole since ADR-0066 — `https://evil/<segreto>` met no gate), and the
-      // ceiling sat at 2, so tier-2 disk content — attacker-influenced by the
-      // current threat model, not owner-authored — composed query/fragment
-      // bytes silently. `hasComposedBytes` now covers every canonical URL
-      // component the model chooses and the wire carries: path, userinfo,
-      // query, and fragment. The fragment is gated conservatively even though
-      // the transport drops it before connect (`agent/tools/http.ts`
-      // sends `pathname + search` only): the policy must not use a
-      // representation that disagrees with what leaves, in either direction.
-      // Userinfo rides the wire as the request's credentials, so it gates
-      // with the rest. A bare host (`https://h`, `https://h/`) carries no
-      // model-chosen bytes and stays silent — reading is still open.
-      if (hasComposedBytes(resource.value)) {
-        const gated = gateParams(
-          principal,
-          taint,
-          ctx.matrix.paramsMaxTaint,
+      //
+      // Two compositions, two rules (lethal trifecta, ADR-0066, ADR-0071):
+      //
+      // - Query, userinfo, or fragment is an evident exfiltration channel.
+      //   Those always answer to the owner (ask) or are denied for anyone
+      //   else, even at taint 0, unless the whole URL is `quoted`.
+      // - A non-trivial pathname is composed bytes too (`https://evil/<segreto>`,
+      //   lane #624), but on a *clean* turn (no untrusted ingress, taint at or
+      //   below `paramsMaxTaint`) a public GET to a path like
+      //   `https://nodejs.org/dist/index.json` is ordinary open reading.
+      //   The same path in a turn that already contains untrusted web, group,
+      //   tool, or memory content still asks / denies. The `quoted` exception
+      //   is untouched and stays a whole-URL byte-literal match.
+      //
+      // The fragment is gated conservatively even though the transport drops
+      // it before connect (`agent/tools/http.ts` sends `pathname + search`
+      // only). Userinfo rides the wire as credentials. A bare host
+      // (`https://h`, `https://h/`) carries no model-chosen bytes and stays
+      // silent.
+      const composition = urlComposition(resource.value);
+      if (composition !== 'none') {
+        const prompt =
           decl.resourceKind === 'url-read'
             ? `lettura con parametri scelti dal contenuto: ${resource.value}`
-            : `egress con parametri verso host allowlisted: ${resource.value}`,
-          // Solo qui, e solo sull'URL **intero**. Un aggressore che
-          // concatena un suo prefisso con byte letti altrove non produce una
-          // stringa che era già presente; uno che pubblica l'URL completo
-          // conosceva già ciò che ci ha messo dentro.
-          req.quoted === true,
-        );
+            : `egress con parametri verso host allowlisted: ${resource.value}`;
+        const quoted = req.quoted === true;
+        const gated =
+          composition === 'exfil'
+            ? gateUnquotedComposition(principal, prompt, quoted)
+            : gateParams(principal, taint, ctx.matrix.paramsMaxTaint, prompt, quoted);
         if (gated) return gated;
       }
     }
@@ -374,7 +388,13 @@ export function createDecide(ctx: PolicyContext): Decide {
       // un contesto avvelenato non puo' nominare, e su un processo headless
       // un `ask` e' un `exit 3` — un divieto travestito per un'azione a
       // basso rischio.
-      const gated = gateParams(principal, taint, ctx.matrix.searchMaxTaint, `ricerca: "${resource.value}"`, false);
+      const gated = gateParams(
+        principal,
+        taint,
+        ctx.matrix.searchMaxTaint,
+        `ricerca: "${resource.value}"`,
+        false,
+      );
       if (gated) return gated;
     }
 
@@ -484,8 +504,13 @@ const IRREVERSIBILE: Partial<Record<EffectRow, string>> = {
  * already in the turn. That line is context and never the cause: since
  * ADR-0074 the taint does not produce an `ask`.
  */
-function describe(capability: string, resource: DecisionRequest['resource'], row: EffectRow): string {
-  const what = resource.kind === 'none' ? capability : `${capability} on ${resource.kind}:${resource.value}`;
+function describe(
+  capability: string,
+  resource: DecisionRequest['resource'],
+  row: EffectRow,
+): string {
+  const what =
+    resource.kind === 'none' ? capability : `${capability} on ${resource.kind}:${resource.value}`;
   const perche = IRREVERSIBILE[row];
   return perche === undefined ? what : `${perche} — ${what}`;
 }
@@ -582,17 +607,40 @@ function gateParams(
  * URL misses and costs one approval, while a tolerant match would open the
  * splice channel the gate exists to close.
  */
-function hasComposedBytes(url: string): boolean {
+function gateUnquotedComposition(
+  principal: Principal,
+  prompt: string,
+  quoted: boolean,
+): Decision | null {
+  if (quoted) return null;
+  if (isOwnerPrincipal(principal)) return ask(prompt);
+  return {
+    effect: 'deny',
+    code: 'resource_denied',
+    detail: 'params composed by the model, not quoted from this turn (exfiltration channel)',
+  };
+}
+
+/**
+ * How a URL is composed, read off the same `new URL` parse the tool executes.
+ *
+ * - `exfil`: query, userinfo, or fragment — always gated unless `quoted`.
+ * - `path`: a non-trivial pathname, no exfil channel — gated only above
+ *   `paramsMaxTaint` (untrusted ingress in the turn).
+ * - `none`: a bare host. Reading stays open.
+ */
+function urlComposition(url: string): 'none' | 'path' | 'exfil' {
   try {
     const parsed = new URL(url);
-    if (parsed.search !== '' || parsed.hash !== '') return true;
-    if (parsed.username !== '' || parsed.password !== '') return true;
+    if (parsed.search !== '' || parsed.hash !== '') return 'exfil';
+    if (parsed.username !== '' || parsed.password !== '') return 'exfil';
     // `new URL('https://h').pathname` is `/`: the bare host — the only shape
     // with no model-chosen bytes — is exactly `'/'` (or `''` for a
     // non-special scheme, unreachable here since `hostOf` already refused
     // anything but http(s)).
-    return parsed.pathname !== '' && parsed.pathname !== '/';
+    if (parsed.pathname !== '' && parsed.pathname !== '/') return 'path';
+    return 'none';
   } catch {
-    return false; // unreachable here: hostOf() above already refused an unparseable url
+    return 'none'; // unreachable here: hostOf() above already refused an unparseable url
   }
 }
