@@ -1111,7 +1111,7 @@ describe.skipIf(!haScript())('muffin init su un terminale vero', () => {
 });
 
 describe('muffin auth from the real CLI', () => {
-  it('lists a stored OpenRouter key and refuses subscription OAuth for Anthropic and xAI', () => {
+  it('lists a stored OpenRouter key, refuses Anthropic OAuth and a headless xAI login', () => {
     const { dir, xdg } = scratchHome();
     const init = muffin(
       { MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg },
@@ -1132,9 +1132,11 @@ describe('muffin auth from the real CLI', () => {
     ]);
     expect(anthropic.code).toBe(2);
     expect(anthropic.out).toContain('Console/API key');
+    // xAI has a login now (ADR-0113), but never without a terminal.
     const grok = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, ['auth', 'login', 'grok']);
-    expect(grok.code).toBe(2);
-    expect(grok.out).toContain('xAI/Grok');
+    expect(grok.code).toBe(1);
+    expect(grok.out).toContain('xAI login needs a terminal');
+    expect(existsSync(join(dir, 'secrets', 'xai_oauth'))).toBe(false);
 
     const headless = muffin({ MUFFIN_HOME: dir, XDG_CONFIG_HOME: xdg }, [
       'auth',

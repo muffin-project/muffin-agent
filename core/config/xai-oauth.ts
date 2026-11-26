@@ -12,6 +12,7 @@ import {
 import { createServer, type Server } from 'node:http';
 import { dirname, join, resolve } from 'node:path';
 import Database from 'better-sqlite3';
+import { sleep } from '../net/sleep.js';
 import { createPkcePair } from './openrouter-oauth.js';
 import { ensurePrivateDir, tightenPrivateDb, tightenPrivateFile } from './private-fs.js';
 
@@ -454,14 +455,12 @@ export async function pollXaiDeviceToken(
     now?: () => number;
   } = {},
 ): Promise<XaiTokenResponse> {
-  const sleep =
-    input.sleep ??
-    ((ms: number) => new Promise<void>((resolveSleep) => setTimeout(resolveSleep, ms)));
+  const wait = input.sleep ?? ((ms: number) => sleep(ms, input.signal));
   const now = input.now ?? Date.now;
   const deadline = now() + device.expiresIn * 1000;
   let intervalS = device.interval;
   for (;;) {
-    await sleep(intervalS * 1000);
+    await wait(intervalS * 1000).catch(() => undefined);
     if (input.signal?.aborted) throw new Error('xAI login cancelled');
     if (now() >= deadline) throw new Error('xAI device code expired. Run the login again.');
     let response: Response;
