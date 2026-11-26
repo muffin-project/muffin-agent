@@ -18,7 +18,7 @@ import {
   writeAuthoritativeSecret,
   writeSecret,
 } from '../core/config/config.js';
-import { isShippedDefault, recordCopied } from '../core/config/defaults-drift.js';
+import { isShippedDefault, recordCopied, recordSeeded } from '../core/config/defaults-drift.js';
 import {
   ensurePrivateDir,
   tightenHome,
@@ -159,6 +159,15 @@ export function runInit(options: InitOptions = {}): InitStep[] {
   if (installed.some((f) => f.relPath === 'budgets.json')) {
     const zona = detectOwnerTimezone(options.timeZone);
     if (zona !== undefined && seedQuietTimezone(join(p.rot, 'budgets.json'), zona)) {
+      // Il registro tiene l'hash spedito (sopra) **e** quello dopo il fuso:
+      // così `doctor` dice che l'ha cambiato `init`, non l'owner, senza mai
+      // proporre il `cp` che riporterebbe UTC.
+      recordSeeded(
+        home,
+        'rot/budgets.json',
+        readFileSync(join(p.rot, 'budgets.json')),
+        'fuso orario',
+      );
       step(
         'timezone',
         `${zona} (rilevato da questa macchina, in rot/budgets.json → quietHours.timezone)`,

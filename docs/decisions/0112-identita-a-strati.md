@@ -91,8 +91,9 @@ Quattro strati, in quest'ordine di autorità:
    così un testo incollato non chiude il recinto prima del tempo né ne apre
    un secondo. Il recinto è un confine per il modello, non un controllo di
    sicurezza: `user.md` lo scrive solo l'owner e il kernel viene dopo.
-   Nessun comando lo scrive: né init, né
-   update, adopt o migrate.
+   Nessun comando lo scrive da solo: né init, né update o adopt. L'unica
+   eccezione è `muffin rot migrate` su richiesta esplicita dell'owner
+   (emendamento del 26/11/2026, sotto).
 4. **Preferenze imparate — memoria del tenant, non un file.**
    `memory_propose` accetta `standing: true`. La preferenza si **appunta**
    (nucleo appuntato, che entra in ogni turno owner) solo se è
@@ -161,10 +162,34 @@ Le due domande aperte dalla PR sono state chiuse dall'owner:
 Il cut-over è un gesto dell'owner: creare `~/.muffin/user.md` con le sole
 righe davvero sue. `muffin doctor` (riga `identità`) lo propone quando la
 copia in home è modificata, senza safe mode, senza reseal e senza `cp`;
-`muffin rot migrate` stampa lo stato e non riscrive niente. `init` continua
+`muffin rot migrate` mostra le righe dell'owner e, solo se lui lo chiede,
+crea `user.md` (emendamento sotto). `init` continua
 a seminare `rot/identity.md` se manca, così un rollback a una build
 precedente trova ancora un patto. `rot/identity.md` esce dal confronto
 «default derivati» del doctor: non è più la fonte della fondazione.
+
+### Emendamento (26 novembre 2026): il passaggio assistito
+
+Misurato sul Mac dell'owner dopo il merge: il passaggio a mano (confrontare
+due file e copiare le proprie righe) è attrito vero, e l'owner l'ha detto.
+`muffin rot migrate` ora lo fa con lui, senza cambiare chi decide:
+
+- **anteprima sempre, scrittura mai di default.** Senza `--apply` e senza
+  terminale stampa le righe che sposterebbe e non scrive niente; su un
+  terminale chiede `[s/N]`.
+- **le righe dell'owner sono quelle che nessuna fondazione spedita
+  contiene**: il file spedito di questa build più, quando c'è un checkout,
+  ogni versione che `defaults/rot/identity.md` ha avuto nella storia Git,
+  così le righe di una fondazione vecchia copiata da un vecchio `init` non
+  passano per sue. Un titolo di sezione spedito resta solo sopra una riga
+  dell'owner che ci stava sotto.
+- **con `--apply` o un sì:** backup di `rot/identity.md` in
+  `~/.muffin/backups/`, poi `user.md` creato 0600 in modo esclusivo (mai
+  sovrascritto se esiste già). `rot/identity.md` resta dov'è e non è più
+  letto: l'attivazione è la stessa regola di sopra, `user.md` presente.
+- **sopra il tetto di `user.md` non scrive**: un file che il prompt poi
+  ometterebbe intero sarebbe peggio della copia di prima.
+- il modello non c'entra: è un comando dell'owner, in `cli/`, mai un tool.
 
 ## Divergenze volute
 

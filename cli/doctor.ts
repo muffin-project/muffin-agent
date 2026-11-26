@@ -1907,8 +1907,8 @@ export function identityCheck(
       warn(
         'identità',
         '~/.muffin/rot/identity.md è stato modificato a mano e sostituisce la fondazione spedita: gli aggiornamenti del carattere non arrivano a questa installazione',
-        'quando vuoi: sposta in ~/.muffin/user.md solo le righe davvero tue (come vuoi essere aiutato, al massimo ~4000 caratteri). ' +
-          'Da quel momento la fondazione arriva dal prodotto e rot/identity.md non è più letto; niente sigillo da rifare (ADR-0108, ADR-0112).',
+        '`muffin rot migrate` ti mostra le righe tue e con `--apply` le sposta in ~/.muffin/user.md dopo un backup ' +
+          '(oppure crealo tu, al massimo ~4000 caratteri). Da quel momento la fondazione arriva dal prodotto e rot/identity.md non è più letto; niente sigillo da rifare (ADR-0108, ADR-0112).',
       );
       return;
     default: {

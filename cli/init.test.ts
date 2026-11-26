@@ -12,7 +12,7 @@ import {
   saveConfig,
   writeSecret,
 } from '../core/config/config.js';
-import { readDefaultsRegistry } from '../core/config/defaults-drift.js';
+import { diagnoseDefaultsDrift, readDefaultsRegistry } from '../core/config/defaults-drift.js';
 import { muffinWorkspace } from '../core/config/workspace.js';
 import { loadSealedBudgets } from '../core/rot/budgets.js';
 import { sha256, verify } from '../core/rot/verify.js';
@@ -206,6 +206,20 @@ describe("runInit scrive il fuso dell'owner in rot/budgets.json (il compito che 
     expect(verify(dir, 'single-user').ok).toBe(true);
     // E il runtime lo legge davvero da lì.
     expect(loadSealedBudgets(dir).quietHours.timezone).toBe('Europe/Rome');
+  });
+
+  it("subito dopo init doctor non dice «modificato dall'owner» per il fuso che ha scritto init (regressione)", () => {
+    const dir = freshHome();
+    runInit({ home: dir, apiKey: 'sk-never-called', timeZone: 'Europe/Rome' });
+    const checkout = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+    const budgets = diagnoseDefaultsDrift(dir, checkout).find((d) => d.path === 'rot/budgets.json');
+    expect(budgets?.detail).toContain('personalizzato da `muffin init` (fuso orario)');
+    expect(budgets?.detail).not.toContain("modificato dall'owner");
+    // E resta non adottabile: un `cp` riporterebbe UTC.
+    expect(budgets?.status).not.toBe('adoptable');
+    expect(budgets?.adoptCommand).toBeUndefined();
+    const entry = readDefaultsRegistry(dir)?.files.find((f) => f.path === 'rot/budgets.json');
+    expect(entry?.seededSha256).toBe(sha256(readFileSync(join(paths(dir).rot, 'budgets.json'))));
   });
 
   it('senza un fuso migliore del fallback resta UTC e non scrive nessun passo', () => {

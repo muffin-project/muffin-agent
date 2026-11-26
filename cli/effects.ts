@@ -25,7 +25,7 @@ import { type EffectsFilter, formatEffects, localDay, readEffects } from '../cor
  * home dell'owner, mentre questo risponde «cosa ho fatto **io**», e l'io è
  * l'installazione da cui lo lanci. Aperto in sola lettura comunque.
  */
-const EFFECTS_USAGE = `usage: muffin effects [--turn <id> | --day YYYY-MM-DD | --today] [--db <path>]
+export const EFFECTS_USAGE = `usage: muffin effects [--turn <id> | --day YYYY-MM-DD | --today] [--db <path>]
   cosa e' passato senza domanda, per turno o per giornata: capability, risorsa,
   riga della matrice che l'ha ammesso, classe di reversibilita'.
   --turn  un turno preciso (l'id che il turno stampa alla fine)

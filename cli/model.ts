@@ -60,6 +60,10 @@ import { promptLine, promptSecret } from './prompt.js';
 /** Le tre corsie che un'installazione ha, e che fino a oggi si cambiavano solo a mano. */
 type Lane = 'main' | 'light' | 'embed';
 
+/** One line, shared by the error path below and `muffin model --help`. */
+export const MODEL_USAGE =
+  'uso: muffin model [main|light|embed] <slug> · muffin model embed <off|on|--openai> · muffin model [main|light] [--provider <id>|--endpoint <url>] <slug> · muffin model [main|light] --list [filtro] [--provider <id>] · muffin model --select';
+
 export type CatalogueModel = { id: string; inputPerMTok: number; outputPerMTok: number };
 
 class CatalogueRedirectError extends Error {
@@ -833,9 +837,7 @@ export async function cmdModel(home: string, argv: string[], deps: ModelDeps): P
   }
 
   if (slug === undefined || slug.startsWith('-')) {
-    out(
-      'uso: muffin model [main|light|embed] <slug> · muffin model embed <off|on|--openai> · muffin model [main|light] [--provider <id>|--endpoint <url>] <slug> · muffin model [main|light] --list [filtro] [--provider <id>] · muffin model --select',
-    );
+    out(MODEL_USAGE);
     return 2;
   }
 

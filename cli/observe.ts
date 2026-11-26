@@ -34,7 +34,7 @@ import { connectSurfaces } from './surface.js';
 
 const TENANT = 'host';
 
-const OBSERVE_USAGE = `usage:
+export const OBSERVE_USAGE = `usage:
   muffin observe              cosa è diventato silenzioso, e cosa ne farebbe il gate
   muffin observe --send       compone e consegna quello che il gate consente
   muffin observe --decisions  cosa ha deciso il gate di recente, e perché

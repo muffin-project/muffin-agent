@@ -214,7 +214,12 @@ export function renderUserOverlay(user: NonNullable<IdentityLayers['user']>): st
  */
 export function authored(path: string): string {
   if (!existsSync(path)) return '';
-  let text = readFileSync(path, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+  return authoredText(readFileSync(path, 'utf8'));
+}
+
+/** `authored` on text already in hand (a Git blob, a fixture), same rules. */
+export function authoredText(raw: string): string {
+  let text = raw.replace(/<!--[\s\S]*?-->/g, '');
 
   // An unterminated `<!--` matches nothing, and the whole owner-facing block
   // sails through into the prompt — the exact pre-existing defect, restored by

@@ -20,14 +20,22 @@ import type { TrustTier } from '../core/policy/types.js';
 import { verify } from '../core/rot/verify.js';
 import { SandboxExecutor } from '../core/sandbox/executor.js';
 import { cmdAdopt } from './adopt.js';
-import { cmdAuth } from './auth.js';
-import { cmdBackup, cmdRestore } from './backup.js';
-import { cmdChatGPT } from './chatgpt.js';
-import { allHelp, canonicalCommand, completion, primaryHelp } from './command-surface.js';
-import { cmdConfig } from './config.js';
+import { AUTH_USAGE, cmdAuth } from './auth.js';
+import { BACKUP_USAGE, cmdBackup, cmdRestore } from './backup.js';
+import { CHATGPT_USAGE, cmdChatGPT } from './chatgpt.js';
+import {
+  allHelp,
+  canonicalCommand,
+  commandHelp,
+  commandSpec,
+  completion,
+  primaryHelp,
+  wantsHelp,
+} from './command-surface.js';
+import { CONFIG_USAGE, cmdConfig } from './config.js';
 import { formatReport, runDoctor } from './doctor.js';
-import { cmdEffects } from './effects.js';
-import { cmdFallback } from './fallback.js';
+import { cmdEffects, EFFECTS_USAGE } from './effects.js';
+import { cmdFallback, FALLBACK_USAGE } from './fallback.js';
 import {
   cmdGatewayInstall,
   cmdGatewayRestart,
@@ -48,7 +56,7 @@ import {
 } from './init.js';
 import { acquireInitCredential } from './init-auth.js';
 import { cmdJobsAdd, cmdJobsCap, cmdJobsList, cmdJobsRemove, JOBS_USAGE } from './jobs.js';
-import { cmdJudgments } from './judgments.js';
+import { cmdJudgments, JUDGMENTS_USAGE } from './judgments.js';
 import { cmdMcpAdd, cmdMcpList, cmdMcpRemove, MCP_USAGE } from './mcp.js';
 import {
   cmdMemoryCheck,
@@ -63,8 +71,8 @@ import {
   cmdMemoryWhy,
   MEMORY_USAGE,
 } from './memory.js';
-import { cmdModel } from './model.js';
-import { cmdObserve } from './observe.js';
+import { cmdModel, MODEL_USAGE } from './model.js';
+import { cmdObserve, OBSERVE_USAGE } from './observe.js';
 import {
   askLocalOrApi,
   askModelChoice,
@@ -83,13 +91,14 @@ import {
   probeLocalRuntime,
 } from './onboarding.js';
 import { probeSavedRoute } from './openrouter-connect.js';
-import { cmdOrientamento } from './orientamento.js';
+import { cmdOrientamento, ORIENTAMENTO_USAGE } from './orientamento.js';
 import { promptLine, promptSecret, resolveSecretInput, secretStoreHint } from './prompt.js';
 import { cmdPromptShow, cmdPromptVersion, PROMPT_USAGE } from './prompt-show.js';
 import { runRepl } from './repl.js';
-import { runRotMigrate } from './rot-migrate.js';
+import { ROT_MIGRATE_USAGE, runRotMigrate } from './rot-migrate.js';
 import { runHeadless } from './run.js';
 import { cmdSearch } from './search-setup.js';
+import { cmdStatus, STATUS_USAGE } from './status.js';
 import {
   cmdSurfaceDefault,
   cmdSurfaceDisable,
@@ -99,10 +108,10 @@ import {
 } from './surface.js';
 import { formatSpan, formatTurn, readSpans } from './trace.js';
 import { styleFor } from './ui.js';
-import { cmdUndo } from './undo.js';
-import { cmdUpdate, describeBuild } from './update.js';
+import { cmdUndo, UNDO_USAGE } from './undo.js';
+import { cmdUpdate, describeBuild, UPDATE_USAGE } from './update.js';
 import { cmdVaultAdd, cmdVaultCheck, cmdVaultLs, cmdVaultReindex, VAULT_USAGE } from './vault.js';
-import { cmdWorkspace } from './workspace.js';
+import { cmdWorkspace, WORKSPACE_USAGE } from './workspace.js';
 
 /**
  * Entry point.
@@ -183,6 +192,66 @@ function streamOverride(argv: string[]): boolean | undefined {
   return undefined;
 }
 
+/**
+ * What `muffin <command> --help` prints under the summary. A command's own
+ * usage text where it already has one (the same constant its error path
+ * prints), a short one here for the commands that only ever parsed flags.
+ * A command missing from this map still gets a page, built from its
+ * subcommands in `COMMANDS`.
+ */
+const COMMAND_USAGE: Readonly<Record<string, string>> = {
+  init: `uso:
+  muffin init                          configurazione guidata (su terminale)
+  muffin init --provider <anthropic|openai-compat> [--base-url URL] [--model M] [--light-model M]
+  muffin init --local <dir>            una seconda Home usa e getta per provare un'installazione nuova
+  muffin init --force                  ricopia i file di serie mancanti; non tocca mai config.json
+La chiave si incolla al prompt nascosto o arriva da stdin, mai da un argomento.`,
+  auth: AUTH_USAGE,
+  chatgpt: CHATGPT_USAGE,
+  model: MODEL_USAGE,
+  fallback: FALLBACK_USAGE,
+  workspace: WORKSPACE_USAGE,
+  surface: SURFACE_USAGE,
+  search: `uso:
+  muffin search                 com'è configurata la ricerca web
+  muffin search <motore>        la accende (chatgpt, tavily, keenable); la chiave si chiede al terminale
+  muffin search off             la spegne`,
+  run: `uso: muffin run [--session ID] [--json] [--timeout SECONDI] [--image FILE]... <obiettivo>
+Senza --session apre una sessione nuova. Un obiettivo che comincia con «-» va dopo «--».`,
+  update: UPDATE_USAGE,
+  status: STATUS_USAGE,
+  doctor: `uso: muffin doctor [--online] [--json]
+  --online   prova anche i collegamenti ai provider (una chiamata minima ciascuno)
+  --json     il rapporto completo per uno script
+Per un riassunto di poche righe: muffin status`,
+  config: CONFIG_USAGE,
+  adopt: `uso: muffin adopt [<percorso>... | --tutto]
+  senza argomenti mostra cosa si può adottare; non copia niente.`,
+  backup: BACKUP_USAGE,
+  restore: BACKUP_USAGE,
+  rot: `uso:
+  muffin rot verify             confronta rot/ con il manifest (diagnostica, non un incidente)
+${ROT_MIGRATE_USAGE}`,
+  uninstall: 'uso: muffin uninstall [--yes]   rimuove la Home dopo conferma',
+  memory: MEMORY_USAGE,
+  vault: VAULT_USAGE,
+  mcp: MCP_USAGE,
+  jobs: JOBS_USAGE,
+  gateway: GATEWAY_USAGE,
+  observe: OBSERVE_USAGE,
+  prompt: PROMPT_USAGE,
+  secret: 'uso: muffin secret set NOME   (valore da stdin, o al prompt nascosto su un terminale)',
+  trace:
+    'uso: muffin trace tail [-n N] [--errors] [--json] | muffin trace grep PATTERN | muffin trace turn <id>',
+  resume: 'uso: muffin resume <turn-id> [--json]',
+  undo: UNDO_USAGE,
+  orientamento: ORIENTAMENTO_USAGE,
+  effects: EFFECTS_USAGE,
+  judgments: JUDGMENTS_USAGE,
+  completion: 'uso: muffin completion <bash|zsh|fish>',
+  repl: 'uso: muffin repl [--stream|--no-stream] [--debug]',
+};
+
 async function main(rawArgv: string[]): Promise<number> {
   loadDotenvIfPresent();
   // Stripped before the switch below, not parsed per-branch, so reading them
@@ -199,6 +268,13 @@ async function main(rawArgv: string[]): Promise<number> {
   // only ever sees canonical command names. `typed` itself is undefined for a
   // bare `muffin`, which must not become the string "undefined" in a lookup.
   const command = typed !== undefined ? canonicalCommand(typed) : typed;
+  // `--help` is answered here, once, for every known command — before the
+  // command runs. Several parsed their flags strictly and died on it
+  // ("Unknown option '--help'"); one (`adopt`) ignored it and *acted*.
+  if (command !== undefined && command !== 'help' && commandSpec(command) && wantsHelp(rest)) {
+    process.stdout.write(commandHelp(command, COMMAND_USAGE[command]) ?? primaryHelp());
+    return 0;
+  }
   switch (command) {
     case 'run':
       return cmdRun(rest);
@@ -267,6 +343,11 @@ async function main(rawArgv: string[]): Promise<number> {
             }
           : {}),
       });
+    case 'status':
+      return cmdStatus(paths().home, rest, {
+        out: (line) => process.stdout.write(`${line}\n`),
+        version: readOwnVersion(),
+      });
     case 'doctor':
       return cmdDoctor(rest);
     case 'adopt': {
@@ -330,9 +411,20 @@ async function main(rawArgv: string[]): Promise<number> {
       process.stdout.write(script);
       return 0;
     }
-    case 'help':
+    case 'help': {
+      const topic = rest.find((a) => !a.startsWith('-'));
+      if (topic !== undefined) {
+        const page = commandHelp(topic, COMMAND_USAGE[canonicalCommand(topic)]);
+        if (page === null) {
+          process.stderr.write(`comando sconosciuto: ${topic}\n\n${primaryHelp()}`);
+          return 78;
+        }
+        process.stdout.write(page);
+        return 0;
+      }
       process.stdout.write(rest.includes('--all') ? allHelp() : primaryHelp());
       return 0;
+    }
     case undefined: {
       // Bare `muffin` opens the REPL — but on a first run there is no config to
       // open it with. Detect that and route into setup instead of failing with a
@@ -964,7 +1056,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   return report.exitCode;
 }
 
-function cmdRot(argv: string[]): number {
+async function cmdRot(argv: string[]): Promise<number> {
   const [sub] = argv;
   let mode: 'hardened' | 'single-user' = 'single-user';
   try {
@@ -997,7 +1089,7 @@ function cmdRot(argv: string[]): number {
   }
 
   if (sub === 'migrate') {
-    return runRotMigrate(paths().home);
+    return runRotMigrate(paths().home, argv.slice(1));
   }
 
   if (sub === 'harden') {
