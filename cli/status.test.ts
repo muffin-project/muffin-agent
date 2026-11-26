@@ -65,7 +65,7 @@ describe('muffin status', () => {
     const i = lines.findIndex((l) => l.startsWith('modelli'));
     expect(lines[i]).toContain('1. ');
     expect(lines[i + 1]?.trim()).toMatch(
-      /^2\. .*grok-4\.7.*credenziale mancante → muffin secret set xai_api_key/,
+      /^2\. .*grok-4\.7.*credenziale mancante → muffin auth login xai \(oppure muffin secret set xai_api_key\)/,
     );
     expect(lines[i + 2]?.trim()).toMatch(/^3\. .*openrouter\/free/);
   });

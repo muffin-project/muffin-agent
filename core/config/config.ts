@@ -819,6 +819,14 @@ export function locateSecretAll(ref: string, home = muffinHome()): SecretLocatio
  */
 export function readSecret(ref: string, home = muffinHome()): string {
   const name = requireSecretRef(ref);
+  // The xAI login session (ADR-0113) holds a refresh token: it is never a
+  // value to paste into a header. Only `XaiOAuthConnection` reads it.
+  if (name === 'xai_oauth') {
+    throw new ConfigError(
+      'secret://xai_oauth is the xAI login session, not an API key',
+      'use it only as an xAI provider connection (`muffin fallback add xai <model>`)',
+    );
+  }
   const found = locateSecret(ref, home);
   if (!found) {
     throw new ConfigError(

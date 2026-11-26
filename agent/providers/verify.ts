@@ -16,7 +16,7 @@ import {
   selectSourcedProfile,
   withThinking,
 } from '../profiles/profile.js';
-import { connectionProvider } from './configured.js';
+import { connectionProvider, isXaiLogin } from './configured.js';
 import { ReasoningConfigurationError, reasoningFromLegacyThinking } from './reasoning.js';
 import { type Provider, ProviderError } from './types.js';
 
@@ -191,7 +191,7 @@ export async function verifyInferenceRoute(
     try {
       if (selectedConfig === undefined)
         throw new Error('selected inference provider is unavailable');
-      if (selectedConfig.kind !== 'openai-chatgpt') {
+      if (selectedConfig.kind !== 'openai-chatgpt' && !isXaiLogin(selectedConfig)) {
         const key = readSecret(selectedConfig.apiKeyRef, opts.home);
         if (!key)
           throw new ConfigError('secret file is empty', 'write it with `muffin secret set`');
@@ -210,7 +210,9 @@ export async function verifyInferenceRoute(
         remedy:
           selectedConfig?.kind === 'openai-chatgpt'
             ? 'run `muffin chatgpt login`'
-            : 'check the stored key',
+            : selectedConfig !== undefined && isXaiLogin(selectedConfig)
+              ? 'run `muffin auth login xai`'
+              : 'check the stored key',
       });
     }
   }

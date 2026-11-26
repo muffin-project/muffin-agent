@@ -556,7 +556,7 @@ export type ProviderErrorDetails = {
   /** An account quota that requires user action before another attempt. */
   quota?: 'chatgpt-plan';
   /** The provider confirmed that a fresh owner sign-in is required. */
-  reauthentication?: 'chatgpt';
+  reauthentication?: 'chatgpt' | 'xai';
   /** The credential could not be obtained locally (missing, unreadable or not refreshable). */
   credentials?: 'unavailable';
   /**

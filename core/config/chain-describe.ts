@@ -6,7 +6,8 @@ import {
   locateSecret,
 } from './config.js';
 import { type FailoverReason, linkId, linkLabel, readChainState } from './provider-chain.js';
-import { providerFor } from './providers.js';
+import { PROVIDERS, providerFor } from './providers.js';
+import { XAI_OAUTH_REF, XaiOAuthConnection } from './xai-oauth.js';
 
 /**
  * Human-readable provider-chain status (ADR-0110), shared by `muffin fallback`,
@@ -40,11 +41,26 @@ export function credentialRemedy(link: FallbackLink): string {
   if (link.provider.kind === 'openai-chatgpt') return 'muffin chatgpt login';
   const name = link.provider.apiKeyRef.replace(/^secret:\/\//, '');
   if (entry?.id === 'openrouter') return 'muffin auth login openrouter';
+  if (entry?.id === 'xai' && link.provider.apiKeyRef === XAI_OAUTH_REF)
+    return 'muffin auth login xai';
+  if (entry?.id === 'xai' && name === PROVIDERS.xai.secretName)
+    return `muffin auth login xai (oppure muffin secret set ${name})`;
   return `muffin secret set ${name}`;
+}
+
+/** The xAI login is present and xAI has not refused its refresh token. */
+export function xaiLoginUsable(home: string): boolean {
+  try {
+    const status = new XaiOAuthConnection(home).status();
+    return status.connected && !status.needsLogin;
+  } catch {
+    return false;
+  }
 }
 
 export function credentialPresent(link: FallbackLink, home: string): boolean {
   try {
+    if (link.provider.apiKeyRef === XAI_OAUTH_REF) return xaiLoginUsable(home);
     return locateSecret(link.provider.apiKeyRef, home) !== null;
   } catch {
     return false;

@@ -16,6 +16,9 @@ export function providerErrorReply(error: ProviderError | ReasoningConfiguration
   if (error.details?.reauthentication === 'chatgpt') {
     return 'La connessione a ChatGPT va ristabilita. Sul dispositivo che ospita Muffin, esegui `muffin chatgpt login` e autorizza l’accesso. Questo turno si è fermato.';
   }
+  if (error.details?.reauthentication === 'xai') {
+    return 'Il login xAI va rifatto. Sul dispositivo che ospita Muffin, esegui `muffin auth login xai` e autorizza l’accesso. Questo turno si è fermato.';
+  }
   if (error.details?.quota === 'chatgpt-plan') {
     return 'È stato raggiunto il limite di utilizzo del piano ChatGPT. Controlla la quota di Muffin in https://chatgpt.com/settings/usage.';
   }

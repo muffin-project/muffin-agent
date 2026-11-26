@@ -37,6 +37,7 @@ import { type DefaultDrift, diagnoseDefaultsDrift } from '../core/config/default
 import { diagnoseRoutingStaleness } from '../core/config/model-resolve.js';
 import { ALL_API_KEY_NAMES } from '../core/config/providers.js';
 import { describeWorkspace } from '../core/config/workspace.js';
+import { XAI_OAUTH_REF, XaiOAuthConnection } from '../core/config/xai-oauth.js';
 import { currentSchemaVersion, schemaVersionOf } from '../core/db/migrate.js';
 import { askGateway } from '../core/gateway/control-socket.js';
 import { readGateway } from '../core/gateway/lock.js';
@@ -818,6 +819,27 @@ export async function runDoctor(
           );
       } catch {
         credentialFail('ChatGPT', 'Saved connection is unavailable', 'muffin chatgpt login');
+      }
+    } else if (connection.apiKeyRef === XAI_OAUTH_REF) {
+      try {
+        const status = new XaiOAuthConnection(home).status();
+        if (!status.connected)
+          credentialFail('xAI login', 'Not logged in.', 'muffin auth login xai');
+        else if (status.needsLogin)
+          credentialFail(
+            'xAI login',
+            'Refresh was refused (login expired or revoked).',
+            'muffin auth login xai',
+          );
+        else
+          credentialOk(
+            'xAI login',
+            status.usable
+              ? `${XAI_OAUTH_REF}${status.email ? ` (${status.email})` : ''}, tokens never printed`
+              : 'The access token will be refreshed on the next request.',
+          );
+      } catch {
+        credentialFail('xAI login', 'Saved login is unavailable', 'muffin auth login xai');
       }
     } else
       try {
