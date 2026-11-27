@@ -5,7 +5,7 @@ import {
   type ApprovalStore,
 } from '../../core/approvals/store.js';
 import { sleep } from '../../core/net/sleep.js';
-import type { PermissionSnapshot, TrustTier } from '../../core/policy/types.js';
+import type { Decision, PermissionSnapshot, TrustTier } from '../../core/policy/types.js';
 import type { SessionMessage } from '../../core/session/store.js';
 import { redactText } from '../../core/tracing/redact.js';
 import type { SpanHandle } from '../../core/tracing/types.js';
@@ -188,6 +188,19 @@ function approvalInvocation(
   };
 }
 
+/**
+ * Optional controls for a pre-decided, concurrently executed read-only call.
+ *
+ * `decided` is the kernel verdict taken at the pre-batch taint, so a sibling
+ * that finishes first cannot change this call's verdict mid-flight.
+ * `captureTaint` defers `snapshot.raiseTaint` to the caller, who must apply
+ * the captured raises in the original tool-call order after the batch lands.
+ */
+export type RunToolHooks = {
+  decided?: Decision;
+  captureTaint?: (tier: TrustTier, origin: string) => void;
+};
+
 export async function runTool(
   deps: LoopDeps,
   snapshot: PermissionSnapshot,
@@ -200,6 +213,7 @@ export async function runTool(
   ctx: ToolContext,
   workBatch?: WorkMessageBatch,
   replay?: { approvalId: string; claimToken: string | null },
+  hooks?: RunToolHooks,
 ): Promise<ContentBlock> {
   const span = deps.tracer.start(
     'muffin.tool_call',
@@ -245,6 +259,10 @@ export async function runTool(
   const args = (call.args ?? {}) as Record<string, unknown>;
   const isWorkMessage = call.name === WORK_MESSAGE_TOOL_NAME;
   const capability = tool.capability;
+  const applyTaint = (tier: TrustTier, origin: string): void => {
+    if (hooks?.captureTaint) hooks.captureTaint(tier, origin);
+    else snapshot.raiseTaint(tier, origin);
+  };
   // Reported only from here on — an unknown tool (`!tool` above) never gets a
   // `tool_start`, because it never had a `capability` to report and no call
   // was ever really attempted, so there is nothing for a `tool_end` to pair
@@ -292,7 +310,7 @@ export async function runTool(
     { [ATTR.capability]: capability, [ATTR.taint]: snapshot.currentTaint() },
     span,
   );
-  const decision = snapshot.check(capability, resource, args);
+  const decision = hooks?.decided ?? snapshot.check(capability, resource, args);
   decisionSpan.setAttributes({
     [ATTR.policyEffect]: decision.effect,
     ...(decision.effect === 'deny' ? { [ATTR.policyDenyCode]: decision.code } : {}),
@@ -926,7 +944,7 @@ export async function runTool(
   }
   if (giaRisolta !== undefined) {
     if (giaRisolta.tier !== null)
-      snapshot.raiseTaint(giaRisolta.tier, 'un risultato già registrato per questa chiamata');
+      applyTaint(giaRisolta.tier, 'un risultato già registrato per questa chiamata');
     span.end({ status: giaRisolta.isError ? 'error' : 'ok' });
     emitToolEnd(giaRisolta.isError);
     return {
@@ -977,7 +995,7 @@ export async function runTool(
     // Il nome accanto al numero (ADR-0075 punto 4): quando è *questo* risultato
     // ad alzare il livello, è questo il nome che comparirà nel prompt del
     // prossimo `ask`. Non è un secondo registro — vedi `PermissionSnapshot`.
-    snapshot.raiseTaint(outcome.tier, `il risultato di ${call.name}`);
+    applyTaint(outcome.tier, `il risultato di ${call.name}`);
     // The write boundary (owner, 2026-08-17; ADR-0048): every sink a tool
     // result reaches from here — the durable record, the session JSONL, and
     // the `tool_result` that later gets persisted into `turns.messages` by
@@ -1144,7 +1162,7 @@ export async function runTool(
     // words `detail` carried. `tool.throwTier` is this tool's own declared
     // answer for its failure exit, the same way `outcome.tier` is its answer
     // for success; neither is guessed here.
-    snapshot.raiseTaint(tool.throwTier, `l'errore di ${call.name}`);
+    applyTaint(tool.throwTier, `l'errore di ${call.name}`);
     // And an outcome all the same: a handler that threw *came back*, so the
     // call is decided, not uncertain. Leaving the intent row open here would
     // make every failed tool call look like one that might still have landed.

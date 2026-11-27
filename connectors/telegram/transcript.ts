@@ -852,18 +852,23 @@ export function startTranscript(
           status = PREPARING_CONTEXT_STATUS;
           break;
         case 'round':
-          if (status === null) status = 'sto pensando';
+          // A new model round means context is already built. Promote even
+          // when `preparing_context` already set a status, otherwise the
+          // draft stays on "sto preparando il contesto" through
+          // `resolveReasoning` and the first-token wait.
+          status = 'sto pensando';
           break;
         case 'model':
           status = event.stopReason === 'tool_use' ? 'sto lavorando' : 'sto scrivendo la risposta';
           break;
         case 'model_status':
-          // Sub-phases of the provider are not milestones for the person.
-          // Keep a steady activity indicator until the answer or a real delay.
+          // Waiting for the first token is thinking, not tool work.
+          // `sto lavorando` is reserved for a tool that is actually running
+          // (`tool_start` / `tool_end` / a mid-turn tool-call preamble).
           status =
             event.status === 'stalled'
               ? `la risposta tarda (${Math.round(event.idleMs / 1000)}s senza aggiornamenti)`
-              : 'sto lavorando';
+              : 'sto pensando';
           break;
         case 'model_retry':
           // Un retry silenzioso è indistinguibile da uno stallo: l'attesa è

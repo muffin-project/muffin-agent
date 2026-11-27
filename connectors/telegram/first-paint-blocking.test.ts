@@ -182,7 +182,8 @@ describe('DM status before the first answer', () => {
       expect(payload(drafts()[0])).toContain('sto preparando il contesto');
       expect(durableCalls()).toEqual([]);
       releaseRecall();
-      await vi.waitFor(() => expect(payload(drafts().at(-1))).toContain('sto lavorando'));
+      await vi.waitFor(() => expect(payload(drafts().at(-1))).toContain('sto pensando'));
+      expect(payload(drafts().at(-1))).not.toContain('sto preparando il contesto');
       expect(n).toBe(1);
       releaseModel();
       await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());

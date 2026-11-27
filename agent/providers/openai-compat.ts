@@ -79,14 +79,65 @@ import {
  * because `https://openrouter.ai./api/v1` is the same endpoint and a silent
  * miss here pays 10× forever (ADR-0008: degrade declaredly, never silently).
  */
-export function wantsExplicitCache(baseURL?: string): boolean {
+function endpointHostname(baseURL?: string): string | null {
   try {
-    if (!baseURL) return false;
-    const host = new URL(baseURL).hostname.toLowerCase().replace(/\.$/, '');
-    return /(^|\.)openrouter\.ai$/.test(host);
+    if (!baseURL) return null;
+    return new URL(baseURL).hostname.toLowerCase().replace(/\.$/, '');
   } catch {
-    return false;
+    return null;
   }
+}
+
+function isOpenRouterHost(host: string): boolean {
+  return /(^|\.)openrouter\.ai$/.test(host);
+}
+
+export function wantsExplicitCache(baseURL?: string): boolean {
+  const host = endpointHostname(baseURL);
+  return host !== null && isOpenRouterHost(host);
+}
+
+/**
+ * Whether this endpoint is xAI's developer API (`api.x.ai`).
+ *
+ * Same hostname rules as the OpenRouter gates: exact host (or a subdomain of
+ * `api.x.ai`), trailing dot folded, never a substring — `api.x.ai.evil.tld`
+ * must not flip request shape.
+ */
+export function speaksXai(baseURL?: string): boolean {
+  const host = endpointHostname(baseURL);
+  return host !== null && /(^|\.)api\.x\.ai$/.test(host);
+}
+
+/**
+ * xAI Chat Completions models that accept top-level `reasoning_effort`
+ * (`grok-4.3` / `4.5` / `4.6` / `4.7` / `4.20-multi-agent`, plus aliases
+ * like `grok-4.7-latest`). Other slugs on the same host (for example
+ * `grok-2`, `grok-3`, `grok-4`) must not receive the field: an unknown
+ * parameter is a 400.
+ *
+ * Documented 2026-11-23: https://docs.x.ai/developers/model-capabilities/text/reasoning
+ */
+export function xaiSpeaksReasoningEffort(model: string): boolean {
+  return /^grok-4\.(3|5|6|7|20)([.-]|$)/.test(model.trim().toLowerCase());
+}
+
+/** Only `grok-4.3` accepts `reasoning_effort: "none"`. Later models 400 on it. */
+export function xaiCanDisableReasoning(model: string): boolean {
+  return /^grok-4\.3([.-]|$)/.test(model.trim().toLowerCase());
+}
+
+const XAI_REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const;
+export type XaiReasoningEffort = (typeof XAI_REASONING_EFFORTS)[number];
+
+/**
+ * Clamp a profile effort to the values `api.x.ai` documents. `minimal` is
+ * the nearest lower rung (`low`); `max` is the nearest upper rung (`xhigh`).
+ */
+export function clampXaiReasoningEffort(effort: string | undefined): XaiReasoningEffort {
+  if (effort === 'medium' || effort === 'high' || effort === 'xhigh') return effort;
+  if (effort === 'max') return 'xhigh';
+  return 'low';
 }
 
 /**
@@ -111,23 +162,13 @@ export function wantsExplicitCache(baseURL?: string): boolean {
  * cosa che si prova mandandolo e vedendo.
  */
 export function speaksStickySession(baseURL?: string): boolean {
-  try {
-    if (!baseURL) return false;
-    const host = new URL(baseURL).hostname.toLowerCase().replace(/\.$/, '');
-    return /(^|\.)openrouter\.ai$/.test(host);
-  } catch {
-    return false;
-  }
+  const host = endpointHostname(baseURL);
+  return host !== null && isOpenRouterHost(host);
 }
 
 export function speaksReasoningEffort(baseURL?: string): boolean {
-  try {
-    if (!baseURL) return false;
-    const host = new URL(baseURL).hostname.toLowerCase().replace(/\.$/, '');
-    return /(^|\.)openrouter\.ai$/.test(host);
-  } catch {
-    return false;
-  }
+  const host = endpointHostname(baseURL);
+  return host !== null && isOpenRouterHost(host);
 }
 
 /**
@@ -233,6 +274,10 @@ export function routingBody(r: Routing | undefined): Record<string, unknown> | u
   return Object.keys(fuori).length > 0 ? fuori : undefined;
 }
 
+function conversationCacheKey(conversation: string): string {
+  return createHash('sha256').update(conversation).digest('hex').slice(0, 32);
+}
+
 export class OpenAICompatProvider implements Provider {
   readonly kind = 'openai-compat' as const;
   private readonly client: OpenAI;
@@ -261,6 +306,8 @@ export class OpenAICompatProvider implements Provider {
    * also gates OpenRouter-only body fields and message continuity.
    */
   readonly reasoningDialect: ReasoningDialect | undefined;
+  /** `https://api.x.ai/v1` (and trailing-dot / case variants). */
+  readonly xaiEndpoint: boolean;
 
   constructor(
     /**
@@ -285,6 +332,7 @@ export class OpenAICompatProvider implements Provider {
     } = {},
   ) {
     this.baseURL = baseURL;
+    this.xaiEndpoint = speaksXai(baseURL);
     // An explicit dialect wins over the inferred OpenRouter shape: no metadata
     // fetch, and its static capabilities are the ones that resolve.
     this.reasoningDiscovery =
@@ -337,8 +385,69 @@ export class OpenAICompatProvider implements Provider {
         this.discoveredReasoning.capabilities,
         this.discoveredReasoning.source,
       );
+    if (this.xaiEndpoint) return this.resolveXaiReasoning(call);
     const { capabilities, source } = openRouterReasoningCapabilities(call.model, this.baseURL);
     return resolveReasoningPolicy(reasoningRequest(call), capabilities, source);
+  }
+
+  /**
+   * xAI's Chat Completions API accepts top-level `reasoning_effort` on the
+   * models named by `xaiSpeaksReasoningEffort`. Omitting the field is not
+   * "adaptive": on `grok-4.7` / `4.6` / `4.5` the provider default is `high`,
+   * which is exactly the silent cost this path exists to stop. Muffin's
+   * default on those models is `low` (latency-sensitive agentic use, per
+   * xAI's own table) unless the profile or the call asked for a specific
+   * level. `none` is sent only on `grok-4.3`, the one model that accepts it.
+   */
+  private resolveXaiReasoning(call: ChatCall): ReasoningResolution {
+    const requested = reasoningRequest(call);
+    if (!xaiSpeaksReasoningEffort(call.model)) {
+      return resolveReasoningPolicy(
+        requested,
+        {
+          support: 'unsupported',
+          canDisable: true,
+          supportsMaxTokens: false,
+          mandatory: false,
+        },
+        'endpoint-defaults',
+      );
+    }
+    const canDisable = xaiCanDisableReasoning(call.model);
+    const capabilities: ReasoningCapabilities = {
+      support: 'supported',
+      canDisable,
+      supportedEfforts: [...XAI_REASONING_EFFORTS],
+      defaultEnabled: true,
+      defaultEffort: canDisable ? 'low' : 'high',
+      supportsMaxTokens: false,
+      mandatory: !canDisable,
+    };
+    if (!canDisable && requested?.mode === 'off') {
+      return {
+        requested,
+        effective: { mode: 'on', effort: 'low' },
+        status: 'applied',
+        capabilitySource: 'static-snapshot',
+        reason: 'reasoning cannot be disabled on this model; using low',
+      };
+    }
+    if (requested === undefined || requested.mode === 'adaptive') {
+      return {
+        ...(requested === undefined ? {} : { requested }),
+        effective: { mode: 'on', effort: clampXaiReasoningEffort(requested?.effort) },
+        status: 'applied',
+        capabilitySource: 'static-snapshot',
+      };
+    }
+    if (requested.mode === 'on') {
+      return resolveReasoningPolicy(
+        { mode: 'on', effort: clampXaiReasoningEffort(requested.effort) },
+        capabilities,
+        'static-snapshot',
+      );
+    }
+    return resolveReasoningPolicy(requested, capabilities, 'static-snapshot');
   }
 
   private async discoverReasoning(model: string): Promise<void> {
@@ -386,7 +495,7 @@ export class OpenAICompatProvider implements Provider {
       await this.discoverReasoning(call.model);
       const response = await this.client.chat.completions.create(
         this.requestBody(call),
-        call.signal ? { signal: call.signal } : {},
+        this.requestOptions(call),
       );
 
       const choice = response.choices[0];
@@ -456,7 +565,7 @@ export class OpenAICompatProvider implements Provider {
     try {
       stream = await this.client.chat.completions.create(
         { ...this.requestBody(call), stream: true, stream_options: { include_usage: true } },
-        call.signal ? { signal: call.signal } : {},
+        this.requestOptions(call),
       );
     } catch (error) {
       // Nothing was ever streamed — `chat()`'s own failure shape, not the
@@ -623,6 +732,37 @@ export class OpenAICompatProvider implements Provider {
     };
   }
 
+  private requestOptions(call: ChatCall): {
+    signal?: AbortSignal;
+    headers?: Record<string, string>;
+  } {
+    const key = this.xaiConversationKey(call);
+    return {
+      ...(call.signal ? { signal: call.signal } : {}),
+      ...(key === undefined ? {} : { headers: { 'x-grok-conv-id': key } }),
+    };
+  }
+
+  private xaiConversationKey(call: ChatCall): string | undefined {
+    if (!this.xaiEndpoint || call.conversation === undefined || call.conversation === '')
+      return undefined;
+    return conversationCacheKey(call.conversation);
+  }
+
+  private xaiReasoningEffortField(
+    call: ChatCall,
+    reasoning: ReasoningResolution,
+  ): 'none' | XaiReasoningEffort | undefined {
+    if (!this.xaiEndpoint || !xaiSpeaksReasoningEffort(call.model)) return undefined;
+    const effective = reasoning.effective;
+    if (effective?.mode === 'off') {
+      return xaiCanDisableReasoning(call.model) ? 'none' : 'low';
+    }
+    if (effective?.effort !== undefined) return clampXaiReasoningEffort(effective.effort);
+    if (reasoning.status === 'applied') return 'low';
+    return undefined;
+  }
+
   /** The request body `chat()` and `chatStream()` share — everything but `stream` itself. */
   private requestBody(
     call: ChatCall,
@@ -630,6 +770,7 @@ export class OpenAICompatProvider implements Provider {
     const reasoning = this.resolveReasoningFromCache(call);
     if (reasoning.status === 'unsupported') throw new ReasoningConfigurationError(reasoning);
     const effective = reasoning.effective;
+    const xaiEffort = this.xaiReasoningEffortField(call, reasoning);
     // `require_parameters` is an OpenRouter routing field: a dialect endpoint has
     // no routing to constrain, and an unknown field is what this gate avoids.
     const explicitReasoningConstraint =
@@ -719,6 +860,21 @@ export class OpenAICompatProvider implements Provider {
             reasoning:
               effective.effort === undefined ? { enabled: true } : { effort: effective.effort },
           } as Record<string, unknown>)
+        : {}),
+      // xAI Chat Completions: top-level `reasoning_effort`, never the
+      // OpenRouter `reasoning: { effort }` envelope, and never `"none"` on
+      // models that 400 on it. Values are already clamped in resolveXaiReasoning.
+      ...(xaiEffort !== undefined
+        ? ({ reasoning_effort: xaiEffort } as Record<string, unknown>)
+        : {}),
+      // Session-stable sticky routing for xAI's per-server prompt cache
+      // (docs, 2026-11-23): `prompt_cache_key` in the body, and the identical
+      // value as `x-grok-conv-id` on the request (Chat Completions accepts
+      // either; when both are set, the body field wins). Hashed like
+      // OpenRouter's `session_id` so the provider sees a stable opaque key,
+      // not the date-bearing session id.
+      ...(this.xaiEndpoint && call.conversation !== undefined && call.conversation !== ''
+        ? ({ prompt_cache_key: conversationCacheKey(call.conversation) } as Record<string, unknown>)
         : {}),
       // **Tieni questa conversazione sullo stesso provider a monte.**
       //

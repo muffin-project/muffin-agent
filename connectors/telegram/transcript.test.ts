@@ -601,3 +601,42 @@ describe('afterDurableInterim restarts the DM status draft', () => {
     expect(t.handoff()).toBeNull();
   });
 });
+
+describe('honest draft status through the ReAct loop', () => {
+  it('promotes preparing_context to sto pensando on round and model wait, and only says sto lavorando once a tool starts', async () => {
+    const { api, calls } = recordingApi();
+    const t = startTranscript(api, 1, { negotiation: DM });
+    t.report({ type: 'preparing_context' });
+    expect(visibleText(calls[0])).toMatch(/sto preparando il contesto/);
+
+    t.report({ type: 'round', n: 1 });
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    expect(visibleText(calls.at(-1))).toMatch(/sto pensando/);
+    expect(visibleText(calls.at(-1))).not.toMatch(/preparando il contesto/);
+
+    t.report({
+      type: 'model_status',
+      status: 'waiting_for_model',
+      elapsedMs: 120,
+      idleMs: 120,
+    });
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    expect(visibleText(calls.at(-1))).toMatch(/sto pensando/);
+    expect(visibleText(calls.at(-1))).not.toMatch(/sto lavorando/);
+
+    t.report({ type: 'model_status', status: 'thinking', elapsedMs: 800, idleMs: 40 });
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    expect(visibleText(calls.at(-1))).toMatch(/sto pensando/);
+
+    t.report(toolStart);
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    expect(visibleText(calls.at(-1))).toMatch(/sto lavorando/);
+
+    t.report(toolEnd);
+    t.report({ type: 'round', n: 2 });
+    await vi.advanceTimersByTimeAsync(DM.editEveryMs);
+    expect(visibleText(calls.at(-1))).toMatch(/sto pensando/);
+    expect(visibleText(calls.at(-1))).not.toMatch(/sto lavorando/);
+    await t.stop();
+  });
+});
