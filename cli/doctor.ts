@@ -17,7 +17,11 @@ import {
   selectSourcedProfile,
 } from '../agent/profiles/profile.js';
 import { audioAccettato, immagineAccettata } from '../agent/providers/modalita.js';
-import { speaksReasoningEffort, wantsExplicitCache } from '../agent/providers/openai-compat.js';
+import {
+  speaksReasoningEffort,
+  speaksXai,
+  wantsExplicitCache,
+} from '../agent/providers/openai-compat.js';
 import { type VerificationResult, verifyInferenceRoute } from '../agent/providers/verify.js';
 import { baseToolOrder } from '../agent/runtime.js';
 import { diagnoseConfiguredSearch } from '../agent/search-readiness.js';
@@ -533,17 +537,23 @@ export async function runDoctor(
       config.thinking !== 'unset';
     const reaches =
       config.provider.reasoningDialect !== undefined ||
-      speaksReasoningEffort(config.provider.baseUrl);
+      speaksReasoningEffort(config.provider.baseUrl) ||
+      speaksXai(config.provider.baseUrl);
     if ((level || config.thinking === 'off') && !reaches) {
       warn(
         'reasoning',
-        `thinking ${config.thinking} non arriva a ${config.provider.baseUrl ?? 'questo endpoint'}: fuori da OpenRouter viene omesso`,
+        `thinking ${config.thinking} non arriva a ${config.provider.baseUrl ?? 'questo endpoint'}: fuori da OpenRouter e da api.x.ai viene omesso`,
         'imposta provider.reasoningDialect in config.json se il server capisce reasoning_effort',
       );
     } else {
+      const inferred = speaksReasoningEffort(config.provider.baseUrl)
+        ? "openrouter (dall'hostname)"
+        : speaksXai(config.provider.baseUrl)
+          ? "xai (dall'hostname)"
+          : 'nessuno';
       ok(
         'reasoning',
-        `thinking ${config.thinking ?? 'profilo'}, dialetto ${config.provider.reasoningDialect ?? (speaksReasoningEffort(config.provider.baseUrl) ? "openrouter (dall'hostname)" : 'nessuno')}`,
+        `thinking ${config.thinking ?? 'profilo'}, dialetto ${config.provider.reasoningDialect ?? inferred}`,
       );
     }
   }

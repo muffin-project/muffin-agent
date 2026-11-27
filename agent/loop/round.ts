@@ -1,6 +1,11 @@
 import { sleep } from '../../core/net/sleep.js';
 import { replyCapability } from '../../core/policy/doors.js';
-import type { CapabilityId, Decision, DecisionRequest } from '../../core/policy/types.js';
+import type {
+  CapabilityId,
+  Decision,
+  DecisionRequest,
+  TrustTier,
+} from '../../core/policy/types.js';
 import { redactText, scrubResourceEchoes } from '../../core/tracing/redact.js';
 import { ATTR, type AttributeValue } from '../../core/tracing/types.js';
 import type { ContinuableClass } from '../../core/turns/store.js';
@@ -51,6 +56,8 @@ import {
   partialMessage,
   toolMessage,
 } from './message-origin.js';
+import { isParallelReadAllow, PARALLEL_READ_CONCURRENCY } from './parallel-reads.js';
+import { resourceFor } from './permissions.js';
 import type { TurnRun } from './run-state.js';
 import {
   continuationDedup,
@@ -60,6 +67,7 @@ import {
   retryDelayMs,
 } from './stream.js';
 import { runTool } from './tool-call.js';
+
 import {
   ApprovalRequired,
   MAX_AUTO_RENEW_LEASES,
@@ -1454,33 +1462,149 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     });
 
     const results: ContentBlock[] = [];
-    for (const [index, call_] of toolCalls.entries()) {
+    const ceilingReached = (): boolean =>
+      record.counters.activityAllowance === undefined &&
+      deps.profile.maxToolCallsPerTurn !== null &&
+      run.toolCallsMade >= deps.profile.maxToolCallsPerTurn;
+    const refuseOverCeiling = (callId: string): ContentBlock => ({
+      type: 'tool_result',
+      toolCallId: callId,
+      content:
+        `Tetto di ${deps.profile.maxToolCallsPerTurn} tool call per turno raggiunto: chiamata non eseguita. ` +
+        `Chiudi il turno con quello che hai, o dì all'owner cosa resta da fare.`,
+      isError: true,
+    });
+    const peekReadAllow = (
+      call_: (typeof toolCalls)[number],
+    ): { decision: Decision } | undefined => {
+      const tool = deps.tools.find((candidate) => candidate.spec.name === call_.name);
+      if (!tool) return undefined;
+      const decl = deps.capabilities?.get(tool.capability);
+      const args = (call_.args ?? {}) as Record<string, unknown>;
+      const decision = snapshot.check(tool.capability, resourceFor(decl, args), args);
+      if (!isParallelReadAllow({ name: call_.name, decl, decision })) return undefined;
+      return { decision };
+    };
+    const handleApproval = (error: unknown): TurnResult | undefined => {
+      if (!(error instanceof ApprovalRequired)) return undefined;
+      turn.setAttributes({ 'muffin.policy.approval': 'unavailable' });
+      const stop = finish(
+        scope,
+        'ask',
+        `Serve la tua approvazione per "${error.request.capability}"${error.request.resource ? ` su ${error.request.resource}` : ''}. Su questa superficie non posso chiederla.`,
+      );
+      return { ...stop, pending: error.request };
+    };
+    const recordWorkMessage = async (
+      call_: (typeof toolCalls)[number],
+      outcome: ContentBlock,
+    ): Promise<void> => {
+      if (
+        call_.name === WORK_MESSAGE_TOOL_NAME &&
+        outcome.type === 'tool_result' &&
+        !outcome.isError &&
+        !isWorkQuestion(call_.args)
+      ) {
+        const args = parseWorkMessageArgs(call_.args);
+        const text = args?.text.trim() ?? '';
+        if (text !== '') {
+          await recordDeliveredInterim(deps, input, {
+            text,
+            source: 'work_message',
+            traceId: turn.traceId,
+            tier: snapshot.intrinsicTaint(),
+            createdAt: now().toISOString(),
+          });
+        }
+      }
+    };
+
+    let index = 0;
+    while (index < toolCalls.length) {
       // Checked between tools, not only before the next model call: a Ctrl+C
       // during a run of tool calls used to do nothing visible until the batch
       // finished, which for a slow batch is indistinguishable from being
       // ignored.
       if (input.signal?.aborted) return finish(scope, 'aborted', 'Interrotto.');
+      const call_ = toolCalls[index];
+      if (call_ === undefined) break;
       // The ceiling counts CALLS, not iterations. Nothing upstream bounds how
       // many `tool_use` blocks one completion carries — a single response
       // with 40 calls used to execute all 40 under a profile that promised 15
       // (E6, RETURN S3). Refused calls still get a tool_result: a hole in the
       // batch is a protocol error every provider rejects, and the model should
       // read why it was stopped instead of retrying blind.
-      if (
-        record.counters.activityAllowance === undefined &&
-        deps.profile.maxToolCallsPerTurn !== null &&
-        run.toolCallsMade >= deps.profile.maxToolCallsPerTurn
-      ) {
-        results.push({
-          type: 'tool_result',
-          toolCallId: call_.id,
-          content:
-            `Tetto di ${deps.profile.maxToolCallsPerTurn} tool call per turno raggiunto: chiamata non eseguita. ` +
-            `Chiudi il turno con quello che hai, o dì all'owner cosa resta da fare.`,
-          isError: true,
-        });
+      if (ceilingReached()) {
+        results.push(refuseOverCeiling(call_.id));
+        index += 1;
         continue;
       }
+
+      // Grow a contiguous run of already-allowed, pure read-only calls and
+      // execute it concurrently. Policy is decided up front at the pre-batch
+      // taint; results and taint raises are applied in the original call
+      // order. Writes, ask/draft, and work_message stay strictly sequential.
+      const group: { call: (typeof toolCalls)[number]; index: number; decision: Decision }[] = [];
+      while (
+        index + group.length < toolCalls.length &&
+        group.length < PARALLEL_READ_CONCURRENCY &&
+        !(
+          record.counters.activityAllowance === undefined &&
+          deps.profile.maxToolCallsPerTurn !== null &&
+          run.toolCallsMade + group.length >= deps.profile.maxToolCallsPerTurn
+        )
+      ) {
+        const next = toolCalls[index + group.length];
+        if (next === undefined) break;
+        const peeked = peekReadAllow(next);
+        if (peeked === undefined) break;
+        group.push({ call: next, index: index + group.length, decision: peeked.decision });
+      }
+
+      if (group.length >= 2) {
+        run.toolCallsMade += group.length;
+        const captured: { tier: TrustTier; origin: string }[] = new Array(group.length);
+        try {
+          const outcomes = await Promise.all(
+            group.map((item, offset) =>
+              runTool(
+                deps,
+                snapshot,
+                turn,
+                item.call,
+                input,
+                exposed,
+                toolContext,
+                { record, run, size: toolCalls.length, index: item.index },
+                undefined,
+                {
+                  decided: item.decision,
+                  captureTaint: (tier, origin) => {
+                    captured[offset] = { tier, origin };
+                  },
+                },
+              ),
+            ),
+          );
+          for (const [offset, item] of group.entries()) {
+            const raised = captured[offset];
+            const outcome = outcomes[offset];
+            if (outcome === undefined) {
+              throw new Error(`missing tool result at index ${item.index}`);
+            }
+            if (raised !== undefined) snapshot.raiseTaint(raised.tier, raised.origin);
+            results.push(outcome);
+            noteSensitiveResourceEcho(item.call, outcome);
+          }
+        } catch (error) {
+          const stopped = handleApproval(error);
+          if (stopped) return stopped;
+          throw error;
+        }
+        index += group.length;
+        continue;
+      }
+
       run.toolCallsMade += 1;
       try {
         const outcome = await runTool(deps, snapshot, turn, call_, input, exposed, toolContext, {
@@ -1491,36 +1615,13 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
         });
         results.push(outcome);
         noteSensitiveResourceEcho(call_, outcome);
-        if (
-          call_.name === WORK_MESSAGE_TOOL_NAME &&
-          outcome.type === 'tool_result' &&
-          !outcome.isError &&
-          !isWorkQuestion(call_.args)
-        ) {
-          const args = parseWorkMessageArgs(call_.args);
-          const text = args?.text.trim() ?? '';
-          if (text !== '') {
-            await recordDeliveredInterim(deps, input, {
-              text,
-              source: 'work_message',
-              traceId: turn.traceId,
-              tier: snapshot.intrinsicTaint(),
-              createdAt: now().toISOString(),
-            });
-          }
-        }
+        await recordWorkMessage(call_, outcome);
       } catch (error) {
-        if (error instanceof ApprovalRequired) {
-          turn.setAttributes({ 'muffin.policy.approval': 'unavailable' });
-          const stop = finish(
-            scope,
-            'ask',
-            `Serve la tua approvazione per "${error.request.capability}"${error.request.resource ? ` su ${error.request.resource}` : ''}. Su questa superficie non posso chiederla.`,
-          );
-          return { ...stop, pending: error.request };
-        }
+        const stopped = handleApproval(error);
+        if (stopped) return stopped;
         throw error;
       }
+      index += 1;
     }
     // Tool evidence, not owner words: the provider compiler may be forced to
     // render this as `role: 'user'` (Anthropic carries `tool_result` inside a

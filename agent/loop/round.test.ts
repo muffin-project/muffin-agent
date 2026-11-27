@@ -1693,3 +1693,132 @@ describe('conversational interims between ReAct steps', () => {
     expect(sessionOf(h).filter((row) => row.interim !== undefined)).toEqual([]);
   });
 });
+
+describe('batch di tool di sola lettura già allow in parallelo', () => {
+  function delayedTool(
+    name: string,
+    delayMs: number,
+    log: string[],
+    over: { tier?: 0 | 1 | 2 | 3; effect?: CapabilityDecl['effect']; rerunnable?: boolean } = {},
+  ): { tool: RegisteredTool; decl: CapabilityDecl } {
+    const decl: CapabilityDecl = {
+      ...searchCapability,
+      id: `sys.${name}` as CapabilityId,
+      hostOnly: false,
+      // `context` + `none` so the kernel floor allows the call; search's
+      // `query` resource would deny an empty-args fixture as resource_denied.
+      effect: over.effect ?? 'context',
+      resourceKind: 'none',
+      policyArgs: [],
+      risk: 'low',
+      rerunnable: over.rerunnable ?? true,
+    };
+    return {
+      decl,
+      tool: {
+        capability: decl.id,
+        spec: { ...searchSpec, name },
+        handler: async () => {
+          log.push(`start:${name}`);
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          log.push(`end:${name}`);
+          return { content: `res-${name}`, tier: over.tier ?? 0 };
+        },
+        throwTier: 0,
+      },
+    };
+  }
+
+  function resultsOf(h: ReturnType<typeof harness>, ids: string[]) {
+    const batch = h.run.messages.find(
+      (message) =>
+        message.role === 'user' &&
+        message.content.some(
+          (block) => block.type === 'tool_result' && block.toolCallId === ids[0],
+        ),
+    );
+    return ids.map((id) => {
+      const block = batch?.content.find(
+        (item) => item.type === 'tool_result' && item.toolCallId === id,
+      );
+      return block && block.type === 'tool_result' ? block.content : undefined;
+    });
+  }
+
+  it("esegue tre web_search-like in parallelo, con result e taint nell'ordine originale", async () => {
+    const log: string[] = [];
+    const a = delayedTool('alpha', 80, log, { tier: 1 });
+    const b = delayedTool('beta', 40, log, { tier: 3 });
+    const c = delayedTool('gamma', 10, log, { tier: 2 });
+    const taintOrder: Array<0 | 1 | 2 | 3> = [];
+    const h = harness({
+      provider: scriptedProvider({ chat: [calls('alpha', 'beta', 'gamma'), reply('ok')] }),
+      tools: [a.tool, b.tool, c.tool],
+      decls: [a.decl, b.decl, c.decl],
+    });
+    const original = h.scope.snapshot.raiseTaint.bind(h.scope.snapshot);
+    h.scope.snapshot.raiseTaint = (tier, origin) => {
+      taintOrder.push(tier);
+      original(tier, origin);
+    };
+
+    const started = Date.now();
+    const result = await runRounds(h.scope);
+    const elapsed = Date.now() - started;
+
+    expect(result.stopped).toBe('answered');
+    expect(resultsOf(h, ['c0', 'c1', 'c2'])).toEqual(['res-alpha', 'res-beta', 'res-gamma']);
+    expect(taintOrder).toEqual([1, 3, 2]);
+    expect(h.scope.snapshot.currentTaint()).toBe(3);
+    // Serial wall time would be 80+40+10ms plus overhead; keep a loose bound so CI jitter cannot fail a real overlap.
+    expect(elapsed).toBeLessThan(400);
+    expect(log.indexOf('start:alpha')).toBeGreaterThanOrEqual(0);
+    expect(log.indexOf('start:beta')).toBeGreaterThanOrEqual(0);
+    expect(log.indexOf('start:gamma')).toBeGreaterThanOrEqual(0);
+    expect(
+      Math.max(log.indexOf('start:alpha'), log.indexOf('start:beta'), log.indexOf('start:gamma')),
+    ).toBeLessThan(
+      Math.min(log.indexOf('end:alpha'), log.indexOf('end:beta'), log.indexOf('end:gamma')),
+    );
+  });
+
+  it('tiene strettamente sequenziali i tool che non sono read-only allow, e il prefisso parallelo finisce prima', async () => {
+    const log: string[] = [];
+    const a = delayedTool('alpha', 40, log, { tier: 1 });
+    const b = delayedTool('beta', 40, log, { tier: 1 });
+    // `todo` is a mutating context tool: allow, but must not join the parallel run.
+    const write = delayedTool('todo', 20, log, { effect: 'context', rerunnable: true, tier: 0 });
+    const h = harness({
+      provider: scriptedProvider({ chat: [calls('alpha', 'beta', 'todo'), reply('ok')] }),
+      tools: [a.tool, b.tool, write.tool],
+      decls: [a.decl, b.decl, write.decl],
+    });
+
+    const result = await runRounds(h.scope);
+
+    expect(result.stopped).toBe('answered');
+    expect(resultsOf(h, ['c0', 'c1', 'c2'])).toEqual(['res-alpha', 'res-beta', 'res-todo']);
+    expect(log.indexOf('start:todo')).toBeGreaterThan(log.indexOf('end:alpha'));
+    expect(log.indexOf('start:todo')).toBeGreaterThan(log.indexOf('end:beta'));
+  });
+
+  it('dopo un write sequenziale riprende il parallelo sul run contiguo successivo', async () => {
+    const log: string[] = [];
+    const write = delayedTool('todo', 15, log, { effect: 'context', rerunnable: true, tier: 0 });
+    const a = delayedTool('alpha', 40, log, { tier: 1 });
+    const b = delayedTool('beta', 40, log, { tier: 1 });
+    const h = harness({
+      provider: scriptedProvider({ chat: [calls('todo', 'alpha', 'beta'), reply('ok')] }),
+      tools: [write.tool, a.tool, b.tool],
+      decls: [write.decl, a.decl, b.decl],
+    });
+
+    await runRounds(h.scope);
+
+    expect(resultsOf(h, ['c0', 'c1', 'c2'])).toEqual(['res-todo', 'res-alpha', 'res-beta']);
+    expect(Math.max(log.indexOf('start:alpha'), log.indexOf('start:beta'))).toBeLessThan(
+      Math.min(log.indexOf('end:alpha'), log.indexOf('end:beta')),
+    );
+    expect(log.indexOf('start:alpha')).toBeGreaterThan(log.indexOf('end:todo'));
+  });
+});
