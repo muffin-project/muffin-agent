@@ -64,7 +64,7 @@ export class ChatGPTReauthenticationRequired extends Error {
 
 export class ChatGPTModelCatalogUnavailable extends Error {
   constructor(readonly status?: number) {
-    super('ChatGPT model catalog is temporarily unavailable');
+    super(SAFE_ERROR);
     this.name = 'ChatGPTModelCatalogUnavailable';
   }
 }

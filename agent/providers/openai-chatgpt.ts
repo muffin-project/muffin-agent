@@ -96,10 +96,18 @@ export class OpenAIChatGPTProvider implements Provider {
         });
       if (error instanceof ChatGPTReauthenticationRequired) throw reauthenticationError(error);
       if (error instanceof ChatGPTModelCatalogUnavailable) {
-        throw new ProviderError(error.message, true, error.status, 'transport', undefined, false, {
-          ...(error.status === undefined ? { connection: true } : {}),
-          receivedAnyEvent: false,
-        });
+        throw new ProviderError(
+          'ChatGPT model catalog is temporarily unavailable',
+          true,
+          error.status,
+          'transport',
+          undefined,
+          false,
+          {
+            ...(error.status === undefined ? { connection: true } : {}),
+            receivedAnyEvent: false,
+          },
+        );
       }
       return {
         requested: request,
