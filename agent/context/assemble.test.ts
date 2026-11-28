@@ -281,7 +281,8 @@ describe('the owner-class prompt does not move', () => {
     // «dì in una riga cosa stai per fare». Cold-start deliberato.
     // Pin precedente: `1c76b3e287fe7a7e07edf699828142b11325968f410be472641253db8a43af27`.
     // The v3 product foundation changes the owner prefix once.
-    '70241951edb23dd83620b39a38a16d8adbf67042c10591ff2a02dc9c9c3fc8aa';
+    // Conversational rhythm and emoji guidance return to the always-on text.
+    'dc1e2803e6bfe159edfd665debe84c05a029b23cdc0e4f3b0ff673fcbb4b7fbf';
 
   it('è identico a se stesso fra due processi — o la cache non prende mai', () => {
     // Misurato prima di essere riparato: il recinto delle skill prendeva un

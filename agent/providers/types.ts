@@ -559,6 +559,8 @@ export type ProviderErrorDetails = {
   reauthentication?: 'chatgpt' | 'xai';
   /** The credential could not be obtained locally (missing, unreadable or not refreshable). */
   credentials?: 'unavailable';
+  /** Account model metadata needed to apply an explicit reasoning request is unavailable. */
+  reasoningCatalogUnavailable?: true;
   /**
    * The request never reached a response: DNS, refused or reset connection,
    * timeout before headers. Set only by adapters on their SDK's connection

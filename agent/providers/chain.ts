@@ -379,7 +379,15 @@ class ProviderChain implements Provider {
     } catch {
       return undefined;
     }
-    return provider.resolveReasoning?.(await this.callFor(call, link, provider));
+    try {
+      return await provider.resolveReasoning?.(await this.callFor(call, link, provider));
+    } catch (error) {
+      // Preflight is diagnostic. The actual invocation lets the adapter
+      // recheck the request and the existing chain handle an account/outage
+      // failure, before any output has been emitted.
+      if (call.signal?.aborted || failoverReason(error) === null) throw error;
+      return undefined;
+    }
   }
 
   async chat(call: ChatCall): Promise<ChatResult> {

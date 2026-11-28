@@ -1,6 +1,7 @@
 import OpenAI, { APIConnectionError, APIError } from 'openai';
 import {
   type ChatGPTModel,
+  ChatGPTModelCatalogUnavailable,
   ChatGPTReauthenticationRequired,
 } from '../../core/config/chatgpt-oauth.js';
 import { isThinkingEffort } from '../../core/config/thinking.js';
@@ -94,6 +95,23 @@ export class OpenAIChatGPTProvider implements Provider {
           receivedAnyEvent: false,
         });
       if (error instanceof ChatGPTReauthenticationRequired) throw reauthenticationError(error);
+      if (error instanceof ChatGPTModelCatalogUnavailable) {
+        // The chain can try a fall-back provider. With no usable fallback,
+        // stop the turn instead of repeatedly fetching the same metadata.
+        throw new ProviderError(
+          'ChatGPT model catalog is temporarily unavailable',
+          false,
+          error.status,
+          'transport',
+          undefined,
+          false,
+          {
+            ...(error.status === undefined ? { connection: true } : {}),
+            reasoningCatalogUnavailable: true,
+            receivedAnyEvent: false,
+          },
+        );
+      }
       return {
         requested: request,
         status: 'unsupported',

@@ -510,6 +510,7 @@ export function buildSystemPromptBlocks(
   safeMode: boolean,
   skillsSection = '',
   version: PromptVersion = 'v1',
+  layers = resolveIdentityLayers(home),
 ): SystemPromptBlocks {
   const p = paths(home);
   const src = promptSources(version);
@@ -519,7 +520,6 @@ export function buildSystemPromptBlocks(
   // then legacy voice, then the owner's `user.md` overlay, most specific
   // last and labelled with what it may not override. Nothing here writes.
   const personaText = authored(p.persona);
-  const layers = resolveIdentityLayers(home);
   const voiceText = authored(p.voice);
   const userText = layers.user === null ? '' : renderUserOverlay(layers.user);
   const safeModeBlock = safeMode ? SAFE_MODE_NOTE : '';
@@ -553,6 +553,17 @@ export function buildSystemPromptBlocks(
       text: layers.pact.text,
       file: layers.pact.file,
     },
+    ...(layers.mode === 'legacy-home' && !layers.foundationMissing
+      ? [
+          {
+            name: 'identity-status',
+            source: 'agent/context/assemble.ts',
+            text:
+              'Se l’owner chiede della tua voce, identità o dell’ultimo aggiornamento, spiegagli che è ancora attivo il suo patto personalizzato. ' +
+              'Può tenerlo oppure adottare la nuova identità scegliendo quali preferenze conservare. Muffin mantiene il patto finché l’owner decide.',
+          },
+        ]
+      : []),
     ...(voiceText.length > 0
       ? [
           {
@@ -564,7 +575,17 @@ export function buildSystemPromptBlocks(
         ]
       : []),
     ...(userText.length > 0 && layers.user !== null
-      ? [{ name: 'user', source: 'user.md', text: userText, file: layers.user.file }]
+      ? [
+          {
+            name: 'user',
+            source:
+              layers.mode === 'foundation+legacy-preferences'
+                ? 'rot/identity.md (preferenze)'
+                : 'user.md',
+            text: userText,
+            file: layers.user.file,
+          },
+        ]
       : []),
     { name: 'skills', source: 'core/skills (catalogo generato)', text: skillsSection },
     workRules,

@@ -70,13 +70,13 @@ describe('muffin status', () => {
     expect(lines[i + 2]?.trim()).toMatch(/^3\. .*openrouter\/free/);
   });
 
-  it('identità: una copia modificata a mano rimanda a rot migrate; user.md mostra i token', () => {
+  it('identità: un patto riscritto resta attivo e richiede una scelta', () => {
     const home = freshHome();
     writeFileSync(
       join(paths(home).rot, 'identity.md'),
       '# Identità\n\nPatto scritto a mano (fixture).\n',
     );
-    expect(row(status(home).lines, 'identità')).toContain('muffin rot migrate');
+    expect(row(status(home).lines, 'identità')).toContain('patto personalizzato conservato');
     writeFileSync(paths(home).user, 'Rispondi breve (fixture).\n');
     expect(row(status(home).lines, 'identità')).toMatch(/user\.md \(\d+\/1000 token\)/);
   });
