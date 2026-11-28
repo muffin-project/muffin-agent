@@ -66,7 +66,10 @@ describe('la fondazione arriva dal prodotto', () => {
     expect(layers.mode).toBe('legacy-home');
     expect(layers.pact.text).toContain('PATTO-SCRITTO-A-MANO');
     expect(layers.pact.text).not.toContain('FONDAZIONE-DELLA-BUILD-NUOVA');
-    expect(identityMigrateNote(home)).toContain('Non lo riscrivo');
+    expect(identityMigrateNote(home)).toContain('Puoi mantenerlo');
+    const prompts = renderSystemPrompts(buildSystemPromptBlocks(home, false));
+    expect(prompts.owner).toContain('è ancora attivo il suo patto personalizzato');
+    expect(prompts.group).not.toContain('è ancora attivo il suo patto personalizzato');
   });
 
   it('keeps a verifiable custom appendix in the private prompt with the product foundation', () => {

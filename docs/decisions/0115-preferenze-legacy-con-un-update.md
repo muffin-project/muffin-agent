@@ -16,7 +16,12 @@ Una copia sostitutiva, una modifica interna, una base irricostruibile e
 un’appendice troppo lunga continuano a usare il patto precedente. In questi
 casi l’owner deve scegliere quali indicazioni del suo patto far convivere
 con la fondazione nuova. Un `user.md` presente resta la fonte esplicita
-delle preferenze.
+delle preferenze. Il nuovo updater mostra l’esito della release installata.
+Un updater già installato termina ancora con il proprio codice. Al primo
+passaggio il nuovo runtime indica il conflitto all’avvio e in `muffin status`,
+e lo può spiegare nel dialogo privato sull’identità. Il comando di migrazione
+assistita può salvare un’appendice verificata già in uso, mentre lascia attivo
+un patto riscritto anche con `--apply`.
 
 La scelta evita sia un’euristica che assegna arbitrariamente al prodotto o
 all’owner singole righe di una riscrittura, sia una migrazione a scrittura

@@ -1927,8 +1927,8 @@ export function identityCheck(
       warn(
         'identità',
         `${homeIdentity} è stato modificato a mano e sostituisce la fondazione spedita: gli aggiornamenti del carattere non arrivano a questa installazione`,
-        `\`muffin rot migrate\` ti mostra le righe tue e con \`--apply\` le sposta in ${userFile} dopo un backup ` +
-          '(oppure crealo tu, al massimo ~4000 caratteri). Da quel momento la fondazione arriva dal prodotto e rot/identity.md non è più letto; niente sigillo da rifare (ADR-0108, ADR-0112).',
+        `Puoi mantenere il patto attivo oppure adottare la fondazione aggiornata scegliendo quali preferenze riportare in ${userFile} (al massimo ~4000 caratteri). ` +
+          'Muffin conserva il patto finché non fai questa scelta.',
       );
       return;
     default: {

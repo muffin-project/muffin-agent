@@ -75,7 +75,7 @@ export function formatIdentityLine(
     case 'legacy-home':
       return layers.foundationMissing
         ? 'solo rot/identity.md: questa build non ha la fondazione → muffin update'
-        : 'patto personalizzato conservato: la nuova fondazione richiede una scelta → muffin rot migrate';
+        : 'patto personalizzato conservato · per adottare la nuova fondazione, scegli quali preferenze tenere';
   }
 }
 

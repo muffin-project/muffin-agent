@@ -585,6 +585,36 @@ function defaultReadNewSchemaVersion(releaseDir: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * The launcher that started update is still the previous release. Read the
+ * freshly installed code's decision, which is also what its private prompt uses.
+ */
+function installedIdentityLine(releaseDir: string, home: string): string | null {
+  const identityModule = join(releaseDir, 'dist', 'agent', 'context', 'identity.js');
+  const statusModule = join(releaseDir, 'dist', 'core', 'config', 'status.js');
+  if (!existsSync(identityModule) || !existsSync(statusModule)) return null;
+  const probe = [
+    'const [identityUrl, statusUrl, home] = process.argv.slice(1);',
+    'const { resolveIdentityLayers } = await import(identityUrl);',
+    'const { formatIdentityLine } = await import(statusUrl);',
+    'process.stdout.write(formatIdentityLine(resolveIdentityLayers(home)));',
+  ].join('\n');
+  const result = run(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      probe,
+      pathToFileURL(identityModule).href,
+      pathToFileURL(statusModule).href,
+      home,
+    ],
+    releaseDir,
+    15_000,
+  );
+  return result.status === 0 && result.stdout.trim() !== '' ? result.stdout.trim() : null;
+}
+
 function migrationsDetail(dbPath: string, newVersion: number | null): string {
   if (!existsSync(dbPath))
     return 'nessun database ancora — la prima `muffin init` lo crea già alla forma corrente';
@@ -1319,6 +1349,8 @@ export function runUpdate(deps: UpdateDeps = {}): UpdateResult {
     rigaDefault ?? "la casa ha gia' tutti i default che questa release spedisce",
     riconciliato.falliti.length === 0,
   );
+  const identityLine = installedIdentityLine(releaseDir, home);
+  if (identityLine !== null) step('identità', identityLine);
 
   // Le due conseguenze che il comando taceva — vedi `noteDopoLoSwing`. Lo stato
   // si legge qui, dallo stesso `gitRunner` di tutto il resto; la decisione sta

@@ -2,13 +2,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  resolveIdentityLayers,
-  SHIPPED_IDENTITY,
-  USER_OVERLAY_TOKEN_BUDGET,
-} from '../agent/context/identity.js';
+import { resolveIdentityLayers, SHIPPED_IDENTITY } from '../agent/context/identity.js';
 import { paths } from '../core/config/config.js';
-import { applyIdentityMigration, ownerLines, planIdentityMigration } from './identity-migrate.js';
+import { applyIdentityMigration, planIdentityMigration } from './identity-migrate.js';
 import { runInit } from './init.js';
 import { runRotMigrate } from './rot-migrate.js';
 
@@ -40,32 +36,6 @@ function handEdit(home: string, extra: string): void {
   writeFileSync(homeCopy(home), `${shipped()}\n${extra}`);
 }
 
-describe('ownerLines', () => {
-  it('tiene solo le righe che nessuna fondazione spedita contiene', () => {
-    const foundation = '# Identità\n\n## Tono\n\nSii gentile.\n';
-    const home = '# Identità\n\n## Tono\n\nSii gentile.\nRispondi breve (fixture).\n';
-    expect(ownerLines(home, [foundation])).toEqual(['## Tono', 'Rispondi breve (fixture).']);
-  });
-
-  it('una riga di una fondazione vecchia non è dell’owner', () => {
-    const vecchia = '# Identità\n\nRiga della fondazione vecchia.\n';
-    const nuova = '# Identità\n\nRiga della fondazione nuova.\n';
-    const home = '# Identità\n\nRiga della fondazione vecchia.\nRiga mia (fixture).\n';
-    expect(ownerLines(home, [nuova])).toContain('Riga della fondazione vecchia.');
-    expect(ownerLines(home, [nuova, vecchia])).toEqual(['Riga mia (fixture).']);
-  });
-
-  it('un titolo scritto dall’owner resta, uno spedito senza righe sotto sparisce', () => {
-    const foundation = '## Spedito\n\nTesto spedito.\n';
-    const home = '## Spedito\n\nTesto spedito.\n\n## Mio (fixture)\n\n- punto mio\n';
-    expect(ownerLines(home, [foundation])).toEqual(['## Mio (fixture)', '- punto mio']);
-  });
-
-  it('ignora differenze di soli spazi', () => {
-    expect(ownerLines('  Testo   spedito.  \n', ['Testo spedito.\n'])).toEqual([]);
-  });
-});
-
 describe('planIdentityMigration', () => {
   it('una casa nuova non ha niente da migrare', () => {
     expect(planIdentityMigration(freshHome()).kind).toBe('not-needed');
@@ -87,14 +57,12 @@ describe('planIdentityMigration', () => {
     const plan = planIdentityMigration(home);
     expect(plan.kind).toBe('ready');
     if (plan.kind !== 'ready') return;
-    expect(plan.lines.slice(-2)).toEqual(['## Preferenze (fixture)', '- Risposte brevi.']);
-    expect(plan.lines.some((l) => l.startsWith('- ') && l !== '- Risposte brevi.')).toBe(false);
-    expect(plan.overBudget).toBe(false);
+    expect(plan.text).toBe('## Preferenze (fixture)\n\n- Risposte brevi.');
     expect(existsSync(paths(home).user)).toBe(false);
     expect(readFileSync(homeCopy(home))).toEqual(before);
   });
 
-  it('oltre il tetto di user.md lo dichiara e applyIdentityMigration rifiuta', () => {
+  it('oltre il tetto conserva il patto e richiede una scelta', () => {
     const home = freshHome();
     const lunga = Array.from(
       { length: 400 },
@@ -102,11 +70,7 @@ describe('planIdentityMigration', () => {
     ).join('\n');
     handEdit(home, `${lunga}\n`);
     const plan = planIdentityMigration(home);
-    expect(plan.kind).toBe('ready');
-    if (plan.kind !== 'ready') return;
-    expect(plan.tokens).toBeGreaterThan(USER_OVERLAY_TOKEN_BUDGET);
-    expect(plan.overBudget).toBe(true);
-    expect(() => applyIdentityMigration(home, plan)).toThrow(/tetto/);
+    expect(plan.kind).toBe('needs-review');
     expect(existsSync(paths(home).user)).toBe(false);
   });
 });
@@ -128,10 +92,21 @@ describe('applyIdentityMigration', () => {
     expect(layers.mode).toBe('foundation+user');
     expect(layers.pact.file).toBe(SHIPPED_IDENTITY);
     // Il commento d'intestazione non entra nel prompt; le righe sì.
-    // La riga resta sotto la sezione spedita in cui stava, per contesto.
-    expect(layers.user?.text).toMatch(/^## .+\n- Risposte brevi \(fixture\)\.$/);
+    expect(layers.user?.text).toBe('- Risposte brevi (fixture).');
     // La copia in home resta com'era: non è più letta, non è riscritta.
     expect(readFileSync(homeCopy(home))).toEqual(copyBefore);
+  });
+
+  it('lascia il patto attivo se cambia tra anteprima e scrittura', () => {
+    const home = freshHome();
+    handEdit(home, '- Prima preferenza (fixture).\n');
+    const plan = planIdentityMigration(home);
+    if (plan.kind !== 'ready') throw new Error('plan not ready');
+
+    handEdit(home, '- Seconda preferenza (fixture).\n');
+
+    expect(() => applyIdentityMigration(home, plan)).toThrow(/dopo l’anteprima/);
+    expect(existsSync(paths(home).user)).toBe(false);
   });
 
   it('non sovrascrive un user.md comparso nel frattempo', () => {
@@ -154,7 +129,6 @@ describe('muffin rot migrate (identità)', () => {
     const lines: string[] = [];
     const code = await runRotMigrate(home, argv, {
       out: (l) => lines.push(l),
-      history: () => [],
       ...(confirm ? { confirm } : {}),
     });
     return { code, text: lines.join('\n') };
@@ -189,6 +163,22 @@ describe('muffin rot migrate (identità)', () => {
     expect(r.code).toBe(0);
     expect(r.text).toContain('scritto:');
     expect(resolveIdentityLayers(home).mode).toBe('foundation+user');
+  });
+
+  it('esplicita una sottrazione e --apply conserva il patto senza creare un overlay', async () => {
+    const home = freshHome();
+    const pact = shipped().replace(/## Registro[\s\S]*?(?=\n## |$)/, '');
+    expect(pact).not.toBe(shipped());
+    writeFileSync(homeCopy(home), pact);
+
+    const preview = await run(home, []);
+    const applied = await run(home, ['--apply']);
+
+    expect(preview.text).toContain('può ripristinare indicazioni che avevi tolto');
+    expect(applied.code).toBe(1);
+    expect(existsSync(paths(home).user)).toBe(false);
+    expect(readFileSync(homeCopy(home), 'utf8')).toBe(pact);
+    expect(resolveIdentityLayers(home).mode).toBe('legacy-home');
   });
 
   it('su un terminale chiede, e un no non scrive', async () => {

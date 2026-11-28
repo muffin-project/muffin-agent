@@ -5,7 +5,6 @@ import { isatty } from 'node:tty';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { resolveIdentityLayers, USER_OVERLAY_TOKEN_BUDGET } from '../agent/context/identity.js';
-import { shippedIdentityHistory } from '../core/config/identity-history.js';
 import { migrateRotHome, readShippedBudgets } from '../core/rot/migrate.js';
 import { findCheckoutRoot } from './git-root.js';
 import { displayInHome } from './home-display.js';
@@ -19,8 +18,9 @@ import { promptLine } from './prompt.js';
 export function rotMigrateUsage(home: string): string {
   const user = displayInHome(home, 'user.md');
   return `  muffin rot migrate            porta in rot/ i campi additivi nuovi (fuso e identità restano tuoi)
-                                e mostra cosa sposterebbe da rot/identity.md a ${user}
+                                e mostra le preferenze trasferibili da rot/identity.md a ${user}
   muffin rot migrate --apply    applica subito: backup, poi crea ${user}
+                                se il patto richiede una scelta, lo lascia attivo
                                 senza --apply, su un terminale chiede prima di scrivere`;
 }
 
@@ -42,8 +42,6 @@ export type RotMigrateDeps = {
   out?: (line: string) => void;
   /** A yes/no question on a real terminal; absent = no terminal, never ask. */
   confirm?: (question: string) => Promise<string | undefined>;
-  /** Older shipped foundations; default: Git history of this checkout. */
-  history?: () => string[];
 };
 
 const YES = new Set(['s', 'si', 'sì', 'y', 'yes']);
@@ -87,13 +85,17 @@ export async function runRotMigrate(
   if (!preview.writable) return 77;
 
   const confirm = deps.confirm ?? (isatty(0) ? (q: string) => promptLine(q) : undefined);
-  const history = deps.history ?? (() => [...shippedIdentityHistory(moduleDir)]);
-  const identity = previewIdentity(home, history, out, user);
-  if (identity.kind === 'over-budget') return apply ? 1 : 0;
+  const identity = planIdentityMigration(home);
+  if (identity.kind === 'ready') {
+    printPreview(identity, out, user);
+  } else {
+    out(`identità: ${identity.reason}`);
+  }
 
   const needsIdentity = identity.kind === 'ready';
   const needsBudgets = preview.pendingWrite.length > 0;
-  if (!needsIdentity && !needsBudgets) return 0;
+  const identityExitCode = identity.kind === 'needs-review' && apply ? 1 : 0;
+  if (!needsIdentity && !needsBudgets) return identityExitCode;
 
   let go = apply;
   if (!go && confirm !== undefined) {
@@ -123,7 +125,7 @@ export async function runRotMigrate(
 
   if (needsIdentity) {
     try {
-      const done = applyIdentityMigration(home, identity.plan);
+      const done = applyIdentityMigration(home, identity);
       out(`scritto: ${done.userFile} (0600)`);
       if (done.backup !== null) out(`backup: ${done.backup}`);
     } catch (error) {
@@ -133,47 +135,15 @@ export async function runRotMigrate(
     out(identityMigrateNote(home));
     out(`Vale dal prossimo turno. Rileggi ${user} quando vuoi: è tuo.`);
   }
-  return 0;
-}
-
-type IdentityPreview =
-  | { kind: 'none' }
-  | { kind: 'ready'; plan: Extract<IdentityMigrationPlan, { kind: 'ready' }> }
-  | { kind: 'over-budget' };
-
-function previewIdentity(
-  home: string,
-  history: () => string[],
-  out: (line: string) => void,
-  user: string,
-): IdentityPreview {
-  const mode = resolveIdentityLayers(home).mode;
-  if (mode !== 'legacy-home' && mode !== 'foundation+legacy-preferences') {
-    out(identityMigrateNote(home));
-    return { kind: 'none' };
-  }
-  const plan = planIdentityMigration(home, { history: history() });
-  if (plan.kind !== 'ready') {
-    out(`identità: ${plan.reason}.`);
-    return { kind: 'none' };
-  }
-  printPreview(plan, out, user);
-  if (plan.overBudget) {
-    out(
-      `Troppo lungo per user.md (${String(plan.tokens)} token stimati su ${String(USER_OVERLAY_TOKEN_BUDGET)}): non scrivo niente. ` +
-        `Accorcia le righe in rot/identity.md e rilancia, oppure crea tu ${user} con le sole righe che contano.`,
-    );
-    return { kind: 'over-budget' };
-  }
-  return { kind: 'ready', plan };
+  return identityExitCode;
 }
 
 function confirmQuestion(user: string, needsIdentity: boolean, pendingWrite: string[]): string {
   if (needsIdentity && pendingWrite.length > 0) {
-    return `Sposto queste righe in ${user}, aggiorno ${pendingWrite.join(', ')} e attivo la fondazione aggiornata? Faccio prima un backup. [s/N] `;
+    return `Salvo le preferenze già attive in ${user}, aggiorno ${pendingWrite.join(', ')}? Faccio prima un backup. [s/N] `;
   }
   if (needsIdentity) {
-    return `Sposto queste righe in ${user} e attivo la fondazione aggiornata? Faccio prima un backup. [s/N] `;
+    return `Salvo le preferenze già attive in ${user}? Faccio prima un backup. [s/N] `;
   }
   return `Aggiorno ${pendingWrite.join(', ')}? Faccio prima un backup. [s/N] `;
 }
@@ -184,19 +154,9 @@ function printPreview(
   user: string,
 ): void {
   out(
-    'identità: rot/identity.md in home è modificato e sostituisce ancora la fondazione aggiornata del prodotto.',
+    `Preferenze già attive che verrebbero salvate in ${user} (${String(plan.tokens)} token stimati su ${String(USER_OVERLAY_TOKEN_BUDGET)}):`,
   );
-  if (plan.lines.length === 0) {
-    out(
-      'Non trovo righe tue: tutto il testo coincide con versioni spedite della fondazione. ' +
-        'user.md nascerebbe vuoto, solo per passare alla fondazione aggiornata.',
-    );
-    return;
-  }
-  out(
-    `Righe tue da spostare in ${user} (${String(plan.tokens)} token stimati su ${String(USER_OVERLAY_TOKEN_BUDGET)}):`,
-  );
-  for (const line of plan.lines) out(`  │ ${line}`);
+  for (const line of plan.text.split('\n')) out(`  │ ${line}`);
 }
 
 /**
@@ -214,9 +174,8 @@ export function identityMigrateNote(home: string): string {
     case 'foundation+legacy-preferences':
       return 'identità: fondazione aggiornata e preferenze personali già attive. Niente da migrare.';
     case 'legacy-home':
-      return (
-        'identità: rot/identity.md in home è modificato e sostituisce ancora la fondazione. Non lo riscrivo. ' +
-        `\`muffin rot migrate\` mostra le righe tue da spostare in ${user}; \`--apply\` le sposta dopo un backup.`
-      );
+      return layers.foundationMissing
+        ? 'identità: questa build non contiene la fondazione del prodotto.'
+        : 'identità: il patto personalizzato resta attivo. Puoi mantenerlo oppure scegliere le preferenze da portare nella nuova identità.';
   }
 }
