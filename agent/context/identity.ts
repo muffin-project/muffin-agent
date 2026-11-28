@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { paths } from '../../core/config/config.js';
 import { readDefaultsRegistry } from '../../core/config/defaults-drift.js';
+import { shippedIdentityHistory } from '../../core/config/identity-history.js';
 import { sha256 } from '../../core/rot/verify.js';
 import { estimateTokens } from './tokens.js';
 
@@ -24,9 +25,9 @@ import { estimateTokens } from './tokens.js';
  * The transition (spec §«Transizione»): before this, `init` copied the
  * foundation into `~/.muffin/rot/identity.md` once and the runtime read only
  * that copy, so it *replaced* the shipped text forever. That copy is still
- * honoured when the owner edited it and has not adopted `user.md` — reading
- * both would stack two pacts, switching silently would change a character
- * without consent. An untouched copy (its hash is the one `init` registered)
+ * honoured when the owner's changes cannot be separated from the original
+ * default. A proven append to the registered shipped base already works as
+ * an owner overlay after an ordinary update. An untouched copy (its hash is the one `init` registered)
  * or a missing one carries nothing of the owner's, so it reads the product.
  * Creating `user.md` is the cut-over: from then the home copy is not read.
  */
@@ -55,6 +56,8 @@ export type IdentityMode =
   | 'foundation'
   /** Foundation from the product plus `~/.muffin/user.md`. */
   | 'foundation+user'
+  /** Foundation plus an authored suffix of a verifiable legacy copy. */
+  | 'foundation+legacy-preferences'
   /** A hand-edited `~/.muffin/rot/identity.md` still replaces the foundation. */
   | 'legacy-home';
 
@@ -77,11 +80,28 @@ export type IdentityLayers = {
 };
 
 /** True when the home copy is byte-for-byte what `init` registered, or what this build ships. */
-function untouchedHomeCopy(home: string, homeCopy: string, shipped: string): boolean {
-  const bytes = readFileSync(homeCopy);
-  if (existsSync(shipped) && bytes.equals(readFileSync(shipped))) return true;
-  const entry = readDefaultsRegistry(home)?.files.find((f) => f.path === 'rot/identity.md');
-  return entry !== undefined && entry.sha256 === sha256(bytes);
+function legacyPreferenceSuffix(
+  legacyText: string,
+  registeredHash: string,
+  shipped: string,
+  shippedBytes: Buffer,
+): string | undefined {
+  const history =
+    sha256(shippedBytes) === registeredHash
+      ? [shippedBytes.toString('utf8')]
+      : shippedIdentityHistory(dirname(shipped));
+  for (const raw of history) {
+    if (sha256(Buffer.from(raw)) !== registeredHash) continue;
+    const base = authoredText(raw);
+    // Require the entire known pact plus a separate Markdown paragraph or
+    // section. A changed/removed line or an unknown base keeps the old pact.
+    const separator = base + '\n\n';
+    if (base !== '' && legacyText.startsWith(separator)) {
+      return authoredText(legacyText.slice(separator.length));
+    }
+    break;
+  }
+  return undefined;
 }
 
 /**
@@ -127,14 +147,37 @@ export function resolveIdentityLayers(
     };
   }
 
-  if (hasHomeCopy && !untouchedHomeCopy(home, homeCopy, shipped)) {
-    return {
-      mode: 'legacy-home',
-      pact: legacy,
-      user: null,
-      ignoredHomeCopy: null,
-      foundationMissing: false,
-    };
+  if (hasHomeCopy) {
+    const shippedBytes = readFileSync(shipped);
+    const homeHash = sha256(readFileSync(homeCopy));
+    const registeredHash = readDefaultsRegistry(home)?.files.find(
+      (f) => f.path === 'rot/identity.md',
+    )?.sha256;
+    if (homeHash !== sha256(shippedBytes) && homeHash !== registeredHash) {
+      const text =
+        registeredHash === undefined
+          ? undefined
+          : legacyPreferenceSuffix(legacy.text, registeredHash, shipped, shippedBytes);
+      if (text !== undefined && text !== '') {
+        const tokens = estimateTokens(text);
+        if (tokens <= USER_OVERLAY_TOKEN_BUDGET) {
+          return {
+            mode: 'foundation+legacy-preferences',
+            pact: foundation,
+            user: { file: homeCopy, text, tokens, overBudget: false },
+            ignoredHomeCopy: null,
+            foundationMissing: false,
+          };
+        }
+      }
+      return {
+        mode: 'legacy-home',
+        pact: legacy,
+        user: null,
+        ignoredHomeCopy: null,
+        foundationMissing: false,
+      };
+    }
   }
   return {
     mode: 'foundation',

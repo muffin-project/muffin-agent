@@ -15,6 +15,7 @@ import {
   readSecret,
 } from '../core/config/config.js';
 import { tightenHome } from '../core/config/private-fs.js';
+import { formatIdentityLine } from '../core/config/status.js';
 import { requestedWorkspace, resolveWorkspace } from '../core/config/workspace.js';
 import { migrate } from '../core/db/migrate.js';
 import { openDb } from '../core/db/open.js';
@@ -64,6 +65,7 @@ import {
   renderSystemPrompts,
   type SystemPromptBlocks,
 } from './context/assemble.js';
+import { resolveIdentityLayers } from './context/identity.js';
 import { providerMessages } from './loop/provider-checkpoint.js';
 import type { Approver, LoopDeps, RegisteredTool, SpendEntry, TurnRuntimeInfo } from './loop.js';
 import {
@@ -1238,6 +1240,7 @@ export function buildRuntime(
   // and `promptBlocks` below describe the identical assembly rather than two
   // calls that could drift apart.
   const skillsSection = skillsPromptSection(skillScan.skills, promptNonce(home));
+  const identity = resolveIdentityLayers(home);
   const promptBlocks = buildSystemPromptBlocks(
     home,
     safeMode !== null,
@@ -1246,6 +1249,7 @@ export function buildRuntime(
     // scrive quel campo e `promptVersion` lo legge, quindi il comando non può
     // annunciare una versione diversa da quella che il turno riceve.
     promptVersion(config),
+    identity,
   );
   const workRules = promptBlocks.owner.find((block) => block.name === 'work-rules')?.text ?? '';
 
@@ -1530,6 +1534,7 @@ export function buildRuntime(
       ...(config.provider.kind === 'openai-chatgpt'
         ? ['Using ChatGPT plan · quota and credits: https://chatgpt.com/settings/usage']
         : []),
+      ...(identity.mode === 'legacy-home' ? [`! Identità · ${formatIdentityLine(identity)}`] : []),
       ...workspaceNotes,
       ...turnNotes,
       ...waitingNotes,
