@@ -8,10 +8,16 @@ import {
 } from './probes.js';
 
 describe('character probes — i probe si caricano', () => {
-  it('sono i 17 del mandato, le 5 esche, i 3 sul cambio di registro e i 10 dalla storia, con id unici', () => {
-    expect(PROBES.length).toBe(35);
+  it('il catalogo include i casi di curiosità e routine, con id unici', () => {
     const ids = PROBES.map((p) => p.id);
     expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        'curious-without-task',
+        'ordinary-routine',
+        'routine-after-significant-event',
+      ]),
+    );
   });
 
   it('ogni probe misura fra 2 e 5 proprietà, tutte definite nella rubrica', () => {
@@ -41,7 +47,7 @@ describe('character probes — i probe si caricano', () => {
     }
   });
 
-  it('la rubrica ha esattamente le 25 proprietà, una riga ciascuna', () => {
+  it('la rubrica definisce una riga per proprietà', () => {
     const expected: PropertyId[] = [
       'recognizably_muffin',
       'point_of_view',
@@ -57,6 +63,8 @@ describe('character probes — i probe si caricano', () => {
       'not_therapist',
       'agentic',
       'contextual_register',
+      'conversational_curiosity',
+      'routine_context',
       'technical_when_needed',
       'humour_not_forced',
       'plumbing_visible_when_relevant',

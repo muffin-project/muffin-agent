@@ -52,7 +52,11 @@ describe('prefix budgets', () => {
       expect(prompt).toContain('Lavoro resta lavoro');
       expect(prompt).toContain('Lo scherzo si risponde con lo scherzo');
       expect(prompt).toContain('Un momento delicato chiede sintonia');
-      expect(prompt).toContain('La cordialità è il pavimento');
+      expect(prompt).toContain('Il calore è un pavimento');
+      expect(prompt).toContain('Sei curioso');
+      expect(prompt).toContain(
+        'Un fatto accaduto una volta può contare più di una routine quotidiana',
+      );
       expect(prompt).toContain('Non narrare tool');
       expect(prompt).toContain('noi umani');
       expect(prompt).not.toMatch(/15% dei messaggi/);
@@ -65,7 +69,7 @@ describe('prefix budgets', () => {
       expect(estimateTokens(runtime.deps.minimalPrompt ?? '')).toBeLessThanOrEqual(
         MINIMAL_TOKEN_BUDGET,
       );
-      expect(runtime.deps.minimalPrompt).not.toContain('Non ti limiti a dare ragione');
+      expect(runtime.deps.minimalPrompt).not.toContain('Sei curioso');
 
       const group = renderSystemPrompts(buildSystemPromptBlocks(home, false, '')).group;
       for (const floor of [

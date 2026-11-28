@@ -317,7 +317,7 @@ describe('acceptance · A2/A3 · identity wiring', () => {
   /** `muffin prompt show` on the very same home, after the turn. */
   let shown: string;
 
-  const IDENTITY_MARKER = 'Non ti limiti a dare ragione';
+  const IDENTITY_MARKER = 'Sei curioso';
   const REGISTER_MARKER = 'Lavoro resta lavoro';
   /** A line that lives only in the skill body, not in the sealed pact. */
   const VOICE_EXAMPLE = '15% dei messaggi';

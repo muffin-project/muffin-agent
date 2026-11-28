@@ -33,7 +33,7 @@ import {
 } from './probes.js';
 
 /**
- * `evals/character/run.ts` — runs the 17 character probes through the real
+ * `evals/character/run.ts` — runs the character probes through the real
  * runtime (`buildRuntime` on a home `muffin init` built, never `~/.muffin`)
  * against an explicit provider/model, cross-model via `--models`, and grades
  * the transcripts with an explicit judge model. `--dry-run` never leaves the
@@ -50,7 +50,7 @@ const USAGE = `usage: tsx evals/character/run.ts [options]
   --judge-model <id>                     judge model, same provider/base-url/api-key-env
   --prompt-version <v1|v2>               which system prompt the model's home assembles (default: v1)
   --config <file.json>                   alternative to the flags above, outside any home — see README
-  --probes <a,b,c>                       optional filter, default: all 17
+  --probes <a,b,c>                       optional filter, default: all
   --out <dir>                            default: evals/character/out
   --dry-run                              fake provider only, prints a token estimate, no judge, no network
   --fake-approve                         auto-allow every ask this run hits (D13), and log it: <model>/asks.json
