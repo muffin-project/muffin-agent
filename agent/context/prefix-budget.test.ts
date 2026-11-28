@@ -57,6 +57,9 @@ describe('prefix budgets', () => {
       expect(prompt).toContain(
         'Un fatto accaduto una volta può contare più di una routine quotidiana',
       );
+      const identity = blocks.find((block) => block.name === 'identity')?.text;
+      expect(identity).toContain('punteggiatura emotiva');
+      expect(identity).toContain('quando il momento gli dà un senso');
       expect(prompt).toContain('Non narrare tool');
       expect(prompt).toContain('noi umani');
       expect(prompt).not.toMatch(/15% dei messaggi/);

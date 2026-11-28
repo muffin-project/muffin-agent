@@ -1,6 +1,7 @@
 import OpenAI, { APIConnectionError, APIError } from 'openai';
 import {
   type ChatGPTModel,
+  ChatGPTModelCatalogUnavailable,
   ChatGPTReauthenticationRequired,
 } from '../../core/config/chatgpt-oauth.js';
 import { isThinkingEffort } from '../../core/config/thinking.js';
@@ -94,6 +95,12 @@ export class OpenAIChatGPTProvider implements Provider {
           receivedAnyEvent: false,
         });
       if (error instanceof ChatGPTReauthenticationRequired) throw reauthenticationError(error);
+      if (error instanceof ChatGPTModelCatalogUnavailable) {
+        throw new ProviderError(error.message, true, error.status, 'transport', undefined, false, {
+          ...(error.status === undefined ? { connection: true } : {}),
+          receivedAnyEvent: false,
+        });
+      }
       return {
         requested: request,
         status: 'unsupported',

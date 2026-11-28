@@ -62,6 +62,13 @@ export class ChatGPTReauthenticationRequired extends Error {
   }
 }
 
+export class ChatGPTModelCatalogUnavailable extends Error {
+  constructor(readonly status?: number) {
+    super('ChatGPT model catalog is temporarily unavailable');
+    this.name = 'ChatGPTModelCatalogUnavailable';
+  }
+}
+
 type TokenSet = {
   accessToken: string;
   refreshToken: string;
@@ -729,18 +736,23 @@ export class ChatGPTConnection {
         signal,
       );
     } catch {
-      throw new Error(SAFE_ERROR);
+      throw new ChatGPTModelCatalogUnavailable();
     }
     if (response.status === 401)
       throw new ChatGPTReauthenticationRequired('ChatGPT rejected the saved authorization.');
-    if (!response.ok) throw new Error(SAFE_ERROR);
+    if (response.status === 408 || response.status === 429 || response.status >= 500) {
+      throw new ChatGPTModelCatalogUnavailable(response.status);
+    }
+    // This request carries no conversation. A refusal here is about access
+    // to the catalog, not about the caller's reasoning request or prompt.
+    if (!response.ok) throw new ChatGPTModelCatalogUnavailable(503);
     let body: { models?: unknown };
     try {
       body = (await response.json()) as { models?: unknown };
     } catch {
-      throw new Error(SAFE_ERROR);
+      throw new ChatGPTModelCatalogUnavailable(503);
     }
-    if (!Array.isArray(body.models)) throw new Error(SAFE_ERROR);
+    if (!Array.isArray(body.models)) throw new ChatGPTModelCatalogUnavailable(503);
     return body.models.flatMap((item: unknown) => {
       if (!item || typeof item !== 'object') return [];
       const model = item as {

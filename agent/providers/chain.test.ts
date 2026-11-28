@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ChatGPTModelCatalogUnavailable } from '../../core/config/chatgpt-oauth.js';
 import type { LaneChainState } from '../../core/config/provider-chain.js';
 import { extractFacts } from '../../core/memory/extract.js';
 import { judgeContradiction } from '../../core/memory/judge.js';
@@ -8,6 +9,7 @@ import { CONSERVATIVE } from '../profiles/profile.js';
 import { ActivityAllowanceError, activityProvider } from './activity-allowance.js';
 import { type ChainLink, DEFAULT_COOLDOWN_MS, failoverReason, providerChain } from './chain.js';
 import { type LightSpend, lightLane } from './light-lane.js';
+import { OpenAIChatGPTProvider } from './openai-chatgpt.js';
 import { ReasoningConfigurationError } from './reasoning.js';
 import {
   type ChatCall,
@@ -644,6 +646,26 @@ describe('provider chain: second review (masking only refusals)', () => {
     const spent: LightSpend[] = [];
     await lightLane(chain, { profile: CONSERVATIVE, record: (e) => spent.push(e) }).chat(call());
     expect(spent[0]?.model).toBe('fallback-model');
+  });
+
+  it('uses the configured fallback when the ChatGPT catalog is temporarily unavailable', async () => {
+    const primary = new OpenAIChatGPTProvider({
+      accessToken: async () => 'test-token',
+      listModels: async () => {
+        throw new ChatGPTModelCatalogUnavailable(503);
+      },
+    });
+    const second = scripted('openai-compat', [answer('fallback-model')]);
+    const chain = providerChain(
+      [link('a', primary), link('b', second.provider, 'fallback-model')],
+      { lane: 'main', now: () => NOW },
+    );
+    const input = call({ stream: true, reasoning: { mode: 'on', effort: 'low' } });
+    expect(await chain.resolveReasoning?.(input)).toBeUndefined();
+    const events: StreamEvent[] = [];
+    for await (const event of (chain.chatStream?.bind(chain) ?? fail)(input)) events.push(event);
+    expect(events).toMatchObject([{ type: 'done', result: { model: 'fallback-model' } }]);
+    expect(second.seen[0]?.reasoning).toEqual(input.reasoning);
   });
 
   it("a fallback's unsupported reasoning setting is a refusal: masked and recorded", async () => {
