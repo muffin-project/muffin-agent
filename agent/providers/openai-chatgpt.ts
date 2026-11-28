@@ -96,15 +96,18 @@ export class OpenAIChatGPTProvider implements Provider {
         });
       if (error instanceof ChatGPTReauthenticationRequired) throw reauthenticationError(error);
       if (error instanceof ChatGPTModelCatalogUnavailable) {
+        // The chain can try a fall-back provider. With no usable fallback,
+        // stop the turn instead of repeatedly fetching the same metadata.
         throw new ProviderError(
           'ChatGPT model catalog is temporarily unavailable',
-          true,
+          false,
           error.status,
           'transport',
           undefined,
           false,
           {
             ...(error.status === undefined ? { connection: true } : {}),
+            reasoningCatalogUnavailable: true,
             receivedAnyEvent: false,
           },
         );

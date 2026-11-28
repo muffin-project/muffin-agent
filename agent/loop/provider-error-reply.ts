@@ -5,14 +5,18 @@ import { harnessMessage } from './message-origin.js';
 /** Internal record marker: lets recovery distinguish this terminal reply from partial model output. */
 const RECOVERY_MARKER = '[MUFFIN_PROVIDER_ERROR_REPLY_V1]\n';
 
+const REASONING_CATALOG_NOTICE =
+  'Non ho potuto verificare il livello di ragionamento scelto per questo modello. Il turno si è fermato. Riprova tra poco. Puoi controllare l’impostazione con `/think`.';
+
 /** User-facing diagnostics expose only the typed failure class and numeric status, never upstream text. */
 export function providerErrorReply(error: ProviderError | ReasoningConfigurationError): string {
   if (error instanceof ReasoningConfigurationError) {
     if (error.resolution.capabilitySource === 'unknown') {
-      return 'Non ho potuto verificare il livello di ragionamento scelto per questo modello. Il turno si è fermato. Riprova tra poco. Puoi controllare l’impostazione con `/think`.';
+      return REASONING_CATALOG_NOTICE;
     }
     return 'Il modello non può applicare il ragionamento configurato. Il turno si è fermato. Puoi controllare l’impostazione con `/think` e scegliere una modalità supportata.';
   }
+  if (error.details?.reasoningCatalogUnavailable) return REASONING_CATALOG_NOTICE;
   if (error.details?.reauthentication === 'chatgpt') {
     return 'La connessione a ChatGPT va ristabilita. Sul dispositivo che ospita Muffin, esegui `muffin chatgpt login` e autorizza l’accesso. Questo turno si è fermato.';
   }
