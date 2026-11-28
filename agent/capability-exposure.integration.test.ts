@@ -13,6 +13,7 @@ import { seal } from '../core/rot/verify.js';
 import { JobStore } from '../core/scheduler/jobs.js';
 import { SessionStore } from '../core/session/store.js';
 import { JsonlExporter, SimpleTracer } from '../core/tracing/tracer.js';
+import type { Span } from '../core/tracing/types.js';
 import { TurnStore } from '../core/turns/store.js';
 import { TodoStore } from '../core/turns/todo.js';
 import { CAPABILITY_DISCOVERY_GUIDANCE } from './capability-exposure.js';
@@ -166,6 +167,7 @@ describe('#469 production-path capability discovery', () => {
       answer('done'),
     ]);
     const sessions = new SessionStore(home);
+    const spans: Span[] = [];
     const deps: LoopDeps = {
       provider,
       profile: { ...CONSERVATIVE, maxToolsExposed: 6, recovery: [] },
@@ -178,7 +180,12 @@ describe('#469 production-path capability discovery', () => {
         budgetExhausted: () => false,
         hardened: true,
       }),
-      tracer: new SimpleTracer(new JsonlExporter(home)),
+      tracer: new SimpleTracer({
+        export: (span) => {
+          spans.push(span);
+        },
+        flush: () => {},
+      }),
       sessions,
       turns: new TurnStore(db),
       todos: new TodoStore(db),
@@ -197,6 +204,13 @@ describe('#469 production-path capability discovery', () => {
     expect(result.stopped).toBe('answered');
     expect(hiddenCalls).toBe(1);
     expect(provider.seen).toHaveLength(4);
+    const calls = spans.filter((span) => span.name === 'muffin.chat_call');
+    expect(calls.map((span) => span.attributes['muffin.chat_call.tools_exposed'])).toEqual(
+      provider.seen.map((call) => call.tools?.length ?? 0),
+    );
+    expect(
+      calls.map((span) => span.attributes['muffin.chat_call.tool_projection_changed']),
+    ).toEqual([undefined, false, true, false]);
 
     const firstNames = provider.seen[0]?.tools?.map((tool) => tool.name) ?? [];
     expect(firstNames).toContain('fs_read');

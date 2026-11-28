@@ -444,6 +444,8 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
     turnClass,
   } = scope;
 
+  let previousToolSpecs: NonNullable<ChatCall['tools']> | undefined;
+
   while (true) {
     // Suspension point 1 (design §T3): nothing is in flight, so everything
     // worth keeping is in the variables above. This is where a `wait` armed
@@ -643,11 +645,24 @@ export async function runRounds(scope: RoundScope): Promise<TurnResult> {
       // `requestChatResult` below never touches `chatStream` at all.
       stream: Boolean(input.onDelta && deps.provider.chatStream),
     };
+    // The projection reuses registered specs. Record its ordered change
+    // beside provider cache usage without logging names, schemas or prompts.
+    const toolSpecs = call.tools ?? [];
+    const toolProjectionChanged =
+      previousToolSpecs === undefined
+        ? undefined
+        : previousToolSpecs.length !== toolSpecs.length ||
+          toolSpecs.some((spec, index) => spec !== previousToolSpecs?.[index]);
+    previousToolSpecs = toolSpecs;
     const chatSpan = deps.tracer.start(
       'muffin.chat_call',
       {
         [ATTR.requestModel]: deps.model,
         [ATTR.turnIteration]: run.iterations,
+        'muffin.chat_call.tools_exposed': toolSpecs.length,
+        ...(toolProjectionChanged === undefined
+          ? {}
+          : { 'muffin.chat_call.tool_projection_changed': toolProjectionChanged }),
         'muffin.chat_call.requested_max_output_tokens': call.maxOutputTokens,
         'muffin.chat_call.reasoning_requested_mode': call.reasoning?.mode ?? 'unset',
         ...(call.reasoning?.effort === undefined
