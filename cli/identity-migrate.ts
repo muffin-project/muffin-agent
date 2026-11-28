@@ -138,7 +138,7 @@ export function planIdentityMigration(home: string, opts: PlanOptions = {}): Ide
   const p = paths(home);
   const homeCopy = join(p.rot, 'identity.md');
   const foundations = [readFileSync(shipped, 'utf8'), ...(opts.history ?? [])].map(authoredText);
-  const lines = ownerLines(layers.pact.text, foundations);
+  const lines = ownerLines(authoredText(readFileSync(homeCopy, 'utf8')), foundations);
   const text = userFileText(lines, opts.now ?? new Date(), null);
   const tokens = estimateTokens(authoredText(text));
   return {

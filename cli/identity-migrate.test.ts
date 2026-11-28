@@ -168,7 +168,7 @@ describe('muffin rot migrate (identità)', () => {
     expect(r.text).toContain('│ - Riga mia (fixture).');
     expect(r.text).toContain('muffin rot migrate --apply');
     expect(existsSync(paths(home).user)).toBe(false);
-    expect(resolveIdentityLayers(home).mode).toBe('legacy-home');
+    expect(resolveIdentityLayers(home).mode).toBe('foundation+legacy-preferences');
   });
 
   it('senza --apply non riscrive rot/budgets.json, anche se andrebbe riformattato', async () => {

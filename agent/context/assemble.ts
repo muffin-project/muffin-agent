@@ -564,7 +564,17 @@ export function buildSystemPromptBlocks(
         ]
       : []),
     ...(userText.length > 0 && layers.user !== null
-      ? [{ name: 'user', source: 'user.md', text: userText, file: layers.user.file }]
+      ? [
+          {
+            name: 'user',
+            source:
+              layers.mode === 'foundation+legacy-preferences'
+                ? 'rot/identity.md (preferenze)'
+                : 'user.md',
+            text: userText,
+            file: layers.user.file,
+          },
+        ]
       : []),
     { name: 'skills', source: 'core/skills (catalogo generato)', text: skillsSection },
     workRules,

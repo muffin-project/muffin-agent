@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -6,6 +5,7 @@ import { isatty } from 'node:tty';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { resolveIdentityLayers, USER_OVERLAY_TOKEN_BUDGET } from '../agent/context/identity.js';
+import { shippedIdentityHistory } from '../core/config/identity-history.js';
 import { migrateRotHome, readShippedBudgets } from '../core/rot/migrate.js';
 import { findCheckoutRoot } from './git-root.js';
 import { displayInHome } from './home-display.js';
@@ -36,38 +36,6 @@ function shippedRotDir(moduleDir: string): string | null {
     if (existsSync(join(fromCheckout, 'budgets.json'))) return fromCheckout;
   }
   return null;
-}
-
-/** At most this many past foundations are read from Git: enough for all of history today, bounded forever. */
-const HISTORY_CAP = 200;
-
-/**
- * Every version `defaults/rot/identity.md` has had on this checkout, so the
- * lines of an *older* foundation (what an old `init` copied) are recognised as
- * the product's, not the owner's. No checkout (a tarball install) → none, and
- * only the current foundation is compared — the preview still shows every
- * line before anything is written.
- */
-export function shippedIdentityHistory(moduleDir: string): string[] {
-  const root = findCheckoutRoot(moduleDir);
-  if (root === null) return [];
-  const rel = 'defaults/rot/identity.md';
-  const log = spawnSync('git', ['log', '--format=%H', `-n${String(HISTORY_CAP)}`, '--', rel], {
-    cwd: root,
-    encoding: 'utf8',
-    timeout: 30_000,
-  });
-  if (log.status !== 0) return [];
-  const out: string[] = [];
-  for (const sha of log.stdout.split('\n').filter((l) => /^[0-9a-f]{40}$/.test(l))) {
-    const show = spawnSync('git', ['show', `${sha}:${rel}`], {
-      cwd: root,
-      encoding: 'utf8',
-      timeout: 30_000,
-    });
-    if (show.status === 0) out.push(show.stdout);
-  }
-  return out;
 }
 
 export type RotMigrateDeps = {
@@ -119,7 +87,7 @@ export async function runRotMigrate(
   if (!preview.writable) return 77;
 
   const confirm = deps.confirm ?? (isatty(0) ? (q: string) => promptLine(q) : undefined);
-  const history = deps.history ?? (() => shippedIdentityHistory(moduleDir));
+  const history = deps.history ?? (() => [...shippedIdentityHistory(moduleDir)]);
   const identity = previewIdentity(home, history, out, user);
   if (identity.kind === 'over-budget') return apply ? 1 : 0;
 
@@ -179,7 +147,8 @@ function previewIdentity(
   out: (line: string) => void,
   user: string,
 ): IdentityPreview {
-  if (resolveIdentityLayers(home).mode !== 'legacy-home') {
+  const mode = resolveIdentityLayers(home).mode;
+  if (mode !== 'legacy-home' && mode !== 'foundation+legacy-preferences') {
     out(identityMigrateNote(home));
     return { kind: 'none' };
   }
@@ -242,6 +211,8 @@ export function identityMigrateNote(home: string): string {
       return 'identità: la fondazione arriva dal prodotto; nessun user.md. Niente da migrare.';
     case 'foundation+user':
       return `identità: fondazione dal prodotto + ${user}. rot/identity.md in home, se c'è, non è più letto e non lo tocco.`;
+    case 'foundation+legacy-preferences':
+      return 'identità: fondazione aggiornata e preferenze personali già attive. Niente da migrare.';
     case 'legacy-home':
       return (
         'identità: rot/identity.md in home è modificato e sostituisce ancora la fondazione. Non lo riscrivo. ' +

@@ -1909,6 +1909,12 @@ export function identityCheck(
       );
       return;
     }
+    case 'foundation+legacy-preferences':
+      ok(
+        'identità',
+        'fondazione dal prodotto + preferenze personali dalla configurazione precedente',
+      );
+      return;
     case 'legacy-home':
       if (layers.foundationMissing) {
         warn(

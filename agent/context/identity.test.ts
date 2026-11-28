@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -67,6 +67,37 @@ describe('la fondazione arriva dal prodotto', () => {
     expect(layers.pact.text).toContain('PATTO-SCRITTO-A-MANO');
     expect(layers.pact.text).not.toContain('FONDAZIONE-DELLA-BUILD-NUOVA');
     expect(identityMigrateNote(home)).toContain('Non lo riscrivo');
+  });
+
+  it('keeps a verifiable custom appendix in the private prompt with the product foundation', () => {
+    const home = freshHome();
+    const old = readFileSync(homeCopy(home), 'utf8').trimEnd();
+    const customized =
+      old + '\n\n## Preferenze personali\n\nUsa il formato PREFERENZA-SOLO-OWNER.\n';
+    writeFileSync(homeCopy(home), customized);
+    const layers = resolveIdentityLayers(home);
+    expect(layers.mode).toBe('foundation+legacy-preferences');
+    expect(layers.pact.text).toBe(authored(SHIPPED_IDENTITY));
+    expect(layers.user?.text).toBe(
+      '## Preferenze personali\n\nUsa il formato PREFERENZA-SOLO-OWNER.',
+    );
+    expect(readFileSync(homeCopy(home), 'utf8')).toBe(customized);
+    expect(existsSync(paths(home).user)).toBe(false);
+    const prompts = renderSystemPrompts(buildSystemPromptBlocks(home, false));
+    expect(prompts.owner).toContain('<preferenze-owner>');
+    expect(prompts.owner).toContain('PREFERENZA-SOLO-OWNER');
+    expect(prompts.group).not.toContain('PREFERENZA-SOLO-OWNER');
+  });
+
+  it.each([
+    ['a replacement', (base: string) => base.replace('## Registro', '## A different register')],
+    ['an oversized appendix', (base: string) => base.trimEnd() + '\n\n' + 'x'.repeat(5000)],
+  ])('keeps the entire legacy pact for %s', (_case, customize) => {
+    const home = freshHome();
+    const customized = customize(readFileSync(homeCopy(home), 'utf8'));
+    writeFileSync(homeCopy(home), customized);
+    expect(resolveIdentityLayers(home).mode).toBe('legacy-home');
+    expect(existsSync(paths(home).user)).toBe(false);
   });
 
   it('senza registro una copia identica al file spedito conta come non toccata', () => {

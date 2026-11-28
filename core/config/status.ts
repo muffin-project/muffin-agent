@@ -34,7 +34,7 @@ export type StatusReport = {
 };
 
 export type IdentityStatusLayers = {
-  mode: 'foundation' | 'foundation+user' | 'legacy-home';
+  mode: 'foundation' | 'foundation+user' | 'foundation+legacy-preferences' | 'legacy-home';
   user?: { tokens: number; overBudget: boolean } | null;
   foundationMissing?: boolean;
 };
@@ -70,10 +70,12 @@ export function formatIdentityLine(
         ? `fondazione + user.md OLTRE il tetto (${String(tokens)}/${String(tokenBudget)} token): non caricato`
         : `fondazione dal prodotto + user.md (${String(tokens)}/${String(tokenBudget)} token)`;
     }
+    case 'foundation+legacy-preferences':
+      return 'fondazione dal prodotto + preferenze personali conservate';
     case 'legacy-home':
       return layers.foundationMissing
         ? 'solo rot/identity.md: questa build non ha la fondazione → muffin update'
-        : 'rot/identity.md modificato sostituisce ancora la fondazione → muffin rot migrate';
+        : 'patto personalizzato conservato: la nuova fondazione richiede una scelta → muffin rot migrate';
   }
 }
 
