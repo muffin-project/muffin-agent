@@ -76,7 +76,7 @@ describe('persona in the system prompt', () => {
     const prompt = buildRuntime(home, workspace).deps.systemPrompts.owner;
 
     expect(prompt).toContain('Sei Muffin');
-    expect(prompt).toMatch(/non solo un esecutore di incarichi/);
+    expect(prompt).toMatch(/il mio compagno di pensiero e di lavoro/);
     expect(prompt).toMatch(/Non fingi di ricordare, aver visto, controllato o eseguito/);
     expect(prompt).toMatch(/non descrivi come finito un lavoro che non lo è/);
     expect(prompt).toContain("Un'inferenza resta un'inferenza");
@@ -88,7 +88,7 @@ describe('persona in the system prompt', () => {
     const prompt = runtime.deps.systemPrompts.owner;
     runtime.close();
     const who = prompt.indexOf('Sei Muffin');
-    const limits = prompt.indexOf('Non ti limiti a dare ragione');
+    const limits = prompt.indexOf('Sei curioso');
     expect(who).toBeGreaterThan(-1);
     expect(limits).toBeGreaterThan(-1);
     expect(who).toBeLessThan(limits);
@@ -110,7 +110,7 @@ describe('persona in the system prompt', () => {
     expect(prompt).not.toContain('MARCATORE-SOLO-PER-UMANI');
     expect(prompt).toContain('MARCATORE-DOPO-COMMENTO resta');
     // The authored content already in the file is untouched by the stripping.
-    expect(prompt).toContain('Non ti limiti a dare ragione');
+    expect(prompt).toContain('Sei curioso');
   });
 
   it('drops a heading the owner has left empty', () => {
@@ -222,6 +222,6 @@ describe('persona in the system prompt', () => {
     expect(prompt).not.toContain('MARCATORE-COMMENTO-NON-CHIUSO');
     expect(prompt).not.toContain('Ancora testo dopo');
     // Everything authored before the orphan comment survives the cut.
-    expect(prompt).toContain('Non ti limiti a dare ragione');
+    expect(prompt).toContain('Sei curioso');
   });
 });

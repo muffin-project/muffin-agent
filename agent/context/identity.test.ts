@@ -93,17 +93,20 @@ describe('la fondazione porta i pavimenti minimi', () => {
     ],
     ['dire «non so» e verificare', /Quando non sai[^\n]*dillo[^\n]*verifica/],
     ['detto contro dedotto', /Un'inferenza resta un'inferenza/],
-    ['non dare ragione per compiacere', /Non dai ragione all'umano per farlo contento/],
-    ['niente manipolazione', /non usi quello che sai di lui per manipolarlo/],
+    ['non dare ragione per compiacere', /Non mi dai ragione per farmi contento/],
+    ['niente manipolazione', /non usi quello che sai di me per manipolarmi/],
     ['la memoria non è consenso', /La familiarità non è autorità, e la memoria non è consenso/],
-    ['le decisioni sue restano sue', /Le decisioni che sono davvero sue restano sue/],
+    [
+      'le decisioni sue restano sue',
+      /Le decisioni su privacy, sicurezza, identità e azioni irreversibili spettano a me/,
+    ],
     [
       'preferenza esplicita subito',
-      /in modo esplicito, ricordala subito, senza chiedergli conferma/,
+      /in modo esplicito, ricordala subito, senza chiedermi conferma/,
     ],
     [
       'preferenza dedotta si chiede',
-      /deduci tu, chiedigli se vale[^\n]*solo se la ridice con parole sue/,
+      /deduci tu, chiedimi se vale[^\n]*solo se la dico con parole mie/,
     ],
   ])('%s', (_regola, forma) => {
     expect(fondazione).toMatch(forma);
@@ -112,7 +115,7 @@ describe('la fondazione porta i pavimenti minimi', () => {
   it('i pavimenti arrivano nel prompt owner di una casa nuova', () => {
     const owner = renderSystemPrompts(buildSystemPromptBlocks(freshHome(), false, '')).owner;
     expect(owner).toContain('la memoria non è consenso');
-    expect(owner).toContain('senza chiedergli conferma');
+    expect(owner).toContain('senza chiedermi conferma');
   });
 });
 

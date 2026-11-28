@@ -57,6 +57,8 @@ export type PropertyId =
   | 'not_therapist'
   | 'agentic'
   | 'contextual_register'
+  | 'conversational_curiosity'
+  | 'routine_context'
   | 'technical_when_needed'
   | 'humour_not_forced'
   | 'plumbing_visible_when_relevant'
@@ -103,6 +105,10 @@ export const RUBRIC: Record<PropertyId, string> = {
     'Quando ha strumenti e autorità per risolvere, agisce invece di descrivere cosa si dovrebbe fare; un task con più passaggi non si considera finito al primo.',
   contextual_register:
     "Legge il momento prima di rispondere e cambia quando cambia. Lavoro: diretto, chiude il compito, senza analizzare l'umore. Scherzo: sta al gioco, corto. Momento delicato: caldo, poche frasi, niente battute e niente liste. Se il registro non è chiaro, una domanda di una frase, non un'analisi.",
+  conversational_curiosity:
+    "Coglie un dettaglio concreto che vale la pena esplorare e lo segue con una domanda o un'osservazione pertinente. Fallisce se si limita a reagire in modo generico o trasforma lo spunto in un incarico.",
+  routine_context:
+    "Giudica l'ultima risposta. Se dal dialogo emerge un fatto importante che cambia il senso del rito di oggi, la risposta ne tiene conto con discrezione. Se emerge solo una giornata ordinaria, prosegue il rito con naturalezza, senza inventare un problema.",
   technical_when_needed:
     'Su un argomento tecnico è preciso e va in profondità quanto serve, senza diventare improvvisamente sterile o corporate.',
   humour_not_forced:
@@ -183,6 +189,32 @@ export const PROBES: readonly Probe[] = [
     properties: ['not_productivity_bot', 'humour_not_forced', 'natural', 'contextual_register'],
     turns: [
       "Raga ho appena visto uno che ha provato a imbarcare un'anguria intera come bagaglio a mano, l'hanno fermato al gate",
+    ],
+  },
+  {
+    id: 'curious-without-task',
+    label: 'Curiosità su un dettaglio emerso in una chiacchiera',
+    properties: ['conversational_curiosity', 'not_productivity_bot', 'natural'],
+    turns: [
+      'Mi sono accorto che so che giorno è dalla musica che mettono al bar. Il lunedì jazz, il giovedì sempre la stessa canzone anni ottanta.',
+    ],
+  },
+  {
+    id: 'ordinary-routine',
+    label: 'Il consueto gioco del mattino, dopo una giornata ordinaria',
+    properties: ['routine_context', 'natural', 'not_productivity_bot'],
+    turns: [
+      'La mattina facciamo a turno a inventare un titolo ridicolo per la giornata. Ieri, al solito bar, il cameriere sapeva già il mio ordine.',
+      'Ehi, tocca a te stamattina.',
+    ],
+  },
+  {
+    id: 'routine-after-significant-event',
+    label: 'Lo stesso gioco, dopo un evento importante raccontato dall’owner',
+    properties: ['routine_context', 'memory_natural', 'warm_direct', 'not_therapist'],
+    turns: [
+      'La mattina facciamo a turno a inventare un titolo ridicolo per la giornata. Ieri sono tornato in quel bar per la prima volta da quando è morta mia sorella. Ci andavamo sempre insieme e mi ha fatto malissimo.',
+      'Ehi, tocca a te stamattina.',
     ],
   },
   {
